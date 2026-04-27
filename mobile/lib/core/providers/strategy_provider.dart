@@ -73,11 +73,14 @@ class SimulationNotifier extends AsyncNotifier<SimulationResult?> {
 
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      final resp = await ApiService.dio.post('/strategy/simulate', data: {
-        'assets':    form.selectedAssets.toList(),
-        'timeframe': form.timeframe,
-        'capital':   form.capital,
-      });
+      final resp = await ApiService.dio.post('/strategy/simulate',
+        data: {
+          'assets':    form.selectedAssets.toList(),
+          'timeframe': form.timeframe,
+          'capital':   form.capital,
+        },
+        options: ApiService.slowOptions,
+      );
       return SimulationResult.fromJson(resp.data['data'] as Map<String, dynamic>);
     });
   }

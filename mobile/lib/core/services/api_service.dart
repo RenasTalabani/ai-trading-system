@@ -6,11 +6,19 @@ class ApiService {
   static final _dio = Dio(BaseOptions(
     baseUrl:        ApiConstants.apiV1,
     connectTimeout: const Duration(seconds: 15),
-    receiveTimeout: const Duration(seconds: 30),
+    receiveTimeout: const Duration(seconds: 90),
     headers: {'Content-Type': 'application/json'},
-  ))..interceptors.add(_AuthInterceptor());
+  ))
+    ..interceptors.add(_AuthInterceptor())
+    ..interceptors.add(_RetryInterceptor());
 
   static Dio get dio => _dio;
+
+  // Use for slow endpoints (strategy/simulate can take 60s+)
+  static final Options slowOptions = Options(
+    receiveTimeout: const Duration(seconds: 120),
+    sendTimeout:    const Duration(seconds: 30),
+  );
 }
 
 class _AuthInterceptor extends Interceptor {
@@ -41,6 +49,28 @@ class _AuthInterceptor extends Interceptor {
     } else {
       handler.next(err);
     }
+  }
+}
+
+class _RetryInterceptor extends Interceptor {
+  static const _maxRetries = 2;
+
+  @override
+  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+    final retries = (err.requestOptions.extra['_retries'] as int?) ?? 0;
+    final isNetworkError = err.type == DioExceptionType.connectionError ||
+        err.type == DioExceptionType.connectionTimeout;
+
+    if (isNetworkError && retries < _maxRetries) {
+      await Future<void>.delayed(Duration(seconds: retries + 1));
+      err.requestOptions.extra['_retries'] = retries + 1;
+      try {
+        final resp = await ApiService.dio.fetch(err.requestOptions);
+        handler.resolve(resp);
+        return;
+      } catch (_) {}
+    }
+    handler.next(err);
   }
 }
 

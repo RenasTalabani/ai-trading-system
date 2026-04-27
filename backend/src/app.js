@@ -26,14 +26,15 @@ const app = express();
 // Security headers
 app.use(helmet());
 
-// CORS
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
+// CORS — allow all origins in production (Flutter mobile sends no Origin header)
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').filter(Boolean);
+const corsAll = allowedOrigins.includes('*');
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (corsAll || !origin || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error('Not allowed by CORS'));
   },
-  credentials: true,
+  credentials: !corsAll,
 }));
 
 // Compression
