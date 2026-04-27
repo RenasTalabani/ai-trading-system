@@ -18,6 +18,7 @@ const telegramRoutes = require('./routes/telegram');
 const virtualRoutes   = require('./routes/virtual');
 const strategyRoutes  = require('./routes/strategy');
 const pnlRoutes       = require('./routes/pnl');
+const orderBlockRoutes = require('./routes/orderBlocks');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -74,6 +75,7 @@ app.use(`${API}/telegram`,      telegramRoutes);
 app.use(`${API}/virtual`,       virtualRoutes);
 app.use(`${API}/strategy`,      strategyRoutes);
 app.use(`${API}/pnl`,           pnlRoutes);
+app.use(`${API}/order-blocks`,  orderBlockRoutes);
 
 // 404 + error handler
 app.use(notFound);

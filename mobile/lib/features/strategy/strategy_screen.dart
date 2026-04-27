@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/providers/strategy_provider.dart';
 import '../../core/models/strategy_model.dart';
+import '../../core/providers/order_block_provider.dart';
+import '../../core/models/order_block_model.dart';
 
 class StrategyScreen extends ConsumerStatefulWidget {
   const StrategyScreen({super.key});
@@ -19,7 +21,7 @@ class _StrategyScreenState extends ConsumerState<StrategyScreen>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -40,7 +42,7 @@ class _StrategyScreenState extends ConsumerState<StrategyScreen>
           indicatorColor: AppColors.primary,
           labelColor: AppColors.primary,
           unselectedLabelColor: AppColors.textSecondary,
-          tabs: const [Tab(text: 'Analysis'), Tab(text: 'Simulator')],
+          tabs: const [Tab(text: 'Analysis'), Tab(text: 'Simulator'), Tab(text: 'Order Blocks')],
         ),
       ),
       body: Column(
@@ -52,7 +54,7 @@ class _StrategyScreenState extends ConsumerState<StrategyScreen>
           Expanded(
             child: TabBarView(
               controller: _tabCtrl,
-              children: const [_AnalysisTab(), _SimulatorTab()],
+              children: const [_AnalysisTab(), _SimulatorTab(), _OrderBlocksTab()],
             ),
           ),
         ],
@@ -678,6 +680,348 @@ class _StatCard extends StatelessWidget {
         const SizedBox(height: 2),
         Text(label, style: const TextStyle(
             color: AppColors.textMuted, fontSize: 10)),
+      ]),
+    );
+  }
+}
+
+// ─── Order Blocks tab ─────────────────────────────────────────────────────────
+
+class _OrderBlocksTab extends ConsumerWidget {
+  const _OrderBlocksTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final obAsync = ref.watch(orderBlockProvider);
+    final form    = ref.watch(obFormProvider);
+
+    return Column(children: [
+      // ── OB config bar ──────────────────────────────────────────────────────
+      Container(
+        color: AppColors.card,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(children: [
+          // Asset dropdown
+          Expanded(child: _OBAssetDropdown(
+            current: form.asset,
+            onChanged: (v) => ref.read(obFormProvider.notifier).state =
+                form.copyWith(asset: v),
+          )),
+          const SizedBox(width: 12),
+          // Timeframe selector
+          _OBTimeframeSelector(
+            current: form.timeframe,
+            onChanged: (v) => ref.read(obFormProvider.notifier).state =
+                form.copyWith(timeframe: v),
+          ),
+          const SizedBox(width: 12),
+          // Analyze button
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => ref.read(orderBlockProvider.notifier).analyze(),
+            child: const Text('Scan', style: TextStyle(fontSize: 13)),
+          ),
+        ]),
+      ),
+
+      // ── Results ────────────────────────────────────────────────────────────
+      Expanded(
+        child: obAsync.when(
+          data: (result) {
+            if (result == null) {
+              return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.layers_outlined, size: 44, color: AppColors.textMuted),
+                SizedBox(height: 10),
+                Text('Detect Order Blocks',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary)),
+                SizedBox(height: 6),
+                Text('Select asset & timeframe,\nthen tap Scan.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+              ]));
+            }
+            return _OBResult(result: result);
+          },
+          loading: () => const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: AppColors.primary),
+            SizedBox(height: 16),
+            Text('Scanning for order blocks…',
+                style: TextStyle(color: AppColors.textSecondary)),
+          ])),
+          error: (e, _) => _ErrorView(
+            message: e.toString(),
+            onRetry: () => ref.read(orderBlockProvider.notifier).analyze(),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+class _OBAssetDropdown extends StatelessWidget {
+  final String current;
+  final ValueChanged<String> onChanged;
+  const _OBAssetDropdown({required this.current, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: current,
+          dropdownColor: AppColors.card,
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+          isDense: true,
+          onChanged: (v) { if (v != null) onChanged(v); },
+          items: kTrackedAssets.map((a) => DropdownMenuItem(
+            value: a,
+            child: Text(a.replaceAll('USDT', '')),
+          )).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+class _OBTimeframeSelector extends StatelessWidget {
+  final String current;
+  final ValueChanged<String> onChanged;
+  const _OBTimeframeSelector({required this.current, required this.onChanged});
+
+  static const _opts = [('15m','15m'), ('1H','1h'), ('4H','4h'), ('1D','1d')];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: _opts.map((o) {
+        final sel = current == o.$2;
+        return GestureDetector(
+          onTap: () => onChanged(o.$2),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: sel ? AppColors.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Text(o.$1,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: sel ? FontWeight.bold : FontWeight.normal,
+                    color: sel ? Colors.white : AppColors.textSecondary)),
+          ),
+        );
+      }).toList()),
+    );
+  }
+}
+
+class _OBResult extends StatelessWidget {
+  final OrderBlockResult result;
+  const _OBResult({required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final sig      = result.signal;
+    final sigColor = sig.action == 'BUY' ? AppColors.buy
+        : sig.action == 'SELL' ? AppColors.sell
+        : AppColors.hold;
+
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      // ── Signal card ──────────────────────────────────────────────────────
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: sigColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: sigColor.withValues(alpha: 0.3)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: sigColor.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(sig.action,
+                  style: TextStyle(color: sigColor,
+                      fontWeight: FontWeight.bold, fontSize: 14)),
+            ),
+            const SizedBox(width: 10),
+            Text('${result.asset.replaceAll('USDT', '')} · ${result.timeframe.toUpperCase()}',
+                style: const TextStyle(color: AppColors.textPrimary,
+                    fontWeight: FontWeight.bold, fontSize: 15)),
+            const Spacer(),
+            Text('${sig.confidence}%',
+                style: TextStyle(color: sigColor,
+                    fontWeight: FontWeight.bold, fontSize: 16)),
+          ]),
+          const SizedBox(height: 10),
+          // Confidence bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: sig.confidence / 100,
+              minHeight: 5,
+              color: sigColor,
+              backgroundColor: AppColors.border,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (sig.entryZone != null) ...[
+            _SigRow('Entry Zone', sig.entryZone!, sigColor),
+            const SizedBox(height: 4),
+            _SigRow('Stop Loss',  sig.stopLoss?.toStringAsFixed(4) ?? '—', AppColors.sell),
+            const SizedBox(height: 4),
+            _SigRow('Take Profit', sig.takeProfit?.toStringAsFixed(4) ?? '—', AppColors.buy),
+            if (sig.riskReward != null) ...[
+              const SizedBox(height: 4),
+              _SigRow('Risk/Reward', sig.riskReward!, AppColors.primary),
+            ],
+            const SizedBox(height: 8),
+          ],
+          Text(sig.reason,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        ]),
+      ),
+      const SizedBox(height: 12),
+
+      // ── Market context ───────────────────────────────────────────────────
+      Row(children: [
+        Expanded(child: _StatCard(label: 'Price',
+            value: '\$${result.currentPrice.toStringAsFixed(2)}',
+            color: AppColors.textPrimary)),
+        const SizedBox(width: 8),
+        Expanded(child: _StatCard(label: 'RSI',
+            value: result.rsi.toStringAsFixed(1),
+            color: result.rsi > 70 ? AppColors.sell
+                : result.rsi < 30 ? AppColors.buy : AppColors.primary)),
+        const SizedBox(width: 8),
+        Expanded(child: _StatCard(
+            label: 'Trend',
+            value: result.trend.substring(0, 1).toUpperCase() + result.trend.substring(1),
+            color: result.trend == 'bullish' ? AppColors.buy
+                : result.trend == 'bearish' ? AppColors.sell : AppColors.hold)),
+      ]),
+      const SizedBox(height: 16),
+
+      // ── Order blocks list ────────────────────────────────────────────────
+      Text('${result.orderBlocks.length} Order Blocks Detected',
+          style: const TextStyle(color: AppColors.textSecondary,
+              fontSize: 12, fontWeight: FontWeight.w500)),
+      const SizedBox(height: 8),
+      ...result.orderBlocks.map((ob) => _OBCard(ob: ob, currentPrice: result.currentPrice)),
+    ]);
+  }
+}
+
+class _SigRow extends StatelessWidget {
+  final String label, value;
+  final Color color;
+  const _SigRow(this.label, this.value, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Text('$label: ', style: const TextStyle(
+          color: AppColors.textMuted, fontSize: 12)),
+      Text(value, style: TextStyle(
+          color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+    ]);
+  }
+}
+
+class _OBCard extends StatelessWidget {
+  final OrderBlock ob;
+  final double     currentPrice;
+  const _OBCard({required this.ob, required this.currentPrice});
+
+  @override
+  Widget build(BuildContext context) {
+    final color    = ob.isBullish ? AppColors.buy : AppColors.sell;
+    final midZone  = (ob.zone.low + ob.zone.high) / 2;
+    final distPct  = ((currentPrice - midZone) / midZone * 100).abs();
+    final fresh    = ob.freshness == 'fresh';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(children: [
+        // Type indicator
+        Container(
+          width: 4, height: 44,
+          decoration: BoxDecoration(
+            color: color, borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text(ob.isBullish ? 'Bullish OB' : 'Bearish OB',
+                style: TextStyle(color: color,
+                    fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: fresh
+                    ? AppColors.buy.withValues(alpha: 0.12)
+                    : AppColors.hold.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(ob.freshness,
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: fresh ? AppColors.buy : AppColors.hold,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ]),
+          const SizedBox(height: 3),
+          Text('\$${ob.zone.low.toStringAsFixed(4)} – \$${ob.zone.high.toStringAsFixed(4)}',
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          Text('${distPct.toStringAsFixed(2)}% from price',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+        ])),
+        // Strength meter
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('${ob.strength}',
+              style: TextStyle(color: color,
+                  fontWeight: FontWeight.bold, fontSize: 18)),
+          const Text('str', style: TextStyle(
+              color: AppColors.textMuted, fontSize: 10)),
+          const SizedBox(height: 4),
+          SizedBox(width: 36, child: ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: ob.strength / 100,
+              minHeight: 4,
+              color: color,
+              backgroundColor: AppColors.border,
+            ),
+          )),
+        ]),
       ]),
     );
   }

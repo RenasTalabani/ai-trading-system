@@ -26,6 +26,7 @@ from app.services.collectors.binance_collector import (
 )
 from app.services.strategy_engine import StrategyEngine
 from app.services.strategy_simulator import StrategySimulator
+from app.services.order_block_engine import OrderBlockEngine
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.routes")
@@ -73,6 +74,7 @@ trainer          = ModelTrainer(market_model)
 backtester       = Backtester(market_model=market_model, lstm_model=lstm_model)
 strategy_engine_svc  = StrategyEngine()
 strategy_simulator   = StrategySimulator()
+order_block_engine   = OrderBlockEngine()
 
 
 # ─── Request schemas ───────────────────────────────────────────────────────────
@@ -574,4 +576,20 @@ async def strategy_simulate(req: SimulateRequest):
         return {"success": True, "data": result}
     except Exception as e:
         logger.error(f"Strategy simulate failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Order Block Detection ─────────────────────────────────────────────────────
+
+class OrderBlockRequest(BaseModel):
+    asset:     str = "BTCUSDT"
+    timeframe: str = "1h"  # 15m | 1h | 4h | 1d
+
+@router.post("/order-blocks/analyze")
+async def analyze_order_blocks(req: OrderBlockRequest):
+    try:
+        result = await order_block_engine.analyze(req.asset, req.timeframe)
+        return result
+    except Exception as e:
+        logger.error(f"Order block analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
