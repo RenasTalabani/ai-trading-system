@@ -780,6 +780,7 @@ class _OBAssetDropdown extends StatelessWidget {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: current,
+          isExpanded: true,
           dropdownColor: AppColors.card,
           style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
           isDense: true,
@@ -876,7 +877,7 @@ class _OBResult extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           // Confidence bar
-          ClipRRect(
+          SizedBox(width: double.infinity, child: ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: sig.confidence / 100,
@@ -884,7 +885,7 @@ class _OBResult extends StatelessWidget {
               color: sigColor,
               backgroundColor: AppColors.border,
             ),
-          ),
+          )),
           const SizedBox(height: 10),
           if (sig.entryZone != null) ...[
             _SigRow('Entry Zone', sig.entryZone!, sigColor),
