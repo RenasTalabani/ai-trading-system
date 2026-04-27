@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/signals_provider.dart';
 import '../../core/providers/prices_provider.dart';
+import '../../core/providers/pnl_provider.dart';
+import '../../core/models/pnl_model.dart';
 import '../../core/services/websocket_service.dart';
 import '../../core/theme/app_theme.dart';
 import 'widgets/signal_card.dart';
@@ -72,6 +74,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: _SummaryRow(signals: sigState.signals),
+              ),
+            ),
+
+            // Daily PnL card
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _DailyPnLCard(),
               ),
             ),
 
@@ -208,6 +218,73 @@ class _WsStatusDot extends ConsumerWidget {
         width: 8, height: 8,
         decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       ),
+    );
+  }
+}
+
+class _DailyPnLCard extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pnlAsync = ref.watch(pnlProvider);
+
+    return pnlAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (PnLModel p) {
+        if (p.trades == 0) return const SizedBox.shrink();
+        final netPositive = p.net >= 0;
+        final netColor = netPositive ? AppColors.buy : AppColors.sell;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: netColor.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(netPositive ? Icons.trending_up : Icons.trending_down,
+                  color: netColor, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Today's PnL  ${netPositive ? '+' : ''}\$${p.net.toStringAsFixed(2)}",
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: netColor),
+                ),
+              ),
+              _PnLChip('\$${p.profit.toStringAsFixed(2)}', AppColors.buy),
+              const SizedBox(width: 6),
+              _PnLChip('-\$${p.loss.toStringAsFixed(2)}', AppColors.sell),
+              const SizedBox(width: 6),
+              _PnLChip('${(p.winRate * 100).toStringAsFixed(0)}% WR',
+                  AppColors.primary),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PnLChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _PnLChip(this.label, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w600, color: color)),
     );
   }
 }
