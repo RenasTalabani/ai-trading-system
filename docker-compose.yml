@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trading-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - NODE_ENV=production
+      - AI_SERVICE_URL=http://ai-service:8000
+    depends_on:
+      - ai-service
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - trading-net
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: trading-ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./ai-service/.env
+    environment:
+      - ENVIRONMENT=production
+    volumes:
+      - ./ai-service/saved_models:/app/saved_models
+    networks:
+      - trading-net
+
+networks:
+  trading-net:
+    driver: bridge
+
+volumes:
+  mongo_data:

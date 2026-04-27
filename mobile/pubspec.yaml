@@ -1,0 +1,47 @@
+name: ai_trading_app
+description: AI Trading Intelligence — Real-time signals, live prices, push notifications.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Navigation
+  go_router: ^14.2.0
+
+  # HTTP
+  dio: ^5.4.3
+
+  # WebSocket
+  web_socket_channel: ^3.0.1
+
+  # Firebase
+  firebase_core: ^3.3.0
+  firebase_messaging: ^15.1.0
+  flutter_local_notifications: ^17.2.1
+
+  # Secure storage
+  flutter_secure_storage: ^9.2.2
+
+  # UI / fonts
+  google_fonts: ^6.2.1
+  shimmer: ^3.0.0
+
+  # Utils
+  intl: ^0.19.0
+  equatable: ^2.0.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

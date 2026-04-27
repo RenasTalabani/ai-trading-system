@@ -1,0 +1,55 @@
+# Env — NEVER commit secrets
+.env
+*.env
+*.env.local
+backend/.env
+ai-service/.env
+
+# Node
+node_modules/
+backend/logs/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+ai-service/saved_models/*.joblib
+
+# ML artifacts
+*.h5
+*.pt
+*.onnx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/android/local.properties
+mobile/android/app/google-services.json
+mobile/pubspec.lock
+
+# Build outputs / APKs
+*.apk
+*.aab
+AiTrading-Railway.apk
+
+# Logs
+*.log
+backend.log
+backend-err.log
+aiservice.log
+aiservice-err.log
