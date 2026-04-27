@@ -933,6 +933,10 @@ class _OBResult extends StatelessWidget {
       ]),
       const SizedBox(height: 16),
 
+      // ── News & social sentiment card ─────────────────────────────────────
+      _OBNewsCard(news: result.newsAnalysis),
+      const SizedBox(height: 16),
+
       // ── Order blocks list ────────────────────────────────────────────────
       Text('${result.orderBlocks.length} Order Blocks Detected',
           style: const TextStyle(color: AppColors.textSecondary,
@@ -1034,6 +1038,155 @@ class _OBCard extends StatelessWidget {
         ]),
       ]),
     );
+  }
+}
+
+class _OBNewsCard extends StatelessWidget {
+  final OBNewsAnalysis news;
+  const _OBNewsCard({required this.news});
+
+  @override
+  Widget build(BuildContext context) {
+    final score   = news.combinedScore;
+    final isBull  = news.sentiment == 'bullish';
+    final isBear  = news.sentiment == 'bearish';
+    final sentColor = isBull ? AppColors.buy : isBear ? AppColors.sell : AppColors.hold;
+    final boostAbs  = news.confidenceBoost.abs();
+    final boostSign = news.confidenceBoost >= 0 ? '+' : '';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Row(children: [
+          const Icon(Icons.newspaper_rounded, size: 14, color: AppColors.textMuted),
+          const SizedBox(width: 6),
+          const Text('News & Social Fusion',
+              style: TextStyle(color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w600, fontSize: 13)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: sentColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              news.sentiment[0].toUpperCase() + news.sentiment.substring(1),
+              style: TextStyle(color: sentColor, fontSize: 11,
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 10),
+
+        // Combined sentiment bar
+        Row(children: [
+          const Text('Market Mood', style: TextStyle(
+              color: AppColors.textMuted, fontSize: 11)),
+          const Spacer(),
+          Text('${score.toStringAsFixed(0)}/100',
+              style: TextStyle(color: sentColor,
+                  fontSize: 11, fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 4),
+        SizedBox(width: double.infinity, child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: score / 100,
+            minHeight: 6,
+            color: sentColor,
+            backgroundColor: AppColors.border,
+          ),
+        )),
+        const SizedBox(height: 10),
+
+        // Stats row
+        Row(children: [
+          _OBNewsStat(
+            label: 'News',
+            value: news.newsScore.toStringAsFixed(0),
+            color: AppColors.textSecondary,
+          ),
+          const SizedBox(width: 8),
+          _OBNewsStat(
+            label: 'Social',
+            value: news.socialScore.toStringAsFixed(0),
+            color: AppColors.textSecondary,
+          ),
+          const SizedBox(width: 8),
+          _OBNewsStat(
+            label: 'Articles',
+            value: '${news.articleCount}',
+            color: AppColors.textSecondary,
+          ),
+          const Spacer(),
+          // Confidence boost badge
+          if (boostAbs > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: (news.confidenceBoost >= 0 ? AppColors.buy : AppColors.sell)
+                    .withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$boostSign${news.confidenceBoost}% conf',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: news.confidenceBoost >= 0 ? AppColors.buy : AppColors.sell,
+                ),
+              ),
+            ),
+        ]),
+
+        // Technical vs fused confidence
+        if (news.technicalConfidence != 0) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Technical: ${news.technicalConfidence}%  →  Fused: ${news.technicalConfidence + news.confidenceBoost}%  '
+            '(60% OB + 40% sentiment)',
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
+        ],
+
+        // Top events
+        if (news.topEvents.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ...news.topEvents.map((e) => Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('• ', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+              Expanded(child: Text(e,
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                  maxLines: 1, overflow: TextOverflow.ellipsis)),
+            ]),
+          )),
+        ],
+      ]),
+    );
+  }
+}
+
+class _OBNewsStat extends StatelessWidget {
+  final String label, value;
+  final Color color;
+  const _OBNewsStat({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      Text(value, style: TextStyle(
+          color: color, fontWeight: FontWeight.bold, fontSize: 13)),
+      Text(label, style: const TextStyle(
+          color: AppColors.textMuted, fontSize: 10)),
+    ]);
   }
 }
 

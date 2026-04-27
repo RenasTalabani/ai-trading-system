@@ -74,7 +74,10 @@ trainer          = ModelTrainer(market_model)
 backtester       = Backtester(market_model=market_model, lstm_model=lstm_model)
 strategy_engine_svc  = StrategyEngine()
 strategy_simulator   = StrategySimulator()
-order_block_engine   = OrderBlockEngine()
+order_block_engine   = OrderBlockEngine(
+    news_analyzer   = news_analyzer,
+    social_analyzer = social_analyzer,
+)
 
 
 # ─── Request schemas ───────────────────────────────────────────────────────────

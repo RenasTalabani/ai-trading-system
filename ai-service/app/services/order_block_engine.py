@@ -60,8 +60,84 @@ def _strength_score(impulse_ratio: float, volume_ratio: float,
 
 
 class OrderBlockEngine:
-    def __init__(self):
-        self._dp = DataProcessor()
+    def __init__(self, news_analyzer=None, social_analyzer=None):
+        self._dp              = DataProcessor()
+        self._news_analyzer   = news_analyzer
+        self._social_analyzer = social_analyzer
+
+    # ── News / social sentiment fetch ─────────────────────────────────────────
+
+    async def _get_sentiment(self, asset: str) -> dict:
+        """Return fused news+social sentiment score for the asset (0-100 bullish scale)."""
+        base = asset.upper().replace("USDT", "").replace("BUSD", "")
+        ns = ss = 50.0   # neutral fallback
+        sentiment     = "neutral"
+        impact        = 0.0
+        top_events    = []
+        article_count = 0
+
+        try:
+            if self._news_analyzer:
+                nr = await self._news_analyzer.refresh()
+                nd = nr.get("by_asset", {}).get(base, {})
+                ns            = float(nd.get("market_score", 50))
+                sentiment     = nd.get("sentiment", "neutral")
+                impact        = float(nd.get("impact", 0.0))
+                top_events    = nd.get("top_events", [])
+                article_count = int(nd.get("article_count", 0))
+        except Exception as e:
+            logger.warning(f"News sentiment unavailable for {base}: {e}")
+
+        try:
+            if self._social_analyzer:
+                sr = await self._social_analyzer.refresh()
+                sd = sr.get("by_asset", {}).get(base, {})
+                ss = float(sd.get("market_score", 50))
+        except Exception as e:
+            logger.warning(f"Social sentiment unavailable for {base}: {e}")
+
+        combined = round((ns + ss) / 2, 1)
+        return {
+            "news_score":     round(ns, 1),
+            "social_score":   round(ss, 1),
+            "combined_score": combined,
+            "sentiment":      sentiment,
+            "impact":         round(impact, 3),
+            "top_events":     top_events[:3],
+            "article_count":  article_count,
+        }
+
+    # ── 60/40 fusion ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fuse(signal: dict, sent: dict):
+        """Blend technical OB confidence (60%) with news/social sentiment (40%)."""
+        action  = signal["action"]
+        ob_conf = signal["confidence"]
+        score   = sent["combined_score"]   # 0-100, higher = more bullish
+
+        if action == "BUY":
+            aligned_score = score          # high score boosts BUY
+            aligned = score >= 50
+        elif action == "SELL":
+            aligned_score = 100 - score   # low news boosts SELL
+            aligned = score < 50
+        else:                              # HOLD — no fusion
+            news_analysis = {**sent, "aligned": False, "confidence_boost": 0,
+                             "technical_confidence": ob_conf}
+            return signal, news_analysis
+
+        fused = int(ob_conf * 0.6 + aligned_score * 0.4)
+        fused = max(10, min(95, fused))
+        boost = fused - ob_conf
+
+        news_analysis = {
+            **sent,
+            "aligned":              aligned,
+            "confidence_boost":     boost,
+            "technical_confidence": ob_conf,
+        }
+        return {**signal, "confidence": fused}, news_analysis
 
     async def analyze(self, asset: str, timeframe: str) -> dict:
         asset     = asset.upper()
@@ -194,17 +270,22 @@ class OrderBlockEngine:
             price, order_blocks, bullish_trend, bearish_trend, rsi
         )
 
+        # ── Hybrid fusion: technical 60% + news/social 40% ───────────────────
+        sent = await self._get_sentiment(asset)
+        signal, news_analysis = self._fuse(signal, sent)
+
         return {
             "success": True,
-            "asset":       asset,
-            "timeframe":   timeframe,
+            "asset":         asset,
+            "timeframe":     timeframe,
             "current_price": round(price, 6),
-            "ema50":        round(float(ema50), 6),
-            "ema200":       round(float(ema200), 6),
-            "rsi":          round(rsi, 1),
-            "trend":        "bullish" if bullish_trend else "bearish" if bearish_trend else "sideways",
-            "order_blocks": order_blocks[:10],  # top 10
-            "signal":       signal,
+            "ema50":         round(float(ema50), 6),
+            "ema200":        round(float(ema200), 6),
+            "rsi":           round(rsi, 1),
+            "trend":         "bullish" if bullish_trend else "bearish" if bearish_trend else "sideways",
+            "order_blocks":  order_blocks[:10],
+            "signal":        signal,
+            "news_analysis": news_analysis,
         }
 
     # ── Signal generation ─────────────────────────────────────────────────────
@@ -288,13 +369,19 @@ class OrderBlockEngine:
     @staticmethod
     def _fallback(asset: str, timeframe: str, reason: str) -> dict:
         return {
-            "success":     False,
-            "asset":       asset,
-            "timeframe":   timeframe,
+            "success":       False,
+            "asset":         asset,
+            "timeframe":     timeframe,
             "current_price": 0,
-            "order_blocks": [],
-            "signal":      OrderBlockEngine._hold_signal(reason),
-            "error":       reason,
+            "order_blocks":  [],
+            "signal":        OrderBlockEngine._hold_signal(reason),
+            "news_analysis": {
+                "news_score": 50, "social_score": 50, "combined_score": 50,
+                "sentiment": "neutral", "impact": 0.0, "top_events": [],
+                "article_count": 0, "aligned": False, "confidence_boost": 0,
+                "technical_confidence": 50,
+            },
+            "error":         reason,
         }
 
 
