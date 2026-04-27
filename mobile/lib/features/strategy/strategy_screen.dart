@@ -694,36 +694,44 @@ class _OrderBlocksTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final obAsync = ref.watch(orderBlockProvider);
     final form    = ref.watch(obFormProvider);
+    final screenW = MediaQuery.sizeOf(context).width;
 
-    return Column(children: [
+    return SizedBox(
+      width: screenW,
+      child: Column(children: [
       // ── OB config bar ──────────────────────────────────────────────────────
       Container(
         color: AppColors.card,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
         child: Row(children: [
-          // Asset dropdown
-          Expanded(child: _OBAssetDropdown(
-            current: form.asset,
-            onChanged: (v) => ref.read(obFormProvider.notifier).state =
-                form.copyWith(asset: v),
-          )),
-          const SizedBox(width: 12),
-          // Timeframe selector
+          // Asset dropdown — fixed width so Row works under any constraints
+          SizedBox(
+            width: 96,
+            child: _OBAssetDropdown(
+              current: form.asset,
+              onChanged: (v) => ref.read(obFormProvider.notifier).state =
+                  form.copyWith(asset: v),
+            ),
+          ),
+          const SizedBox(width: 10),
           _OBTimeframeSelector(
             current: form.timeframe,
             onChanged: (v) => ref.read(obFormProvider.notifier).state =
                 form.copyWith(timeframe: v),
           ),
-          const SizedBox(width: 12),
-          // Analyze button
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          const Spacer(),
+          SizedBox(
+            width: 68,
+            height: 38,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                padding: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => ref.read(orderBlockProvider.notifier).analyze(),
+              child: const Text('Scan', style: TextStyle(fontSize: 13)),
             ),
-            onPressed: () => ref.read(orderBlockProvider.notifier).analyze(),
-            child: const Text('Scan', style: TextStyle(fontSize: 13)),
           ),
         ]),
       ),
@@ -759,7 +767,8 @@ class _OrderBlocksTab extends ConsumerWidget {
           ),
         ),
       ),
-    ]);
+    ]),
+    );
   }
 }
 
