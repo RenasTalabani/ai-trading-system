@@ -6,6 +6,7 @@
 const Signal           = require('../models/Signal');
 const VirtualTrade     = require('../models/VirtualTrade');
 const VirtualPortfolio = require('../models/VirtualPortfolio');
+const BudgetSession    = require('../models/BudgetSession');
 const logger           = require('../config/logger');
 
 // Lazy-require to avoid circular dependency at startup
@@ -54,6 +55,9 @@ function updateBestWorst(portfolio, trade, pnl) {
 
 async function pickupNewSignals() {
   try {
+    const session = await BudgetSession.findOne({ sessionKey: 'global' });
+    if (!session || session.status !== 'active') return 0;
+
     const tracked = await VirtualTrade.distinct('signalId');
 
     const newSignals = await Signal.find({
@@ -239,7 +243,8 @@ async function checkOpenTrades(priceCache) {
 // ─── Date range helper ────────────────────────────────────────────────────────
 
 function rangeStart(range) {
-  if (range === '7d')  return new Date(Date.now() - 7  * 24 * 3_600_000);
+  if (range === '1d')  return new Date(Date.now() -  1 * 24 * 3_600_000);
+  if (range === '7d')  return new Date(Date.now() -  7 * 24 * 3_600_000);
   if (range === '30d') return new Date(Date.now() - 30 * 24 * 3_600_000);
   return null; // 'all'
 }

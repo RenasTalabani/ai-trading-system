@@ -27,6 +27,8 @@ from app.services.collectors.binance_collector import (
 from app.services.strategy_engine import StrategyEngine
 from app.services.strategy_simulator import StrategySimulator
 from app.services.order_block_engine import OrderBlockEngine
+from app.services.unified_analyzer  import UnifiedAnalyzer
+from app.services.global_analyzer   import GlobalAnalyzer
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.routes")
@@ -77,6 +79,17 @@ strategy_simulator   = StrategySimulator()
 order_block_engine   = OrderBlockEngine(
     news_analyzer   = news_analyzer,
     social_analyzer = social_analyzer,
+)
+unified_analyzer = UnifiedAnalyzer(
+    strategy_engine  = strategy_engine_svc,
+    order_block_engine = order_block_engine,
+    news_analyzer    = news_analyzer,
+    social_analyzer  = social_analyzer,
+)
+global_analyzer = GlobalAnalyzer(
+    unified_analyzer = unified_analyzer,
+    news_analyzer    = news_analyzer,
+    social_analyzer  = social_analyzer,
 )
 
 
@@ -595,4 +608,50 @@ async def analyze_order_blocks(req: OrderBlockRequest):
         return result
     except Exception as e:
         logger.error(f"Order block analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Unified AI Analysis ───────────────────────────────────────────────────────
+
+class UnifiedRequest(BaseModel):
+    asset:     str   = "BTCUSDT"
+    timeframe: str   = "1h"   # 15m | 1h | 4h | 1d
+    capital:   float = 500.0
+
+@router.post("/unified/analyze")
+async def unified_analyze(req: UnifiedRequest):
+    try:
+        result = await unified_analyzer.analyze(
+            asset     = req.asset,
+            timeframe = req.timeframe,
+            capital   = req.capital,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Unified analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Global Multi-Asset Scanner ────────────────────────────────────────────────
+
+class GlobalScanRequest(BaseModel):
+    capital:   float = 500.0
+    timeframe: str   = "1h"   # 15m | 1h | 4h | 1d
+    top_n:     int   = 5
+
+@router.post("/global/scan")
+async def global_scan(req: GlobalScanRequest):
+    """
+    Scan ALL asset classes (crypto + gold + oil + forex) in parallel.
+    Returns the single best opportunity in the world right now.
+    """
+    try:
+        result = await global_analyzer.scan_all(
+            capital   = req.capital,
+            top_n     = min(req.top_n, 10),
+            timeframe = req.timeframe,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Global scan failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

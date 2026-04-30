@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/models/virtual_portfolio_model.dart';
 import '../../core/providers/virtual_portfolio_provider.dart';
+import '../../core/providers/budget_report_provider.dart';
 
 class VirtualPerformanceScreen extends ConsumerWidget {
   const VirtualPerformanceScreen({super.key});
@@ -190,6 +191,10 @@ class _PerformanceBody extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── AI Manager daily / weekly reports ─────────────────────────────
+          const _ReportsSection(),
+          const SizedBox(height: 12),
+
           // ── Range selector ────────────────────────────────────────────────
           const _RangeSelector(),
           const SizedBox(height: 12),
@@ -611,6 +616,133 @@ class _LinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_LinePainter old) => old.history != history;
+}
+
+// ─── AI Manager Reports section ───────────────────────────────────────────────
+
+class _ReportsSection extends ConsumerWidget {
+  const _ReportsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(budgetReportProvider);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('AI Manager Reports',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary)),
+        const Spacer(),
+        GestureDetector(
+          onTap: () => ref.read(budgetReportProvider.notifier).loadAll(),
+          child: const Icon(Icons.refresh, size: 16, color: AppColors.textSecondary),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: _ReportCard(
+          label: 'Today',
+          report: state.daily,
+          loading: state.loadingDaily,
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _ReportCard(
+          label: 'This Week',
+          report: state.weekly,
+          loading: state.loadingWeekly,
+        )),
+      ]),
+    ]);
+  }
+}
+
+class _ReportCard extends StatelessWidget {
+  final String       label;
+  final BudgetReport? report;
+  final bool         loading;
+  const _ReportCard({required this.label, required this.report, required this.loading});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: loading
+          ? const SizedBox(
+              height: 60,
+              child: Center(child: CircularProgressIndicator(
+                  color: AppColors.primary, strokeWidth: 2)))
+          : report == null || report!.trades.total == 0
+              ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(label,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.textMuted)),
+                  const SizedBox(height: 6),
+                  const Text('No trades yet',
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary)),
+                ])
+              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Text(label,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppColors.textMuted)),
+                    const Spacer(),
+                    _WrBadge(winRate: report!.trades.winRate),
+                  ]),
+                  const SizedBox(height: 6),
+                  _PnlValue(pnl: report!.pnl.net),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${report!.trades.wins}W / ${report!.trades.losses}L  ·  ${report!.trades.total} trades',
+                    style: const TextStyle(
+                        fontSize: 10, color: AppColors.textSecondary),
+                  ),
+                ]),
+    );
+  }
+}
+
+class _WrBadge extends StatelessWidget {
+  final double winRate;
+  const _WrBadge({required this.winRate});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = winRate >= 50 ? AppColors.buy : AppColors.sell;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text('${winRate.toStringAsFixed(0)}% WR',
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+}
+
+class _PnlValue extends StatelessWidget {
+  final double pnl;
+  const _PnlValue({required this.pnl});
+
+  @override
+  Widget build(BuildContext context) {
+    final positive = pnl >= 0;
+    final color = positive ? AppColors.buy : AppColors.sell;
+    return Text(
+      '${positive ? '+' : ''}\$${pnl.abs().toStringAsFixed(2)}',
+      style: TextStyle(
+          fontSize: 15, fontWeight: FontWeight.w800, color: color),
+    );
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ class VirtualPerformanceNotifier
 
   Future<VirtualPerformanceModel> _fetch(String range) async {
     final resp = await ApiService.dio.get(
-      '/virtual/performance',
+      'virtual/performance',
       queryParameters: {'range': range},
     );
     return VirtualPerformanceModel.fromJson(resp.data['data'] as Map<String, dynamic>);
@@ -31,7 +31,7 @@ class VirtualPerformanceNotifier
   }
 
   Future<void> reset({double balance = 500, double riskPct = 5}) async {
-    await ApiService.dio.post('/virtual/reset', data: {
+    await ApiService.dio.post('virtual/reset', data: {
       'startingBalance': balance,
       'riskPerTradePct': riskPct,
     });
@@ -42,7 +42,7 @@ class VirtualPerformanceNotifier
     final body = <String, dynamic>{};
     if (balance != null) body['startingBalance'] = balance;
     if (riskPct != null) body['riskPerTradePct'] = riskPct;
-    await ApiService.dio.post('/virtual/set-capital', data: body);
+    await ApiService.dio.post('virtual/set-capital', data: body);
     await refresh();
   }
 }
@@ -99,7 +99,7 @@ class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
       if (status != null) params['status'] = status;
       if (effectiveRange != 'all') params['range'] = effectiveRange;
 
-      final resp = await ApiService.dio.get('/virtual/trades',
+      final resp = await ApiService.dio.get('virtual/trades',
           queryParameters: params);
 
       final list = (resp.data['trades'] as List)

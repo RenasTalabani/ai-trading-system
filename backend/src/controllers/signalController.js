@@ -7,9 +7,14 @@ const logger = require('../config/logger');
 
 exports.getSignals = async (req, res, next) => {
   try {
-    const { asset, direction, minConfidence = 0, status = 'active', limit = 20, page = 1 } = req.query;
+    const { asset, direction, minConfidence = 0, status, limit = 20, page = 1 } = req.query;
     const filter = {};
-    if (status) filter.status = status;
+    // Default: last 24 h regardless of status so dashboard never looks empty
+    if (status) {
+      filter.status = status;
+    } else {
+      filter.createdAt = { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) };
+    }
     if (asset) filter.asset = asset.toUpperCase();
     if (direction) filter.direction = direction.toUpperCase();
     if (minConfidence) filter.confidence = { $gte: Number(minConfidence) };

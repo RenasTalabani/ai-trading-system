@@ -19,6 +19,10 @@ const virtualRoutes   = require('./routes/virtual');
 const strategyRoutes  = require('./routes/strategy');
 const pnlRoutes       = require('./routes/pnl');
 const orderBlockRoutes = require('./routes/orderBlocks');
+const unifiedRoutes    = require('./routes/unified');
+const globalRoutes     = require('./routes/global');
+const budgetRoutes     = require('./routes/budget');
+const aiBrainRoutes    = require('./routes/aiBrain');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -76,6 +80,10 @@ app.use(`${API}/virtual`,       virtualRoutes);
 app.use(`${API}/strategy`,      strategyRoutes);
 app.use(`${API}/pnl`,           pnlRoutes);
 app.use(`${API}/order-blocks`,  orderBlockRoutes);
+app.use(`${API}/unified`,       unifiedRoutes);
+app.use(`${API}/global`,        globalRoutes);
+app.use(`${API}/budget`,        budgetRoutes);
+app.use(`${API}/ai-brain`,      aiBrainRoutes);
 
 // 404 + error handler
 app.use(notFound);

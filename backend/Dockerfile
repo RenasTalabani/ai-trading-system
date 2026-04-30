@@ -5,7 +5,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY . .
-RUN mkdir -p logs
+RUN mkdir -p logs && chown -R node:node /app
 
 EXPOSE 5000
 

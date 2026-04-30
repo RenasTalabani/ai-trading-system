@@ -40,7 +40,7 @@ class SignalsNotifier extends StateNotifier<SignalsState> {
     try {
       final resp = await ApiService.dio.get(
         ApiConstants.signals,
-        queryParameters: {'limit': 30, 'status': 'active'},
+        queryParameters: {'limit': 30},
       );
       final list = (resp.data['signals'] as List)
           .map((j) => SignalModel.fromJson(j))

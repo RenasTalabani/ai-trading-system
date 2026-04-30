@@ -9,21 +9,17 @@ class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.child});
 
   static const _tabs = [
-    _TabItem(label: 'Dashboard',   icon: Icons.dashboard_outlined,    path: '/'),
-    _TabItem(label: 'Signals',     icon: Icons.signal_cellular_alt,   path: '/signals'),
-    _TabItem(label: 'Strategy',    icon: Icons.auto_graph,            path: '/strategy'),
-    _TabItem(label: 'Performance', icon: Icons.bar_chart_outlined,    path: '/performance'),
-    _TabItem(label: 'Alerts',      icon: Icons.notifications_none,    path: '/notifications'),
-    _TabItem(label: 'Settings',    icon: Icons.settings_outlined,     path: '/settings'),
+    _TabItem(label: 'Home',        icon: Icons.home_outlined,          path: '/'),
+    _TabItem(label: 'Performance', icon: Icons.bar_chart_outlined,     path: '/performance'),
+    _TabItem(label: 'Alerts',      icon: Icons.notifications_none,     path: '/notifications'),
+    _TabItem(label: 'Settings',    icon: Icons.settings_outlined,      path: '/settings'),
   ];
 
   int _indexFor(BuildContext context) {
     final loc = GoRouterState.of(context).matchedLocation;
-    if (loc.startsWith('/signals'))       return 1;
-    if (loc.startsWith('/strategy'))      return 2;
-    if (loc.startsWith('/performance'))   return 3;
-    if (loc.startsWith('/notifications')) return 4;
-    if (loc.startsWith('/settings'))      return 5;
+    if (loc.startsWith('/performance'))   return 1;
+    if (loc.startsWith('/notifications')) return 2;
+    if (loc.startsWith('/settings'))      return 3;
     return 0;
   }
 
@@ -46,7 +42,7 @@ class AppShell extends ConsumerWidget {
           items: _tabs.asMap().entries.map((e) {
             final i    = e.key;
             final tab  = e.value;
-            final badge = i == 4 && unread > 0;
+            final badge = i == 2 && unread > 0;
             return BottomNavigationBarItem(
               icon: badge
                   ? Badge(label: Text('$unread'), child: Icon(tab.icon))

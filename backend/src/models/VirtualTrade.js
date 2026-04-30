@@ -2,12 +2,11 @@ const mongoose = require('mongoose');
 
 const virtualTradeSchema = new mongoose.Schema(
   {
-    signalId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Signal',
-      required: true,
-      index: true,
-    },
+    // Source of trade: 'signal' (old flow) or 'ai' (AI worker)
+    source:       { type: String, enum: ['signal', 'ai'], default: 'signal' },
+    signalId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Signal',     default: null, index: true },
+    aiDecisionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AIDecision', default: null, index: true },
+
     asset:     { type: String, required: true, uppercase: true },
     direction: { type: String, enum: ['BUY', 'SELL'], required: true },
 
@@ -18,12 +17,12 @@ const virtualTradeSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['open', 'closed_profit', 'closed_loss', 'cancelled'],
+      enum: ['open', 'closed_profit', 'closed_loss', 'cancelled', 'expired'],
       default: 'open',
       index: true,
     },
     result:     { type: String, enum: ['win', 'loss', 'cancelled', null], default: null },
-    exitReason: { type: String, enum: ['TP', 'SL', 'EXPIRED', null],     default: null },
+    exitReason: { type: String, enum: ['TP', 'SL', 'EXPIRED', 'session_reset', null], default: null },
     exitPrice:  { type: Number, default: null },
     pnl:        { type: Number, default: null },
     pnlPct:     { type: Number, default: null },

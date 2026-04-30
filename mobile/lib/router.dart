@@ -4,14 +4,11 @@ import 'core/providers/auth_provider.dart';
 import 'features/auth/login_screen.dart';
 import 'features/auth/register_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
-import 'features/signals/signals_screen.dart';
-import 'features/signals/signal_detail_screen.dart';
 import 'features/notifications/notifications_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'features/performance/virtual_performance_screen.dart';
 import 'features/performance/virtual_trades_screen.dart';
-import 'features/strategy/strategy_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
@@ -34,11 +31,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, child) => AppShell(child: child),
         routes: [
           GoRoute(path: '/',              builder: (_, __) => const DashboardScreen()),
-          GoRoute(path: '/signals',       builder: (_, __) => const SignalsScreen()),
-          GoRoute(
-            path: '/signals/:id',
-            builder: (_, state) => SignalDetailScreen(signalId: state.pathParameters['id']!),
-          ),
           GoRoute(
             path: '/performance',
             builder: (_, __) => const VirtualPerformanceScreen(),
@@ -49,7 +41,6 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          GoRoute(path: '/strategy',      builder: (_, __) => const StrategyScreen()),
           GoRoute(path: '/notifications', builder: (_, __) => const NotificationsScreen()),
           GoRoute(path: '/settings',      builder: (_, __) => const SettingsScreen()),
         ],

@@ -4,7 +4,7 @@ import 'storage_service.dart';
 
 class ApiService {
   static final _dio = Dio(BaseOptions(
-    baseUrl:        ApiConstants.apiV1,
+    baseUrl:        '${ApiConstants.apiV1}/',
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 90),
     headers: {'Content-Type': 'application/json'},

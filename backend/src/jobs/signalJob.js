@@ -31,7 +31,9 @@ async function processAsset(asset) {
     const prediction = await aiService.generatePrediction(asset);
     if (!prediction) return null;
 
-    const { direction, confidence } = prediction;
+    const { direction, raw_confidence } = prediction;
+    // Use raw_confidence — calibrated value is unreliable when calibrator is untrained
+    const confidence = raw_confidence ?? prediction.confidence;
 
     if (direction === 'HOLD') return null;
     if (confidence < CONFIDENCE_THRESHOLD()) {

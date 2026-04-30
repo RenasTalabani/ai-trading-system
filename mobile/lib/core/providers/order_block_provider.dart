@@ -21,7 +21,7 @@ class OrderBlockNotifier extends AsyncNotifier<OrderBlockResult?> {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
       final resp = await ApiService.dio.get(
-        '/order-blocks/analyze',
+        'order-blocks/analyze',
         queryParameters: {'asset': form.asset, 'timeframe': form.timeframe},
         options: ApiService.slowOptions,
       );

@@ -11,7 +11,10 @@ const { startNewsJob } = require('./src/jobs/newsJob');
 const { startSocialJob } = require('./src/jobs/socialJob');
 const { startNotificationRetryJob } = require('./src/jobs/notificationRetryJob');
 const { startVirtualTrackingJob }   = require('./src/jobs/virtualTrackingJob');
-const { startDailyReportJob }       = require('./src/jobs/dailyReportJob');
+const { startDailyReportJob }        = require('./src/jobs/dailyReportJob');
+const { startWeeklyReportJob }       = require('./src/jobs/weeklyReportJob');
+const { start: startGlobalScanJob }  = require('./src/jobs/globalScanJob');
+const { startAIWorkerJob }           = require('./src/jobs/aiWorkerJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -56,8 +59,15 @@ async function bootstrap() {
   // Virtual Performance Tracker (isolated sidecar — read-only on signals)
   startVirtualTrackingJob();
 
-  // Strategy add-on: daily performance report at 08:00 UTC
+  // Performance reports: daily at 08:00 UTC, weekly on Mondays
   startDailyReportJob();
+  startWeeklyReportJob();
+
+  // Global AI Brain: scan all asset classes every 30 min, cache result
+  startGlobalScanJob();
+
+  // AI Brain Worker: autonomous trade decisions every 5 min
+  startAIWorkerJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);

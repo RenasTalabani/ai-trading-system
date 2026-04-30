@@ -16,7 +16,7 @@ class PnLNotifier extends AsyncNotifier<PnLModel> {
   }
 
   Future<PnLModel> _fetch() async {
-    final resp = await ApiService.dio.get('/pnl/today');
+    final resp = await ApiService.dio.get('pnl/today');
     return PnLModel.fromJson(resp.data as Map<String, dynamic>);
   }
 

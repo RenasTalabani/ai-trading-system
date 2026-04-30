@@ -19,4 +19,14 @@ class StorageService {
   static Future<String?> getUser() => _storage.read(key: _keyUser);
 
   static Future<void> clear() => _storage.deleteAll();
+
+  static const _keyBudget = 'ai_brain_budget';
+
+  static Future<void> saveBudget(double v) =>
+      _storage.write(key: _keyBudget, value: v.toString());
+
+  static Future<double> getBudget() async {
+    final v = await _storage.read(key: _keyBudget);
+    return v != null ? double.tryParse(v) ?? 500.0 : 500.0;
+  }
 }

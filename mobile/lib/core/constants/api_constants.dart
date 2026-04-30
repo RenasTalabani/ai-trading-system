@@ -1,11 +1,15 @@
 class ApiConstants {
+  // Override at build time:
+  //   flutter build apk --release \
+  //     --dart-define=API_BASE_URL=https://YOUR_BACKEND.railway.app \
+  //     --dart-define=WS_URL=wss://YOUR_BACKEND.railway.app/ws
   static const String _base = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://10.0.2.2:5000', // Android emulator → localhost
   );
 
-  static const String baseUrl  = _base;
-  static const String apiV1    = '$_base/api/v1';
+  static const String baseUrl = _base;
+  static const String apiV1   = '$_base/api/v1';
 
   // Auth
   static const String register     = '$apiV1/auth/register';
@@ -42,7 +46,7 @@ class ApiConstants {
   static const String virtualSetCapital  = '$apiV1/virtual/set-capital';
 
   // AI
-  static const String aiStatus       = '$apiV1/ai/status';
+  static const String aiStatus = '$apiV1/ai/status';
 
   // WebSocket
   static const String wsUrl = String.fromEnvironment(
