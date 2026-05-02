@@ -163,7 +163,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             if (sigState.loading)
               const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.primary)))
             else if (sigState.error != null && sigState.signals.isEmpty)
-              SliverFillRemaining(child: _ErrorState(message: sigState.error!,
+              SliverFillRemaining(hasScrollBody: false, child: _ErrorState(message: sigState.error!,
                   onRetry: () => ref.read(signalsProvider.notifier).fetch()))
             else if (sigState.signals.isEmpty)
               const SliverFillRemaining(hasScrollBody: false, child: _EmptyState())
@@ -1815,19 +1815,29 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Icon(Icons.wifi_off, size: 48, color: AppColors.textMuted),
-        const SizedBox(height: 12),
-        Text(message, style: const TextStyle(color: AppColors.textSecondary)),
-        const SizedBox(height: 16),
-        TextButton.icon(
-          onPressed: onRetry,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Retry'),
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.wifi_off, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
         ),
-      ],
-    ));
+      ),
+    );
   }
 }

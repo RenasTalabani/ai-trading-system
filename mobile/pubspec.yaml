@@ -30,8 +30,7 @@ dependencies:
   # Secure storage
   flutter_secure_storage: ^9.2.2
 
-  # UI / fonts
-  google_fonts: ^6.2.1
+  # UI
   shimmer: ^3.0.0
 
   # Utils

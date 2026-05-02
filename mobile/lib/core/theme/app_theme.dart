@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
   static const background  = Color(0xFF0A0E1A);
@@ -36,7 +35,7 @@ class AppTheme {
         onPrimary: Colors.white,
         onSurface: AppColors.textPrimary,
       ),
-      textTheme: GoogleFonts.interTextTheme(base.textTheme).copyWith(
+      textTheme: base.textTheme.copyWith(
         displayLarge:  const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold),
         headlineMedium: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
         titleLarge:    const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
