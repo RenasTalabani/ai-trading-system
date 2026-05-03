@@ -15,6 +15,7 @@ const { startDailyReportJob }        = require('./src/jobs/dailyReportJob');
 const { startWeeklyReportJob }       = require('./src/jobs/weeklyReportJob');
 const { start: startGlobalScanJob }  = require('./src/jobs/globalScanJob');
 const { startAIWorkerJob }           = require('./src/jobs/aiWorkerJob');
+const { startHourlyReportJob }       = require('./src/jobs/hourlyReportJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -68,6 +69,9 @@ async function bootstrap() {
 
   // AI Brain Worker: autonomous trade decisions every 5 min
   startAIWorkerJob();
+
+  // Hourly market report: generate + store every hour at :00
+  startHourlyReportJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);

@@ -27,8 +27,9 @@ from app.services.collectors.binance_collector import (
 from app.services.strategy_engine import StrategyEngine
 from app.services.strategy_simulator import StrategySimulator
 from app.services.order_block_engine import OrderBlockEngine
-from app.services.unified_analyzer  import UnifiedAnalyzer
-from app.services.global_analyzer   import GlobalAnalyzer
+from app.services.unified_analyzer        import UnifiedAnalyzer
+from app.services.global_analyzer         import GlobalAnalyzer
+from app.services.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.routes")
@@ -91,6 +92,7 @@ global_analyzer = GlobalAnalyzer(
     news_analyzer    = news_analyzer,
     social_analyzer  = social_analyzer,
 )
+multi_tf_analyzer = MultiTimeframeAnalyzer()
 
 
 # ─── Request schemas ───────────────────────────────────────────────────────────
@@ -654,4 +656,57 @@ async def global_scan(req: GlobalScanRequest):
         return result
     except Exception as e:
         logger.error(f"Global scan failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Multi-Timeframe Advisor ───────────────────────────────────────────────────
+
+class AdvisorRequest(BaseModel):
+    asset:      str       = "BTCUSDT"
+    timeframes: List[str] = ["1h", "4h", "1d", "7d", "30d"]
+
+@router.post("/advisor/analyze")
+async def advisor_analyze(req: AdvisorRequest):
+    """
+    Analyze a single asset across multiple timeframes.
+    Returns BUY/SELL/HOLD + confidence + expected return per timeframe.
+    """
+    try:
+        result = await multi_tf_analyzer.analyze(
+            asset      = req.asset,
+            timeframes = req.timeframes,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Advisor analyze failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Smart Budget Simulator ────────────────────────────────────────────────────
+
+from app.services.smart_simulator import SmartSimulator
+_smart_simulator = SmartSimulator()
+
+class SmartSimulatorRequest(BaseModel):
+    capital:       float     = 500.0
+    assets:        List[str] = ["BTCUSDT", "ETHUSDT"]
+    duration_days: int       = 7
+    risk_pct:      float     = 5.0
+
+@router.post("/simulator/run")
+async def run_smart_simulator(req: SmartSimulatorRequest):
+    """
+    Simulate realistic P&L for given capital, assets, and duration using
+    real Binance historical data + EMA crossover strategy.
+    """
+    try:
+        result = await _smart_simulator.run(
+            capital       = req.capital,
+            assets        = req.assets,
+            duration_days = req.duration_days,
+            risk_pct      = req.risk_pct,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Simulator failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -9,6 +9,9 @@ import 'features/settings/settings_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'features/performance/virtual_performance_screen.dart';
 import 'features/performance/virtual_trades_screen.dart';
+import 'features/advisor/advisor_screen.dart';
+import 'features/simulator/simulator_screen.dart';
+import 'features/reports/reports_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
@@ -31,6 +34,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, child) => AppShell(child: child),
         routes: [
           GoRoute(path: '/',              builder: (_, __) => const DashboardScreen()),
+          GoRoute(path: '/advisor',       builder: (_, __) => const AdvisorScreen()),
+          GoRoute(path: '/simulator',     builder: (_, __) => const SimulatorScreen()),
+          GoRoute(path: '/reports',       builder: (_, __) => const ReportsScreen()),
           GoRoute(
             path: '/performance',
             builder: (_, __) => const VirtualPerformanceScreen(),

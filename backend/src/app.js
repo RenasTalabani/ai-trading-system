@@ -23,6 +23,10 @@ const unifiedRoutes    = require('./routes/unified');
 const globalRoutes     = require('./routes/global');
 const budgetRoutes     = require('./routes/budget');
 const aiBrainRoutes    = require('./routes/aiBrain');
+const advisorRoutes    = require('./routes/advisor');
+const simulatorRoutes  = require('./routes/simulator');
+const reportsRoutes    = require('./routes/reports');
+const trackerRoutes    = require('./routes/tracker');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -84,6 +88,10 @@ app.use(`${API}/unified`,       unifiedRoutes);
 app.use(`${API}/global`,        globalRoutes);
 app.use(`${API}/budget`,        budgetRoutes);
 app.use(`${API}/ai-brain`,      aiBrainRoutes);
+app.use(`${API}/advisor`,       advisorRoutes);
+app.use(`${API}/simulator`,     simulatorRoutes);
+app.use(`${API}/reports`,       reportsRoutes);
+app.use(`${API}/tracker`,       trackerRoutes);
 
 // 404 + error handler
 app.use(notFound);
