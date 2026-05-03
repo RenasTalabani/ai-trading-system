@@ -30,6 +30,7 @@ from app.services.order_block_engine import OrderBlockEngine
 from app.services.unified_analyzer        import UnifiedAnalyzer
 from app.services.global_analyzer         import GlobalAnalyzer
 from app.services.multi_timeframe_analyzer import MultiTimeframeAnalyzer
+from app.services.macro_data_service       import MacroDataService
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.routes")
@@ -93,6 +94,7 @@ global_analyzer = GlobalAnalyzer(
     social_analyzer  = social_analyzer,
 )
 multi_tf_analyzer = MultiTimeframeAnalyzer()
+macro_service     = MacroDataService()
 
 
 # ─── Request schemas ───────────────────────────────────────────────────────────
@@ -709,4 +711,39 @@ async def run_smart_simulator(req: SmartSimulatorRequest):
         return result
     except Exception as e:
         logger.error(f"Simulator failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Macro / Economic Data ─────────────────────────────────────────────────────
+
+@router.get("/macro/snapshot")
+async def get_macro_snapshot():
+    """
+    Returns Fear & Greed index, global crypto market cap, BTC/ETH funding rates,
+    and an overall macro_sentiment (bullish / neutral / bearish).
+    All data cached 10 minutes. No API key required.
+    """
+    try:
+        result = await macro_service.get_macro_snapshot()
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"Macro snapshot failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/macro/fear-greed")
+async def get_fear_greed():
+    try:
+        result = await macro_service.get_fear_greed()
+        return {"success": True, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/macro/funding-rates")
+async def get_funding_rates():
+    try:
+        result = await macro_service.get_funding_rates()
+        return {"success": True, "rates": result}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

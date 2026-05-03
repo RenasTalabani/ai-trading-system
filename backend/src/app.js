@@ -27,6 +27,7 @@ const advisorRoutes    = require('./routes/advisor');
 const simulatorRoutes  = require('./routes/simulator');
 const reportsRoutes    = require('./routes/reports');
 const trackerRoutes    = require('./routes/tracker');
+const macroRoutes      = require('./routes/macro');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -92,6 +93,7 @@ app.use(`${API}/advisor`,       advisorRoutes);
 app.use(`${API}/simulator`,     simulatorRoutes);
 app.use(`${API}/reports`,       reportsRoutes);
 app.use(`${API}/tracker`,       trackerRoutes);
+app.use(`${API}/macro`,         macroRoutes);
 
 // 404 + error handler
 app.use(notFound);

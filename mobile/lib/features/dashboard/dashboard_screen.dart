@@ -9,6 +9,8 @@ import '../../core/providers/unified_provider.dart';
 import '../../core/providers/global_provider.dart';
 import '../../core/providers/budget_provider.dart';
 import '../../core/providers/ai_brain_live_provider.dart';
+import '../../core/providers/tracker_provider.dart';
+import '../../core/providers/macro_provider.dart';
 import '../../core/models/pnl_model.dart';
 import '../../core/services/storage_service.dart';
 import '../../core/services/websocket_service.dart';
@@ -111,6 +113,22 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               child: Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: _AIBrainLiveCard(),
+              ),
+            ),
+
+            // Macro market snapshot
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _MacroCard(),
+              ),
+            ),
+
+            // Real vs AI accuracy
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _AIAccuracyCard(),
               ),
             ),
 
@@ -1784,6 +1802,238 @@ class _BudgetStat extends StatelessWidget {
                 fontSize: 10, color: AppColors.textSecondary)),
       ],
     ));
+  }
+}
+
+// ── Macro Market Snapshot card ────────────────────────────────────────────────
+
+class _MacroCard extends ConsumerWidget {
+  const _MacroCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(macroProvider);
+
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error:   (_, __) => const SizedBox.shrink(),
+      data: (m) {
+        final sentColor = m.macroSentiment == 'bullish'
+            ? AppColors.buy
+            : m.macroSentiment == 'bearish'
+                ? AppColors.sell
+                : AppColors.hold;
+
+        final fgColor = m.fearGreedValue >= 65
+            ? AppColors.buy
+            : m.fearGreedValue <= 35
+                ? AppColors.sell
+                : AppColors.warning;
+
+        final mktChgPositive = m.marketCapChange24h >= 0;
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color:        AppColors.card,
+            borderRadius: BorderRadius.circular(14),
+            border:       Border.all(color: sentColor.withValues(alpha: 0.25)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.public, size: 14, color: sentColor),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text('Global Macro',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary)),
+                ),
+                GestureDetector(
+                  onTap: () => ref.refresh(macroProvider),
+                  child: const Icon(Icons.refresh, size: 14, color: AppColors.textSecondary),
+                ),
+              ]),
+
+              const SizedBox(height: 10),
+
+              Row(children: [
+                // Fear & Greed
+                Expanded(child: Column(children: [
+                  Text('${m.fearGreedValue}',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                          color: fgColor)),
+                  Text(m.fearGreedClass,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 9, color: AppColors.textSecondary)),
+                  const SizedBox(height: 2),
+                  const Text('Fear & Greed',
+                      style: TextStyle(fontSize: 9, color: AppColors.textMuted)),
+                ])),
+
+                // BTC Dominance
+                Expanded(child: Column(children: [
+                  Text('${m.btcDominance.toStringAsFixed(1)}%',
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary)),
+                  const Text('BTC Dom',
+                      style: TextStyle(fontSize: 9, color: AppColors.textMuted)),
+                ])),
+
+                // Market Cap Change
+                Expanded(child: Column(children: [
+                  Text(
+                    '${mktChgPositive ? '+' : ''}${m.marketCapChange24h.toStringAsFixed(1)}%',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                        color: mktChgPositive ? AppColors.buy : AppColors.sell),
+                  ),
+                  const Text('Mkt Cap 24h',
+                      style: TextStyle(fontSize: 9, color: AppColors.textMuted)),
+                ])),
+
+                // Macro sentiment badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: sentColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: sentColor.withValues(alpha: 0.4)),
+                  ),
+                  child: Text(m.macroSentiment.toUpperCase(),
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                          color: sentColor)),
+                ),
+              ]),
+
+              // Funding rate row
+              if (m.btcFundingRate != 0 || m.ethFundingRate != 0) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Icon(Icons.swap_horiz, size: 11, color: AppColors.textMuted),
+                  const SizedBox(width: 4),
+                  Text('BTC FR: ${m.btcFundingRate >= 0 ? '+' : ''}${m.btcFundingRate.toStringAsFixed(4)}%',
+                      style: TextStyle(fontSize: 10,
+                          color: m.btcFundingRate > 0 ? AppColors.sell : AppColors.buy)),
+                  const SizedBox(width: 12),
+                  Text('ETH FR: ${m.ethFundingRate >= 0 ? '+' : ''}${m.ethFundingRate.toStringAsFixed(4)}%',
+                      style: TextStyle(fontSize: 10,
+                          color: m.ethFundingRate > 0 ? AppColors.sell : AppColors.buy)),
+                ]),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Real vs AI Accuracy card ──────────────────────────────────────────────────
+
+class _AIAccuracyCard extends ConsumerWidget {
+  const _AIAccuracyCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(trackerAccuracyProvider);
+
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error:   (_, __) => const SizedBox.shrink(),
+      data: (stats) {
+        if (stats.total == 0) return const SizedBox.shrink();
+
+        final accColor = stats.accuracy >= 60
+            ? AppColors.buy
+            : stats.accuracy >= 45
+                ? AppColors.warning
+                : AppColors.sell;
+        final profitPositive = stats.avgProfitPerTrade >= 0;
+        final profitColor    = profitPositive ? AppColors.buy : AppColors.sell;
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color:        AppColors.card,
+            borderRadius: BorderRadius.circular(14),
+            border:       Border.all(color: accColor.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.track_changes, size: 14, color: accColor),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text('Real vs AI Accuracy',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary)),
+                ),
+                GestureDetector(
+                  onTap: () => ref.refresh(trackerAccuracyProvider),
+                  child: const Icon(Icons.refresh, size: 14, color: AppColors.textSecondary),
+                ),
+              ]),
+
+              const SizedBox(height: 10),
+
+              Row(children: [
+                _AccStat(
+                  label: 'Accuracy',
+                  value: '${stats.accuracy}%',
+                  color: accColor,
+                ),
+                _AccStat(
+                  label: 'Correct',
+                  value: '${stats.correct}/${stats.total}',
+                  color: AppColors.textPrimary,
+                ),
+                _AccStat(
+                  label: 'Avg Profit',
+                  value: '${profitPositive ? '+' : ''}\$${stats.avgProfitPerTrade.toStringAsFixed(2)}',
+                  color: profitColor,
+                ),
+                _AccStat(
+                  label: 'Pending',
+                  value: '${stats.pending}',
+                  color: AppColors.textSecondary,
+                ),
+              ]),
+
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value:           stats.accuracy / 100,
+                  minHeight:       4,
+                  backgroundColor: AppColors.border,
+                  valueColor:      AlwaysStoppedAnimation(accColor),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AccStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color  color;
+  const _AccStat({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(child: Column(children: [
+      Text(value,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+      const SizedBox(height: 2),
+      Text(label,
+          style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+    ]));
   }
 }
 

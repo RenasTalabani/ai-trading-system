@@ -5,9 +5,10 @@ const Signal            = require('../models/Signal');
 const VirtualPortfolio  = require('../models/VirtualPortfolio');
 const User              = require('../models/User');
 const { sendPushToUser, sendTelegramMessage } = require('../services/notificationService');
+const { getCache: getGlobalCache }            = require('./globalScanJob');
 const logger            = require('../config/logger');
 
-const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
 
 async function generateHourlyReport() {
   try {
@@ -55,8 +56,8 @@ async function generateHourlyReport() {
 
     let bestOpportunity = null;
     try {
-      const sr = await axios.get(`${AI_URL}/api/global/latest`, { timeout: 5_000 });
-      const sd = sr.data?.best;
+      const cached = getGlobalCache();
+      const sd = cached?.result?.best;
       if (sd) bestOpportunity = {
         asset:          sd.asset,
         action:         sd.action,
@@ -66,7 +67,8 @@ async function generateHourlyReport() {
       };
     } catch (_) {}
 
-    const insight = _buildInsight(marketMood, best, signals.length, portfolioSummary);
+    const baseInsight = _buildInsight(marketMood, best, signals.length, portfolioSummary);
+    const insight     = await _enhanceWithGPT(baseInsight, marketMood, best, signals.length, portfolioSummary);
 
     const report = await AIReport.create({
       type:   'hourly',
@@ -120,6 +122,29 @@ async function generateHourlyReport() {
   } catch (err) {
     logger.error('[HourlyReport] failed:', err.message);
     return null;
+  }
+}
+
+async function _enhanceWithGPT(baseInsight, mood, top, count, port) {
+  if (!OPENAI_KEY) return baseInsight;
+  try {
+    const prompt = `You are a concise crypto market analyst. Summarize in 2 sentences (max 200 chars):
+Market: ${mood}, ${count} signals. Top: ${top.asset} ${top.direction} ${top.confidence}% conf. Portfolio: $${port.balance.toFixed(2)} (${port.change >= 0 ? '+' : ''}$${port.change.toFixed(2)}). ${port.openTrades} open trades.
+Be direct, professional, no emojis.`;
+
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model:      'gpt-4o-mini',
+      max_tokens: 100,
+      messages:   [{ role: 'user', content: prompt }],
+    }, {
+      headers:  { Authorization: `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
+      timeout:  8_000,
+    });
+
+    const text = resp.data?.choices?.[0]?.message?.content?.trim();
+    return text || baseInsight;
+  } catch (_) {
+    return baseInsight;
   }
 }
 
