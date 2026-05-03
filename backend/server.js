@@ -16,6 +16,7 @@ const { startWeeklyReportJob }       = require('./src/jobs/weeklyReportJob');
 const { start: startGlobalScanJob }  = require('./src/jobs/globalScanJob');
 const { startAIWorkerJob }           = require('./src/jobs/aiWorkerJob');
 const { startHourlyReportJob }       = require('./src/jobs/hourlyReportJob');
+const { startTrackerEvalJob }        = require('./src/jobs/trackerEvalJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -72,6 +73,9 @@ async function bootstrap() {
 
   // Hourly market report: generate + store every hour at :00
   startHourlyReportJob();
+
+  // Tracker: evaluate expired AI recommendations every 2h at :30
+  startTrackerEvalJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);

@@ -3,40 +3,35 @@ const axios             = require('axios');
 const AIReport          = require('../models/AIReport');
 const Signal            = require('../models/Signal');
 const VirtualPortfolio  = require('../models/VirtualPortfolio');
+const User              = require('../models/User');
+const { sendPushToUser, sendTelegramMessage } = require('../services/notificationService');
 const logger            = require('../config/logger');
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
-
-const MOODS = { bullish: 0, bearish: 0, neutral: 0 };
 
 async function generateHourlyReport() {
   try {
     const now   = new Date();
     const start = new Date(now.getTime() - 60 * 60 * 1000);
 
-    // Fetch active signals from the last hour
     const signals = await Signal.find({
       status:    'active',
       createdAt: { $gte: start },
     }).sort({ confidence: -1 }).limit(20).lean();
 
     if (signals.length === 0) {
-      logger.info('[HourlyReport] No active signals — skipping report generation');
+      logger.info('[HourlyReport] No active signals — skipping');
       return null;
     }
 
-    // Market mood
     const buys  = signals.filter(s => s.direction === 'BUY').length;
     const sells = signals.filter(s => s.direction === 'SELL').length;
     const total = signals.length;
-    let marketMood = 'neutral';
-    let moodPct    = 50;
-    if (buys > sells) { marketMood = 'bullish'; moodPct = Math.round(buys / total * 100); }
-    else if (sells > buys) { marketMood = 'bearish'; moodPct = Math.round(sells / total * 100); }
+    let marketMood = 'neutral', moodPct = 50;
+    if (buys > sells)  { marketMood = 'bullish'; moodPct = Math.round(buys  / total * 100); }
+    if (sells > buys)  { marketMood = 'bearish'; moodPct = Math.round(sells / total * 100); }
 
     const best = signals[0];
-
-    // Top 5 picks
     const topPicks = signals.slice(0, 5).map(s => ({
       asset:      s.asset,
       action:     s.direction,
@@ -44,49 +39,41 @@ async function generateHourlyReport() {
       price:      s.price?.entry || 0,
     }));
 
-    // Portfolio snapshot
     let portfolioSummary = { balance: 500, change: 0, changePct: 0, openTrades: 0 };
     try {
-      const portfolio = await VirtualPortfolio.findOne({ key: 'global' }).lean();
-      if (portfolio) {
-        const prevBalance = portfolio.balanceHistory?.slice(-2)[0]?.balance || portfolio.currentBalance;
+      const p = await VirtualPortfolio.findOne({ key: 'global' }).lean();
+      if (p) {
+        const prev = p.balanceHistory?.slice(-2)[0]?.balance || p.currentBalance;
         portfolioSummary = {
-          balance:    portfolio.currentBalance,
-          change:     round2(portfolio.currentBalance - prevBalance),
-          changePct:  round2((portfolio.currentBalance - prevBalance) / prevBalance * 100),
-          openTrades: portfolio.openTrades || 0,
+          balance:    p.currentBalance,
+          change:     round2(p.currentBalance - prev),
+          changePct:  round2((p.currentBalance - prev) / prev * 100),
+          openTrades: p.openTrades || 0,
         };
       }
-    } catch (e) { /* non-critical */ }
+    } catch (_) {}
 
-    // Global scan for best opportunity
     let bestOpportunity = null;
     try {
-      const scanResp = await axios.get(`${AI_URL}/api/global/latest`, { timeout: 5_000 });
-      const scanData = scanResp.data?.best;
-      if (scanData) {
-        bestOpportunity = {
-          asset:          scanData.asset,
-          action:         scanData.action,
-          confidence:     scanData.confidence,
-          expectedReturn: scanData.expected_return || 'N/A',
-          reason:         scanData.reason || '',
-        };
-      }
-    } catch (e) { /* non-critical */ }
+      const sr = await axios.get(`${AI_URL}/api/global/latest`, { timeout: 5_000 });
+      const sd = sr.data?.best;
+      if (sd) bestOpportunity = {
+        asset:          sd.asset,
+        action:         sd.action,
+        confidence:     sd.confidence,
+        expectedReturn: sd.expected_return || 'N/A',
+        reason:         sd.reason || '',
+      };
+    } catch (_) {}
 
-    // AI insight string
-    const insight = buildInsight(marketMood, best, signals.length, portfolioSummary);
+    const insight = _buildInsight(marketMood, best, signals.length, portfolioSummary);
 
     const report = await AIReport.create({
       type:   'hourly',
       period: { start, end: now },
       marketSummary: {
-        topAsset:      best.asset,
-        topAction:     best.direction,
-        topConfidence: best.confidence,
-        marketMood,
-        moodPct,
+        topAsset: best.asset, topAction: best.direction,
+        topConfidence: best.confidence, marketMood, moodPct,
         activeSignals: signals.length,
       },
       bestOpportunity,
@@ -95,30 +82,73 @@ async function generateHourlyReport() {
       aiInsight: insight,
     });
 
-    logger.info(`[HourlyReport] Generated: ${marketMood} | Top: ${best.asset} ${best.direction} ${best.confidence}%`);
+    // ── Push notifications ───────────────────────────────────────────────────
+    const moodEmoji  = marketMood === 'bullish' ? '📈' : marketMood === 'bearish' ? '📉' : '➡️';
+    const notifTitle = `AI Report ${moodEmoji} Market ${marketMood.toUpperCase()}`;
+    const notifBody  = `${best.asset} ${best.direction} ${best.confidence}% · ${signals.length} signals · Portfolio $${portfolioSummary.balance.toFixed(2)}`;
+
+    const users = await User.find({ isActive: true }).lean();
+    for (const user of users) {
+      try {
+        if (user.preferences?.fcmEnabled !== false && user.fcmToken) {
+          await sendPushToUser(user._id, notifTitle, notifBody, {
+            type:      'HOURLY_REPORT',
+            reportId:  report._id.toString(),
+            mood:      marketMood,
+            topAsset:  best.asset,
+            topAction: best.direction,
+          }).catch(() => {});
+        }
+        if (user.preferences?.telegramEnabled && user.telegramChatId) {
+          await sendTelegramMessage(user.telegramChatId, _buildTgMessage(report)).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    // Admin channel
+    const adminChannel = process.env.TELEGRAM_CHANNEL_ID;
+    if (adminChannel) {
+      await sendTelegramMessage(adminChannel, _buildTgMessage(report)).catch(() => {});
+    }
+
+    await AIReport.updateOne({ _id: report._id }, {
+      $set: { 'notificationSent.fcm': true, 'notificationSent.telegram': !!adminChannel },
+    });
+
+    logger.info(`[HourlyReport] ✓ ${marketMood} | ${best.asset} ${best.direction} ${best.confidence}% | notified ${users.length} users`);
     return report;
   } catch (err) {
-    logger.error('[HourlyReport] generation failed:', err.message);
+    logger.error('[HourlyReport] failed:', err.message);
     return null;
   }
 }
 
-function buildInsight(mood, topSignal, signalCount, portfolio) {
-  const moodWord  = mood === 'bullish' ? 'bullish 📈' : mood === 'bearish' ? 'bearish 📉' : 'neutral ➡️';
-  const portState = portfolio.change >= 0
-    ? `Portfolio is up $${Math.abs(portfolio.change)}`
-    : `Portfolio is down $${Math.abs(portfolio.change)}`;
-  return (
-    `Market is ${moodWord} — ${signalCount} active signals. ` +
-    `Top pick: ${topSignal.asset} ${topSignal.direction} (${topSignal.confidence}% confidence). ` +
-    `${portState} this hour. ${portfolio.openTrades} open trades.`
-  );
+function _buildInsight(mood, top, count, port) {
+  const moodWord = mood === 'bullish' ? 'bullish 📈' : mood === 'bearish' ? 'bearish 📉' : 'neutral ➡️';
+  const portWord = port.change >= 0
+    ? `Portfolio up $${Math.abs(port.change)}`
+    : `Portfolio down $${Math.abs(port.change)}`;
+  return `Market is ${moodWord} — ${count} signals. Top: ${top.asset} ${top.direction} ${top.confidence}% confidence. ${portWord}. ${port.openTrades} open trades.`;
+}
+
+function _buildTgMessage(r) {
+  const ms   = r.marketSummary;
+  const port = r.portfolioSummary;
+  const emoji = ms.marketMood === 'bullish' ? '📈' : ms.marketMood === 'bearish' ? '📉' : '➡️';
+  const lines = [
+    `${emoji} *Hourly AI Report*`,
+    `Market: *${ms.marketMood.toUpperCase()}* (${ms.moodPct}%)`,
+    `Top: *${ms.topAsset}* ${ms.topAction} ${ms.topConfidence}%`,
+    ms.activeSignals ? `Signals: ${ms.activeSignals} active` : '',
+    r.bestOpportunity ? `Best: *${r.bestOpportunity.asset}* ${r.bestOpportunity.action} ${r.bestOpportunity.confidence}%` : '',
+    `Portfolio: $${port.balance.toFixed(2)} (${port.change >= 0 ? '+' : ''}$${port.change.toFixed(2)})`,
+  ].filter(Boolean);
+  return lines.join('\n');
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
 function startHourlyReportJob() {
-  // Run at minute 0 of every hour
   cron.schedule('0 * * * *', async () => {
     logger.info('[HourlyReport] Job triggered');
     await generateHourlyReport();
