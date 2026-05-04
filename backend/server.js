@@ -18,6 +18,7 @@ const { startAIWorkerJob }           = require('./src/jobs/aiWorkerJob');
 const { startHourlyReportJob }       = require('./src/jobs/hourlyReportJob');
 const { startTrackerEvalJob }        = require('./src/jobs/trackerEvalJob');
 const { startKeepAliveJob }          = require('./src/jobs/keepAliveJob');
+const { startDecisionTrackingJob }   = require('./src/jobs/decisionTrackingJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -77,6 +78,9 @@ async function bootstrap() {
 
   // Tracker: evaluate expired AI recommendations every 2h at :30
   startTrackerEvalJob();
+
+  // Decision tracking: evaluate open AI decisions every 15 min
+  startDecisionTrackingJob();
 
   // Keep-alive: ping both services every 5 min to prevent Railway sleep
   startKeepAliveJob();

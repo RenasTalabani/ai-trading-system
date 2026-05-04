@@ -22,6 +22,17 @@ const aiDecisionSchema = new mongoose.Schema(
 
     tradeCreated: { type: Boolean, default: false },
     tradeId:      { type: mongoose.Schema.Types.ObjectId, ref: 'VirtualTrade', default: null },
+
+    // Phase 3 — outcome tracking
+    timeframe:       { type: String, default: '1h' },
+    expectedProfitPct: { type: String, default: 'N/A' },
+    exitPrice:       { type: Number, default: null },
+    profit:          { type: Number, default: null },   // $ on $100
+    profitPct:       { type: Number, default: null },   // % return
+    result:          { type: String, enum: ['WIN', 'LOSS', 'OPEN', 'SKIPPED'], default: 'OPEN' },
+    closedAt:        { type: Date, default: null },
+    expiresAt:       { type: Date, default: null },
+    source:          { type: String, default: 'global_scan' },
   },
   { timestamps: true }
 );

@@ -7,6 +7,15 @@ const cron   = require('node-cron');
 const axios  = require('axios');
 const logger = require('../config/logger');
 
+// Lazy-require to avoid circular dep at module load time
+let _storeDecision = null;
+function _getStore() {
+  if (!_storeDecision) {
+    _storeDecision = require('./decisionTrackingJob').storeGlobalDecision;
+  }
+  return _storeDecision;
+}
+
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 // In-memory cache: { result, scannedAt }
@@ -21,13 +30,15 @@ async function runGlobalScan() {
       { timeout: 120_000 },
     );
     if (resp.data?.success) {
-      _cache = { result: resp.data, scannedAt: new Date() };
+      const scannedAt = new Date();
+      _cache = { result: resp.data, scannedAt };
       const best = resp.data.best;
       if (best) {
         logger.info(
           `[GlobalScanJob] Best: ${best.display_name} → ${best.action} ` +
           `(${best.confidence}% conf, score ${best.fused_score})`,
         );
+        _getStore()(best, scannedAt).catch(() => {});
       }
     }
   } catch (err) {
