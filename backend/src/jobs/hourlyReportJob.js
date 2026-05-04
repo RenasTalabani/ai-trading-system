@@ -84,21 +84,28 @@ async function generateHourlyReport() {
       aiInsight: insight,
     });
 
-    // ── Push notifications ───────────────────────────────────────────────────
-    const moodEmoji  = marketMood === 'bullish' ? '📈' : marketMood === 'bearish' ? '📉' : '➡️';
-    const notifTitle = `AI Report ${moodEmoji} Market ${marketMood.toUpperCase()}`;
-    const notifBody  = `${best.asset} ${best.direction} ${best.confidence}% · ${signals.length} signals · Portfolio $${portfolioSummary.balance.toFixed(2)}`;
+    // ── Push notifications (brain report format) ────────────────────────────
+    const actionEmoji = bestOpportunity?.action === 'BUY'  ? '🟢'
+                      : bestOpportunity?.action === 'SELL' ? '🔴' : '⚪️';
+    const primaryAsset  = bestOpportunity?.asset      || best.asset;
+    const primaryAction = bestOpportunity?.action     || best.direction;
+    const primaryConf   = bestOpportunity?.confidence || best.confidence;
+    const expectedRet   = bestOpportunity?.expectedReturn;
+    const notifTitle = `${actionEmoji} AI Brain — ${primaryAction} ${primaryAsset}`;
+    const retPart    = expectedRet && expectedRet !== 'N/A' ? ` · +${expectedRet}% est.` : '';
+    const notifBody  = `${primaryConf}% confidence${retPart} · Market: ${marketMood}`;
 
     const users = await User.find({ isActive: true }).lean();
     for (const user of users) {
       try {
         if (user.preferences?.fcmEnabled !== false && user.fcmToken) {
           await sendPushToUser(user._id, notifTitle, notifBody, {
-            type:      'HOURLY_REPORT',
-            reportId:  report._id.toString(),
-            mood:      marketMood,
-            topAsset:  best.asset,
-            topAction: best.direction,
+            type:       'BRAIN_REPORT',
+            reportId:   report._id.toString(),
+            mood:       marketMood,
+            topAsset:   primaryAsset,
+            topAction:  primaryAction,
+            confidence: String(primaryConf),
           }).catch(() => {});
         }
         if (user.preferences?.telegramEnabled && user.telegramChatId) {
