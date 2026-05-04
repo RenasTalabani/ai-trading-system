@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../brain/my_trades_sheet.dart';
 
 class VirtualPerformanceScreen extends ConsumerWidget {
   const VirtualPerformanceScreen({super.key});
@@ -60,6 +61,14 @@ class VirtualPerformanceScreen extends ConsumerWidget {
                   ),
                 ),
                 data: (r) => _PerformanceBody(report: r),
+              ),
+            ),
+
+            // ── My Follows section ────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _MyFollowsCard(),
               ),
             ),
 
@@ -643,4 +652,187 @@ class _ErrorView extends StatelessWidget {
       ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
     ]),
   );
+}
+
+// ── My Follows card ───────────────────────────────────────────────────────────
+
+class _MyFollowsCard extends ConsumerWidget {
+  const _MyFollowsCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state  = ref.watch(followsProvider);
+    final open   = state.follows.where((f) => f.isOpen).toList();
+    final closed = state.follows.where((f) => !f.isOpen).toList();
+    final wins   = closed.where((f) => f.outcome == 'WIN').length;
+    final wr     = closed.isNotEmpty
+        ? (wins / closed.length * 100).round() : 0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            const Icon(Icons.add_chart_outlined, size: 16,
+                color: AppColors.primary),
+            const SizedBox(width: 8),
+            const Text('My Followed Trades',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => showMyTradesSheet(context),
+              child: const Text('View all',
+                  style: TextStyle(fontSize: 12, color: AppColors.primary,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ]),
+        ),
+
+        // Stats row
+        if (state.follows.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(children: [
+              _FolStat(label: 'Total', value: '${state.follows.length}',
+                  color: AppColors.primary),
+              _FolStat(label: 'Open', value: '${open.length}',
+                  color: AppColors.hold),
+              _FolStat(label: 'Closed', value: '${closed.length}',
+                  color: AppColors.textSecondary),
+              _FolStat(label: 'Win Rate',
+                  value: closed.isNotEmpty ? '$wr%' : '—',
+                  color: wr >= 50 ? AppColors.buy : AppColors.sell),
+            ]),
+          ),
+        ],
+
+        // Open follows preview (up to 3)
+        if (open.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text('OPEN',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                    color: AppColors.textMuted, letterSpacing: 1.2)),
+          ),
+          ...open.take(3).map((f) => _FollowMiniRow(follow: f)),
+        ],
+
+        // Empty state
+        if (state.follows.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(children: [
+              const Icon(Icons.info_outline, size: 16,
+                  color: AppColors.textMuted),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Tap "Follow This Trade" on the Brain screen to track your trades here.',
+                  style: TextStyle(fontSize: 12,
+                      color: AppColors.textSecondary),
+                ),
+              ),
+            ]),
+          ),
+
+        const SizedBox(height: 14),
+      ]),
+    );
+  }
+}
+
+class _FolStat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _FolStat({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Column(children: [
+      Text(value,
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+              color: color)),
+      const SizedBox(height: 2),
+      Text(label,
+          style: const TextStyle(fontSize: 9, color: AppColors.textMuted)),
+    ]),
+  );
+}
+
+class _FollowMiniRow extends ConsumerWidget {
+  final UserFollow follow;
+  const _FollowMiniRow({required this.follow});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ac = follow.action == 'BUY' ? AppColors.buy
+        : follow.action == 'SELL' ? AppColors.sell : AppColors.hold;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      decoration: const BoxDecoration(
+        border: Border(
+            top: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: ac.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(follow.action,
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                  color: ac)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(follow.displayName,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary)),
+        ),
+        Text('${follow.confidence}% conf',
+            style: const TextStyle(fontSize: 11,
+                color: AppColors.textMuted)),
+        const SizedBox(width: 12),
+        // Quick close buttons
+        GestureDetector(
+          onTap: () => ref.read(followsProvider.notifier)
+              .closeTrade(follow.id, outcome: 'WIN'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.buy.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text('W',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800,
+                    color: AppColors.buy)),
+          ),
+        ),
+        const SizedBox(width: 6),
+        GestureDetector(
+          onTap: () => ref.read(followsProvider.notifier)
+              .closeTrade(follow.id, outcome: 'LOSS'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.sell.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text('L',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800,
+                    color: AppColors.sell)),
+          ),
+        ),
+      ]),
+    );
+  }
 }
