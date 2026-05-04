@@ -208,6 +208,7 @@ class UserFollow {
   final String  action;
   final String  outcome;
   final int     confidence;
+  final String  timeframe;
   final double? entryPrice;
   final double? exitPrice;
   final double? profitPct;
@@ -216,7 +217,7 @@ class UserFollow {
   const UserFollow({
     required this.id, required this.asset, required this.displayName,
     required this.action, required this.outcome, required this.confidence,
-    required this.createdAt,
+    required this.timeframe, required this.createdAt,
     this.entryPrice, this.exitPrice, this.profitPct,
   });
 
@@ -227,6 +228,7 @@ class UserFollow {
     action:      j['action']?.toString()       ?? 'BUY',
     outcome:     j['outcome']?.toString()      ?? 'OPEN',
     confidence:  (j['confidence'] as num?)?.toInt() ?? 0,
+    timeframe:   j['timeframe']?.toString()    ?? '4H',
     entryPrice:  (j['entryPrice'] as num?)?.toDouble(),
     exitPrice:   (j['exitPrice']  as num?)?.toDouble(),
     profitPct:   (j['profitPct']  as num?)?.toDouble(),

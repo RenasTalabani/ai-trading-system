@@ -120,7 +120,7 @@ class _FollowTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Container(
+    final tile = Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -168,8 +168,19 @@ class _FollowTile extends ConsumerWidget {
         Row(children: [
           Text('${follow.confidence}% conf',
               style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.border,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(follow.timeframe,
+                style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
+                    color: AppColors.textMuted)),
+          ),
           if (follow.entryPrice != null) ...[
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Text('Entry \$${_fmt(follow.entryPrice!)}',
                 style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
           ],
@@ -203,6 +214,28 @@ class _FollowTile extends ConsumerWidget {
         ],
       ]),
     );
+
+    // Closed trades can be swiped away to remove
+    if (!follow.isOpen) {
+      return Dismissible(
+        key: ValueKey(follow.id),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+            color: AppColors.sell.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          child: const Icon(Icons.delete_outline, color: AppColors.sell, size: 22),
+        ),
+        onDismissed: (_) =>
+            ref.read(followsProvider.notifier).removeTrade(follow.id),
+        child: tile,
+      );
+    }
+    return tile;
   }
 
   Future<void> _close(BuildContext context, WidgetRef ref, String outcome) async {
