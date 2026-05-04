@@ -14,23 +14,38 @@ class BrainReportScreen extends ConsumerStatefulWidget {
 }
 
 class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
-  Timer? _timer;
+  Timer? _refreshTimer;
+  Timer? _tickTimer;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(minutes: 30), (_) {
+    _refreshTimer = Timer.periodic(const Duration(minutes: 30), (_) {
       if (!mounted) return;
       final balance = ref.read(brainBalanceProvider);
       ref.invalidate(brainActionProvider);
       ref.invalidate(brainPerformanceProvider(balance));
     });
+    // Tick every minute to update the "next scan" countdown
+    _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _refreshTimer?.cancel();
+    _tickTimer?.cancel();
     super.dispose();
+  }
+
+  String _nextScanLabel(DateTime? generatedAt) {
+    if (generatedAt == null) return '';
+    final next = generatedAt.add(const Duration(minutes: 30));
+    final remaining = next.difference(DateTime.now());
+    if (remaining.isNegative) return 'updating…';
+    final m = remaining.inMinutes;
+    return 'next scan: ${m}m';
   }
 
   Future<void> _refresh() async {
@@ -65,9 +80,17 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                     color: AppColors.buy, shape: BoxShape.circle),
                 ),
                 const SizedBox(width: 8),
-                const Text('AI Brain',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
-                        color: AppColors.textPrimary)),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('AI Brain',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary)),
+                  if (actionAsync.valueOrNull?.generatedAt != null)
+                    Text(
+                      _nextScanLabel(actionAsync.valueOrNull!.generatedAt),
+                      style: const TextStyle(fontSize: 10,
+                          color: AppColors.textMuted),
+                    ),
+                ]),
                 const Spacer(),
                 Consumer(builder: (context, ref, _) {
                   final openCount = ref.watch(followsProvider

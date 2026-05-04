@@ -40,6 +40,9 @@ class TradingApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
 
+    // Wire notification tap navigation to GoRouter
+    PushNotificationService.onNavigate = (route) => router.go(route);
+
     return MaterialApp.router(
       title:        'AI Trader',
       debugShowCheckedModeBanner: false,

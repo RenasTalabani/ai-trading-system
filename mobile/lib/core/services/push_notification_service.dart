@@ -10,8 +10,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 class PushNotificationService {
-  static final _fcm = FirebaseMessaging.instance;
+  static final _fcm              = FirebaseMessaging.instance;
   static final _localNotifications = FlutterLocalNotificationsPlugin();
+
+  // Set by main.dart after router is ready; used to navigate on tap
+  static void Function(String route)? onNavigate;
 
   static const _androidChannel = AndroidNotificationChannel(
     'trading_signals',
@@ -22,37 +25,48 @@ class PushNotificationService {
     enableVibration: true,
   );
 
+  static String _routeForMessage(RemoteMessage msg) {
+    final type = msg.data['type'] as String? ?? '';
+    if (type == 'PRICE_ALERT') return '/notifications';
+    return '/'; // brain screen for all other types
+  }
+
   static Future<void> init() async {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
     // Request permission
     final settings = await _fcm.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
+      alert: true, badge: true, sound: true,
     );
-
     if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
     // Local notifications setup (for foreground display)
-    const initSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettingsIOS = DarwinInitializationSettings();
     await _localNotifications.initialize(
       const InitializationSettings(
-        android: initSettingsAndroid,
-        iOS:     initSettingsIOS,
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS:     DarwinInitializationSettings(),
       ),
+      onDidReceiveNotificationResponse: (details) {
+        // Foreground local notification tapped
+        final payload = details.payload ?? '';
+        if (payload == 'PRICE_ALERT') {
+          onNavigate?.call('/notifications');
+        } else {
+          onNavigate?.call('/');
+        }
+      },
     );
 
     await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(_androidChannel);
 
-    // Foreground message handler
+    // Foreground message — show local notification
     FirebaseMessaging.onMessage.listen((message) {
       final notification = message.notification;
       if (notification == null) return;
-
+      final type = message.data['type'] as String? ?? '';
       _localNotifications.show(
         notification.hashCode,
         notification.title,
@@ -71,13 +85,26 @@ class PushNotificationService {
             presentSound: true,
           ),
         ),
+        payload: type,
       );
     });
 
+    // Background tap (app was in background, user tapped notification)
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      onNavigate?.call(_routeForMessage(message));
+    });
+
+    // Terminated tap (app was closed, user tapped notification)
+    final initial = await _fcm.getInitialMessage();
+    if (initial != null) {
+      // Delay slightly so the router is ready before navigating
+      Future.delayed(const Duration(milliseconds: 500), () {
+        onNavigate?.call(_routeForMessage(initial));
+      });
+    }
+
     // Register token
     await registerToken();
-
-    // Refresh token handler
     _fcm.onTokenRefresh.listen((_) => registerToken());
   }
 
@@ -89,9 +116,7 @@ class PushNotificationService {
         ApiConstants.registerToken,
         data: {'token': token},
       );
-    } on DioException catch (_) {
-      // Token registration is best-effort
-    }
+    } on DioException catch (_) {}
   }
 
   static Future<void> deleteToken() async {

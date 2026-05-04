@@ -201,8 +201,77 @@ class _FollowTile extends ConsumerWidget {
   }
 
   Future<void> _close(BuildContext context, WidgetRef ref, String outcome) async {
-    await ref.read(followsProvider.notifier)
-        .closeTrade(follow.id, outcome: outcome);
+    if (outcome == 'CANCELLED') {
+      await ref.read(followsProvider.notifier)
+          .closeTrade(follow.id, outcome: outcome);
+      return;
+    }
+
+    // Ask for exit price to auto-calculate profit %
+    final priceCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.card,
+        title: Text(
+          outcome == 'WIN' ? '✅ Mark as WIN' : '❌ Mark as LOSS',
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 16,
+              fontWeight: FontWeight.w700),
+        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Exit price (optional):',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: priceCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(color: AppColors.textPrimary),
+            decoration: const InputDecoration(
+              hintText: 'e.g. 68500',
+              prefixText: '\$ ',
+              prefixStyle: TextStyle(color: AppColors.textMuted),
+            ),
+            autofocus: true,
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: outcome == 'WIN' ? AppColors.buy : AppColors.sell,
+              minimumSize: Size.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(outcome,
+                style: const TextStyle(color: Colors.white,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final exitPrice = double.tryParse(priceCtrl.text.trim());
+    double? profitPct;
+    if (exitPrice != null && follow.entryPrice != null && follow.entryPrice! > 0) {
+      final diff = exitPrice - follow.entryPrice!;
+      profitPct = (diff / follow.entryPrice!) * 100;
+      if (follow.action == 'SELL') profitPct = -profitPct;
+      profitPct = double.parse(profitPct.toStringAsFixed(2));
+    }
+
+    await ref.read(followsProvider.notifier).closeTrade(
+      follow.id,
+      outcome:   outcome,
+      exitPrice: exitPrice,
+      profitPct: profitPct,
+    );
   }
 
   String _fmt(double v) {
