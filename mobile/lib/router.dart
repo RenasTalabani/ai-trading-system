@@ -12,6 +12,8 @@ import 'features/performance/virtual_trades_screen.dart';
 import 'features/advisor/advisor_screen.dart';
 import 'features/simulator/simulator_screen.dart';
 import 'features/reports/reports_screen.dart';
+import 'features/ai_brain/ai_brain_screen.dart';
+import 'features/followed_ai/followed_ai_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
@@ -34,6 +36,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, child) => AppShell(child: child),
         routes: [
           GoRoute(path: '/',              builder: (_, __) => const DashboardScreen()),
+          GoRoute(path: '/ai-brain',      builder: (_, __) => const AIBrainScreen()),
+          GoRoute(path: '/followed-ai',   builder: (_, __) => const FollowedAIScreen()),
           GoRoute(path: '/advisor',       builder: (_, __) => const AdvisorScreen()),
           GoRoute(path: '/simulator',     builder: (_, __) => const SimulatorScreen()),
           GoRoute(path: '/reports',       builder: (_, __) => const ReportsScreen()),

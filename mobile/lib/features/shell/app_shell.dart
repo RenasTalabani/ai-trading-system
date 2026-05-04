@@ -9,23 +9,25 @@ class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.child});
 
   static const _tabs = [
-    _TabItem(label: 'Home',      icon: Icons.home_outlined,          path: '/'),
-    _TabItem(label: 'Advisor',   icon: Icons.psychology_outlined,    path: '/advisor'),
-    _TabItem(label: 'Simulator', icon: Icons.science_outlined,       path: '/simulator'),
-    _TabItem(label: 'Reports',   icon: Icons.article_outlined,       path: '/reports'),
-    _TabItem(label: 'Portfolio', icon: Icons.bar_chart_outlined,     path: '/performance'),
-    _TabItem(label: 'Alerts',    icon: Icons.notifications_none,     path: '/notifications'),
-    _TabItem(label: 'Settings',  icon: Icons.settings_outlined,      path: '/settings'),
+    _TabItem(label: 'Home',        icon: Icons.home_outlined,          path: '/'),
+    _TabItem(label: 'AI Brain',    icon: Icons.bolt_outlined,          path: '/ai-brain'),
+    _TabItem(label: 'If Followed', icon: Icons.savings_outlined,       path: '/followed-ai'),
+    _TabItem(label: 'Advisor',     icon: Icons.psychology_outlined,    path: '/advisor'),
+    _TabItem(label: 'Reports',     icon: Icons.article_outlined,       path: '/reports'),
+    _TabItem(label: 'Portfolio',   icon: Icons.bar_chart_outlined,     path: '/performance'),
+    _TabItem(label: 'Alerts',      icon: Icons.notifications_none,     path: '/notifications'),
+    _TabItem(label: 'Settings',    icon: Icons.settings_outlined,      path: '/settings'),
   ];
 
   int _indexFor(BuildContext context) {
     final loc = GoRouterState.of(context).matchedLocation;
-    if (loc.startsWith('/advisor'))       return 1;
-    if (loc.startsWith('/simulator'))     return 2;
-    if (loc.startsWith('/reports'))       return 3;
-    if (loc.startsWith('/performance'))   return 4;
-    if (loc.startsWith('/notifications')) return 5;
-    if (loc.startsWith('/settings'))      return 6;
+    if (loc.startsWith('/ai-brain'))      return 1;
+    if (loc.startsWith('/followed-ai'))   return 2;
+    if (loc.startsWith('/advisor'))       return 3;
+    if (loc.startsWith('/reports'))       return 4;
+    if (loc.startsWith('/performance'))   return 5;
+    if (loc.startsWith('/notifications')) return 6;
+    if (loc.startsWith('/settings'))      return 7;
     return 0;
   }
 
@@ -51,7 +53,7 @@ class AppShell extends ConsumerWidget {
           destinations: _tabs.asMap().entries.map((e) {
             final i   = e.key;
             final tab = e.value;
-            final showBadge = i == 5 && unread > 0;
+            final showBadge = i == 6 && unread > 0;
             return NavigationDestination(
               icon: showBadge
                   ? Badge(label: Text('$unread'), child: Icon(tab.icon, color: AppColors.textMuted))
