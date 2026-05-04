@@ -30,11 +30,16 @@ exports.simulate = async (req, res) => {
     // Simulate: risk 5% of current balance per trade
     let balance = capital;
     let wins = 0, losses = 0;
+    const equityCurve = [{ date: closed[0].createdAt, balance: capital }];
 
     for (const dec of closed) {
       const risk   = balance * 0.05;
       const change = risk * (dec.profitPct / 100);
       balance      += change;
+      equityCurve.push({
+        date:    dec.createdAt,
+        balance: Math.round(balance * 100) / 100,
+      });
       if (dec.result === 'WIN') wins++; else losses++;
     }
 
@@ -53,6 +58,7 @@ exports.simulate = async (req, res) => {
       total_trades:   total,
       wins,
       losses,
+      equity_curve:   equityCurve,
     });
   } catch (err) {
     logger.error('[CoreSimulator] error:', err.message);

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/core_provider.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -188,6 +189,11 @@ class _ResultView extends StatelessWidget {
           color: AppColors.textPrimary,
         ),
       ]),
+
+      if (result.equityCurve.length > 1) ...[
+        const SizedBox(height: 12),
+        _EquityCurveChart(curve: result.equityCurve, capital: result.capital),
+      ],
     ]);
   }
 }
@@ -216,6 +222,132 @@ class _StatBox extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
         ]),
+      ),
+    );
+  }
+}
+
+// ── Equity curve chart ────────────────────────────────────────────────────────
+
+class _EquityCurveChart extends StatelessWidget {
+  final List<EquityPoint> curve;
+  final double            capital;
+  const _EquityCurveChart({required this.curve, required this.capital});
+
+  @override
+  Widget build(BuildContext context) {
+    final profitColor = curve.last.balance >= capital ? AppColors.buy : AppColors.sell;
+
+    final spots = curve.asMap().entries.map((e) =>
+        FlSpot(e.key.toDouble(), e.value.balance)).toList();
+
+    final minY = curve.map((p) => p.balance).reduce((a, b) => a < b ? a : b);
+    final maxY = curve.map((p) => p.balance).reduce((a, b) => a > b ? a : b);
+    final padding = (maxY - minY) * 0.12 + 1;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.show_chart, size: 14, color: AppColors.primary),
+            const SizedBox(width: 6),
+            const Text('Equity Curve',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const Spacer(),
+            Text('${curve.length - 1} trades',
+                style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+          ]),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 140,
+            child: LineChart(
+              LineChartData(
+                minY: minY - padding,
+                maxY: maxY + padding,
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: (maxY - minY + padding * 2) / 4,
+                  getDrawingHorizontalLine: (_) => const FlLine(
+                    color: AppColors.border,
+                    strokeWidth: 0.5,
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 50,
+                      getTitlesWidget: (v, _) => Text(
+                        '\$${v.toStringAsFixed(0)}',
+                        style: const TextStyle(fontSize: 9, color: AppColors.textMuted),
+                      ),
+                    ),
+                  ),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles:   const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                lineBarsData: [
+                  // Capital baseline
+                  LineChartBarData(
+                    spots: [FlSpot(0, capital), FlSpot((curve.length - 1).toDouble(), capital)],
+                    isCurved: false,
+                    color: AppColors.border,
+                    barWidth: 1,
+                    dotData: const FlDotData(show: false),
+                    dashArray: [4, 4],
+                  ),
+                  // Equity line
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: true,
+                    curveSmoothness: 0.3,
+                    color: profitColor,
+                    barWidth: 2,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          profitColor.withValues(alpha: 0.25),
+                          profitColor.withValues(alpha: 0.0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => AppColors.surface,
+                    getTooltipItems: (spots) => spots.map((s) {
+                      if (s.barIndex == 0) return null;
+                      return LineTooltipItem(
+                        '\$${s.y.toStringAsFixed(2)}',
+                        TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: profitColor,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

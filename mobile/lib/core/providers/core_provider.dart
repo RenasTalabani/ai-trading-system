@@ -3,6 +3,28 @@ import '../services/api_service.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
+class TopPick {
+  final String asset;
+  final String decision;
+  final int    confidence;
+  const TopPick({required this.asset, required this.decision, required this.confidence});
+  factory TopPick.fromJson(Map<String, dynamic> j) => TopPick(
+    asset:      j['asset']?.toString()    ?? '',
+    decision:   j['decision']?.toString() ?? 'HOLD',
+    confidence: (j['confidence'] as num?)?.toInt() ?? 0,
+  );
+}
+
+class EquityPoint {
+  final DateTime date;
+  final double   balance;
+  const EquityPoint({required this.date, required this.balance});
+  factory EquityPoint.fromJson(Map<String, dynamic> j) => EquityPoint(
+    date:    DateTime.tryParse(j['date']?.toString() ?? '') ?? DateTime.now(),
+    balance: (j['balance'] as num?)?.toDouble() ?? 0.0,
+  );
+}
+
 class CoreAdvice {
   final String  asset;
   final String  displayName;
@@ -15,8 +37,9 @@ class CoreAdvice {
   final double? stopLoss;
   final double? takeProfit;
   final String? riskReward;
-  final String  assetClass;
-  final DateTime? scannedAt;
+  final String       assetClass;
+  final DateTime?    scannedAt;
+  final List<TopPick> topPicks;
 
   const CoreAdvice({
     required this.asset,
@@ -32,6 +55,7 @@ class CoreAdvice {
     this.takeProfit,
     this.riskReward,
     this.scannedAt,
+    this.topPicks = const [],
   });
 
   factory CoreAdvice.fromJson(Map<String, dynamic> j) => CoreAdvice(
@@ -50,6 +74,9 @@ class CoreAdvice {
     scannedAt:      j['scanned_at'] != null
         ? DateTime.tryParse(j['scanned_at'].toString())
         : null,
+    topPicks:       (j['top_picks'] as List? ?? [])
+        .map((p) => TopPick.fromJson(p as Map<String, dynamic>))
+        .toList(),
   );
 }
 
@@ -62,7 +89,8 @@ class CoreSimResult {
   final int    totalTrades;
   final int    wins;
   final int    losses;
-  final String? message;
+  final String?           message;
+  final List<EquityPoint> equityCurve;
 
   const CoreSimResult({
     required this.capital,
@@ -74,6 +102,7 @@ class CoreSimResult {
     required this.wins,
     required this.losses,
     this.message,
+    this.equityCurve = const [],
   });
 
   factory CoreSimResult.fromJson(Map<String, dynamic> j) => CoreSimResult(
@@ -86,6 +115,9 @@ class CoreSimResult {
     wins:          (j['wins']           as num?)?.toInt()    ?? 0,
     losses:        (j['losses']         as num?)?.toInt()    ?? 0,
     message:       j['message']?.toString(),
+    equityCurve:   (j['equity_curve'] as List? ?? [])
+        .map((p) => EquityPoint.fromJson(p as Map<String, dynamic>))
+        .toList(),
   );
 }
 
@@ -161,8 +193,12 @@ class CoreDecisionsData {
 // ── Providers ─────────────────────────────────────────────────────────────────
 
 final coreAdviceProvider = FutureProvider.autoDispose<CoreAdvice>((ref) async {
-  final resp = await ApiService.dio.get('core/advice');
-  return CoreAdvice.fromJson(resp.data['advice'] as Map<String, dynamic>);
+  final resp    = await ApiService.dio.get('core/advice');
+  final data    = resp.data as Map<String, dynamic>;
+  final advice  = Map<String, dynamic>.from(data['advice'] as Map<String, dynamic>);
+  // Inject top_picks into the advice map so CoreAdvice.fromJson can read it
+  advice['top_picks'] = data['top_picks'] ?? [];
+  return CoreAdvice.fromJson(advice);
 });
 
 final coreSimProvider = FutureProvider.autoDispose.family<CoreSimResult, double>((ref, capital) async {

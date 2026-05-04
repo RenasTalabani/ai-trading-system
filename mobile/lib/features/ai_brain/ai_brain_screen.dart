@@ -69,6 +69,10 @@ class _AIBrainScreenState extends ConsumerState<AIBrainScreen> {
               _DetailsCard(advice: advice),
               const SizedBox(height: 16),
               _ReasonCard(advice: advice),
+              if (advice.topPicks.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _TopPicksCard(picks: advice.topPicks),
+              ],
               const SizedBox(height: 24),
             ]),
           ),
@@ -274,6 +278,91 @@ class _ReasonCard extends StatelessWidget {
             style: const TextStyle(
                 fontSize: 13, color: AppColors.textSecondary, height: 1.6)),
       ]),
+    );
+  }
+}
+
+// ── Top Opportunities card ────────────────────────────────────────────────────
+
+class _TopPicksCard extends StatelessWidget {
+  final List<TopPick> picks;
+  const _TopPicksCard({required this.picks});
+
+  Color _decisionColor(String d) {
+    switch (d) {
+      case 'BUY':  return AppColors.buy;
+      case 'SELL': return AppColors.sell;
+      default:     return AppColors.hold;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(children: [
+            Icon(Icons.leaderboard, size: 14, color: AppColors.primary),
+            SizedBox(width: 6),
+            Text('Top Opportunities',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+          ]),
+          const SizedBox(height: 12),
+          ...picks.map((p) {
+            final color = _decisionColor(p.decision);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(children: [
+                Expanded(
+                  child: Text(p.asset,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(p.decision,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800,
+                          color: color)),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 80,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('${p.confidence}%',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                              color: color)),
+                      const SizedBox(height: 3),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: p.confidence / 100,
+                          minHeight: 4,
+                          backgroundColor: AppColors.border,
+                          valueColor: AlwaysStoppedAnimation(color),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ]),
+            );
+          }),
+        ],
+      ),
     );
   }
 }
