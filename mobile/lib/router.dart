@@ -12,6 +12,7 @@ import 'features/performance/virtual_trades_screen.dart';
 import 'features/advisor/advisor_screen.dart';
 import 'features/simulator/simulator_screen.dart';
 import 'features/reports/reports_screen.dart';
+import 'features/brain/brain_report_screen.dart';
 import 'features/ai_brain/ai_brain_screen.dart';
 import 'features/followed_ai/followed_ai_screen.dart';
 
@@ -35,7 +36,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
-          GoRoute(path: '/',              builder: (_, __) => const DashboardScreen()),
+          GoRoute(path: '/',              builder: (_, __) => const BrainReportScreen()),
+          GoRoute(path: '/dashboard',     builder: (_, __) => const DashboardScreen()),
           GoRoute(path: '/ai-brain',      builder: (_, __) => const AIBrainScreen()),
           GoRoute(path: '/followed-ai',   builder: (_, __) => const FollowedAIScreen()),
           GoRoute(path: '/advisor',       builder: (_, __) => const AdvisorScreen()),
