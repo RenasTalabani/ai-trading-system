@@ -6,6 +6,12 @@ import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'my_trades_sheet.dart';
 
+bool _isWarmingUp(Object e) {
+  final s = e.toString().toLowerCase();
+  return s.contains('503') || s.contains('service unavailable') ||
+      s.contains('warming') || s.contains('starting');
+}
+
 class BrainReportScreen extends ConsumerStatefulWidget {
   const BrainReportScreen({super.key});
 
@@ -133,8 +139,10 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                 child: actionAsync.when(
                   loading: () => const _LoadingCard(height: 240),
-                  error:   (e, _) => _ErrorCard(
-                    message: e.toString(), onRetry: () => ref.invalidate(brainActionProvider)),
+                  error:   (e, _) => _isWarmingUp(e)
+                      ? _WarmingUpCard(onRetry: () => ref.invalidate(brainActionProvider))
+                      : _ErrorCard(message: e.toString(),
+                          onRetry: () => ref.invalidate(brainActionProvider)),
                   data:    (r) => _ActionReportCard(report: r),
                 ),
               ),
@@ -556,11 +564,11 @@ class _FollowButtonState extends ConsumerState<_FollowButton> {
             ? const Center(child: SizedBox(width: 16, height: 16,
                 child: CircularProgressIndicator(
                     color: Colors.white, strokeWidth: 2)))
-            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.add_chart, size: 16, color: Colors.white),
-                const SizedBox(width: 8),
+            : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.add_chart, size: 16, color: Colors.white),
+                SizedBox(width: 8),
                 Text('Follow This Trade',
-                    style: const TextStyle(fontSize: 13,
+                    style: TextStyle(fontSize: 13,
                         fontWeight: FontWeight.w700, color: Colors.white)),
               ]),
       ),
@@ -1036,6 +1044,88 @@ class _PickChip extends StatelessWidget {
 }
 
 // ── Loading / Error helpers ───────────────────────────────────────────────────
+
+class _WarmingUpCard extends StatefulWidget {
+  final VoidCallback onRetry;
+  const _WarmingUpCard({required this.onRetry});
+
+  @override
+  State<_WarmingUpCard> createState() => _WarmingUpCardState();
+}
+
+class _WarmingUpCardState extends State<_WarmingUpCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double>   _pulse;
+  Timer? _retryTimer;
+  int    _countdown = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+    _pulse = Tween<double>(begin: 0.5, end: 1.0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+    _retryTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _countdown--);
+      if (_countdown <= 0) { t.cancel(); widget.onRetry(); }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(28),
+    decoration: BoxDecoration(
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+    ),
+    child: Column(children: [
+      AnimatedBuilder(
+        animation: _pulse,
+        builder: (_, __) => Opacity(
+          opacity: _pulse.value,
+          child: const Icon(Icons.psychology_outlined,
+              size: 52, color: AppColors.primary),
+        ),
+      ),
+      const SizedBox(height: 14),
+      const Text('AI Brain is warming up',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary)),
+      const SizedBox(height: 6),
+      const Text('The AI service is starting up.\nThis usually takes about 30 seconds.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.5)),
+      const SizedBox(height: 18),
+      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const SizedBox(width: 14, height: 14,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: AppColors.primary)),
+        const SizedBox(width: 10),
+        Text('Retrying in ${_countdown}s…',
+            style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+      ]),
+      const SizedBox(height: 12),
+      TextButton(
+        onPressed: () { _retryTimer?.cancel(); widget.onRetry(); },
+        child: const Text('Retry now',
+            style: TextStyle(color: AppColors.primary, fontSize: 12)),
+      ),
+    ]),
+  );
+}
 
 class _LoadingCard extends StatelessWidget {
   final double height;
