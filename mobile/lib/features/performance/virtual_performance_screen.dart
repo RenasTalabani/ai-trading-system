@@ -1,168 +1,114 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
+import 'package:fl_chart/fl_chart.dart';
+import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/models/virtual_portfolio_model.dart';
-import '../../core/providers/virtual_portfolio_provider.dart';
-import '../../core/providers/budget_report_provider.dart';
 
 class VirtualPerformanceScreen extends ConsumerWidget {
   const VirtualPerformanceScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final perfAsync = ref.watch(virtualPerformanceProvider);
+    final balance   = ref.watch(brainBalanceProvider);
+    final perfAsync = ref.watch(brainPerformanceProvider(balance));
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Performance'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => ref.read(virtualPerformanceProvider.notifier).refresh(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Set capital',
-            onPressed: () => _showCapitalDialog(context, ref, perfAsync.valueOrNull),
-          ),
-        ],
-      ),
-      body: perfAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error:   (e, _) => _ErrorView(error: e.toString(), onRetry: () =>
-            ref.read(virtualPerformanceProvider.notifier).refresh()),
-        data:    (perf) => _PerformanceBody(perf: perf),
-      ),
-    );
-  }
+      body: RefreshIndicator(
+        color: AppColors.primary,
+        onRefresh: () async {
+          ref.invalidate(brainPerformanceProvider(balance));
+        },
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverAppBar(
+              floating: true,
+              snap: true,
+              backgroundColor: AppColors.background,
+              title: const Text('Portfolio',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary)),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 20,
+                      color: AppColors.textSecondary),
+                  onPressed: () => ref.invalidate(brainPerformanceProvider(balance)),
+                ),
+              ],
+            ),
 
-  void _showCapitalDialog(BuildContext context, WidgetRef ref,
-      VirtualPerformanceModel? perf) {
-    final balCtrl  = TextEditingController(
-        text: perf?.startingBalance.toStringAsFixed(0) ?? '500');
-    final riskCtrl = TextEditingController(
-        text: perf?.riskPerTradePct.toStringAsFixed(0) ?? '5');
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: _CapitalRow(balance: balance),
+              ),
+            ),
 
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.card,
-        title: const Text('Capital Settings',
-            style: TextStyle(color: AppColors.textPrimary)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          _DialogField(ctrl: balCtrl,  label: 'Starting Balance (USD)'),
-          const SizedBox(height: 12),
-          _DialogField(ctrl: riskCtrl, label: 'Risk per Trade (%)'),
-        ]),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel',
-                style: TextStyle(color: AppColors.textSecondary)),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: AppColors.error),
-            onPressed: () {
-              Navigator.pop(context);
-              _confirmReset(context, ref,
-                  double.tryParse(balCtrl.text)  ?? 500,
-                  double.tryParse(riskCtrl.text) ?? 5);
-            },
-            child: const Text('Reset Portfolio'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            onPressed: () {
-              Navigator.pop(context);
-              ref.read(virtualPerformanceProvider.notifier).setCapital(
-                balance: double.tryParse(balCtrl.text),
-                riskPct: double.tryParse(riskCtrl.text),
-              );
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
+            SliverToBoxAdapter(
+              child: perfAsync.when(
+                loading: () => const SizedBox(
+                  height: 300,
+                  child: Center(child: CircularProgressIndicator(
+                      color: AppColors.primary, strokeWidth: 2)),
+                ),
+                error: (e, _) => Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: _ErrorView(
+                    error: e.toString(),
+                    onRetry: () => ref.invalidate(brainPerformanceProvider(balance)),
+                  ),
+                ),
+                data: (r) => _PerformanceBody(report: r),
+              ),
+            ),
 
-  void _confirmReset(BuildContext context, WidgetRef ref,
-      double balance, double risk) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.card,
-        title: const Text('Reset Portfolio',
-            style: TextStyle(color: AppColors.textPrimary)),
-        content: Text(
-          'This will delete all virtual trades and restart with \$${balance.toStringAsFixed(0)}.',
-          style: const TextStyle(color: AppColors.textSecondary),
+            const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel',
-                style: TextStyle(color: AppColors.textSecondary)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-            onPressed: () {
-              Navigator.pop(context);
-              ref.read(virtualPerformanceProvider.notifier)
-                  .reset(balance: balance, riskPct: risk);
-              ref.read(virtualTradesProvider.notifier).fetch();
-            },
-            child: const Text('Reset'),
-          ),
-        ],
       ),
     );
   }
 }
 
-// ─── Range selector ───────────────────────────────────────────────────────────
+// ── Capital selector ──────────────────────────────────────────────────────────
 
-class _RangeSelector extends ConsumerWidget {
-  const _RangeSelector();
-
-  static const _options = [('7D', '7d'), ('30D', '30d'), ('All Time', 'all')];
+class _CapitalRow extends ConsumerWidget {
+  final double balance;
+  const _CapitalRow({required this.balance});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final current = ref.watch(performanceRangeProvider);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
-        children: _options.map((opt) {
-          final selected = current == opt.$2;
+        children: [100, 500, 1000, 5000].map((v) {
+          final selected = balance == v.toDouble();
           return Expanded(
             child: GestureDetector(
-              onTap: () => ref.read(performanceRangeProvider.notifier).state = opt.$2,
+              onTap: () =>
+                  ref.read(brainBalanceProvider.notifier).state = v.toDouble(),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(vertical: 7),
+                duration: const Duration(milliseconds: 150),
+                margin: const EdgeInsets.only(right: 6),
+                padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(
-                  color: selected ? AppColors.primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(7),
+                  color: selected
+                      ? AppColors.buy.withValues(alpha: 0.2)
+                      : AppColors.card,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: selected ? AppColors.buy : AppColors.border),
                 ),
-                child: Text(opt.$1,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                    color: selected ? Colors.white : AppColors.textSecondary,
-                  ),
-                ),
+                child: Text('\$$v',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.normal,
+                      color:
+                          selected ? AppColors.buy : AppColors.textSecondary,
+                    )),
               ),
             ),
           );
@@ -172,209 +118,348 @@ class _RangeSelector extends ConsumerWidget {
   }
 }
 
-// ─── Main body ────────────────────────────────────────────────────────────────
+// ── Main body ─────────────────────────────────────────────────────────────────
 
 class _PerformanceBody extends StatelessWidget {
-  final VirtualPerformanceModel perf;
-  const _PerformanceBody({required this.perf});
+  final PerformanceReport report;
+  const _PerformanceBody({required this.report});
 
   @override
   Widget build(BuildContext context) {
-    final usd = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
+    final r            = report;
+    final profitPos    = r.netProfit >= 0;
+    final profitColor  = profitPos ? AppColors.buy : AppColors.sell;
 
-    return RefreshIndicator(
-      color: AppColors.primary,
-      onRefresh: () async {
-        final ref = ProviderScope.containerOf(context);
-        await ref.read(virtualPerformanceProvider.notifier).refresh();
-      },
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // ── AI Manager daily / weekly reports ─────────────────────────────
-          const _ReportsSection(),
-          const SizedBox(height: 12),
-
-          // ── Range selector ────────────────────────────────────────────────
-          const _RangeSelector(),
-          const SizedBox(height: 12),
-
-          // ── Header: balance card ──────────────────────────────────────────
-          _BalanceCard(perf: perf, usd: usd),
-          const SizedBox(height: 12),
-
-          // ── Stat chips row 1 ──────────────────────────────────────────────
-          Row(children: [
-            Expanded(child: _StatChip(
-              label: 'Total Trades', value: '${perf.totalTrades}',
-              icon: Icons.swap_horiz)),
-            const SizedBox(width: 8),
-            Expanded(child: _StatChip(
-              label: 'Open', value: '${perf.openTrades}',
-              icon: Icons.timer_outlined,
-              valueColor: AppColors.hold)),
+    if (r.message != null && r.totalTrades == 0) {
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(children: [
+            const Icon(Icons.hourglass_top, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 16),
+            Text(r.message!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 14)),
           ]),
-          const SizedBox(height: 8),
+        ),
+      );
+    }
 
-          // ── Stat chips row 2 ──────────────────────────────────────────────
-          Row(children: [
-            Expanded(child: _StatChip(
-              label: 'Win Rate', value: '${perf.winRate.toStringAsFixed(1)}%',
-              icon: Icons.emoji_events_outlined,
-              valueColor: perf.winRate >= 50 ? AppColors.buy : AppColors.sell)),
-            const SizedBox(width: 8),
-            Expanded(child: _StatChip(
-              label: 'Risk/Trade',
-              value: '${perf.riskPerTradePct.toStringAsFixed(0)}%',
-              icon: Icons.shield_outlined)),
-          ]),
-          const SizedBox(height: 8),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(children: [
 
-          // ── Stat chips row 3 — drawdown + avg duration ────────────────────
-          Row(children: [
-            Expanded(child: _StatChip(
-              label: 'Max Drawdown',
-              value: '-${perf.maxDrawdown.toStringAsFixed(1)}%',
-              icon: Icons.trending_down,
-              valueColor: perf.maxDrawdown > 10 ? AppColors.sell : AppColors.textPrimary)),
-            const SizedBox(width: 8),
-            Expanded(child: _StatChip(
-              label: 'Avg Duration',
-              value: _formatDuration(perf.avgDurationMinutes),
-              icon: Icons.hourglass_bottom_outlined)),
-          ]),
-          const SizedBox(height: 12),
-
-          // ── Win / Loss breakdown ──────────────────────────────────────────
-          _WinLossBar(perf: perf, usd: usd),
-          const SizedBox(height: 12),
-
-          // ── Best & worst trade ────────────────────────────────────────────
-          if (perf.bestTrade != null || perf.worstTrade != null) ...[
-            _BestWorstSection(perf: perf, usd: usd),
-            const SizedBox(height: 12),
-          ],
-
-          // ── Balance chart ─────────────────────────────────────────────────
-          if (perf.balanceHistory.length >= 2) ...[
-            _BalanceChart(history: perf.balanceHistory,
-                starting: perf.startingBalance),
-            const SizedBox(height: 12),
-          ],
-
-          // ── View trades button ────────────────────────────────────────────
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.textPrimary,
-                side: const BorderSide(color: AppColors.border),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-              icon: const Icon(Icons.list_alt),
-              label: const Text('Trade History'),
-              onPressed: () => context.push('/performance/trades'),
+        // ── Hero balance card ─────────────────────────────────────────────
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: profitColor.withValues(alpha: 0.4), width: 1.5),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+              colors: [profitColor.withValues(alpha: 0.07), AppColors.card],
             ),
           ),
-          const SizedBox(height: 24),
+          child: Column(children: [
+            const Text('If you followed every AI decision',
+                style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            const SizedBox(height: 10),
+            Text('\$${r.currentBalance.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900,
+                    color: profitColor)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              decoration: BoxDecoration(
+                color: profitColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${profitPos ? '+' : ''}\$${r.netProfit.toStringAsFixed(2)} '
+                '(${profitPos ? '+' : ''}${r.netProfitPercent.toStringAsFixed(1)}%)',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                    color: profitColor),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text('starting from \$${r.startingBalance.toStringAsFixed(0)}',
+                style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+          ]),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── Period + win rate row ─────────────────────────────────────────
+        Row(children: [
+          Expanded(child: _StatBox(
+            label: '24h Profit',
+            child: _PeriodValue(value: r.last24hProfit),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _StatBox(
+            label: '7d Profit',
+            child: _PeriodValue(value: r.last7dProfit),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _StatBox(
+            label: 'Win Rate',
+            child: Text('${r.winRate}%',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: r.winRate >= 50 ? AppColors.buy : AppColors.sell)),
+          )),
+        ]),
+
+        const SizedBox(height: 8),
+
+        // ── Trades grid ───────────────────────────────────────────────────
+        Row(children: [
+          Expanded(child: _StatBox(
+            label: 'Total Trades',
+            child: Text('${r.totalTrades}',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: AppColors.primary)),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _StatBox(
+            label: 'Won',
+            child: Text('${r.winTrades}',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: AppColors.buy)),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _StatBox(
+            label: 'Lost',
+            child: Text('${r.lossTrades}',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: AppColors.sell)),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _StatBox(
+            label: 'Open',
+            child: Text('${r.openTrades}',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: AppColors.hold)),
+          )),
+        ]),
+
+        const SizedBox(height: 12),
+
+        // ── Equity curve ─────────────────────────────────────────────────
+        if (r.equityCurve.length > 1) ...[
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 12),
+                child: Text('Equity Curve',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+              ),
+              _EquityCurve(
+                curve: r.equityCurve,
+                capital: r.startingBalance,
+                profitColor: profitColor,
+              ),
+            ]),
+          ),
+          const SizedBox(height: 12),
         ],
-      ),
-    );
-  }
 
-  String _formatDuration(int minutes) {
-    if (minutes == 0) return '—';
-    if (minutes < 60)  return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
-}
+        // ── Win / Loss bar ────────────────────────────────────────────────
+        if (r.totalTrades > 0) ...[
+          _WinLossBar(wins: r.winTrades, losses: r.lossTrades),
+          const SizedBox(height: 12),
+        ],
 
-// ─── Best / Worst trade section ───────────────────────────────────────────────
-
-class _BestWorstSection extends StatelessWidget {
-  final VirtualPerformanceModel perf;
-  final NumberFormat usd;
-  const _BestWorstSection({required this.perf, required this.usd});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(children: [
-      if (perf.bestTrade != null)
-        Expanded(child: _TradeHighlight(
-          label: 'Best Trade',
-          snapshot: perf.bestTrade!,
-          color: AppColors.buy,
-          usd: usd,
-        )),
-      if (perf.bestTrade != null && perf.worstTrade != null)
-        const SizedBox(width: 8),
-      if (perf.worstTrade != null)
-        Expanded(child: _TradeHighlight(
-          label: 'Worst Trade',
-          snapshot: perf.worstTrade!,
-          color: AppColors.sell,
-          usd: usd,
-        )),
-    ]);
-  }
-}
-
-class _TradeHighlight extends StatelessWidget {
-  final String label;
-  final TradeSnapshot snapshot;
-  final Color color;
-  final NumberFormat usd;
-  const _TradeHighlight({
-    required this.label, required this.snapshot,
-    required this.color, required this.usd,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final sign = snapshot.pnl >= 0 ? '+' : '';
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withAlpha(20),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(60)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label,
-            style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-        const SizedBox(height: 4),
-        Text(
-          '$sign${usd.format(snapshot.pnl.abs())}',
-          style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          '${snapshot.asset.replaceAll('USDT', '')} ${snapshot.direction}',
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-        ),
+        // ── Decision history ──────────────────────────────────────────────
+        if (r.recentDecisions.isNotEmpty) ...[
+          Container(
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+                child: Text('AI Decision History',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+              ),
+              ...r.recentDecisions.map((d) => _DecisionRow(decision: d)),
+              const SizedBox(height: 4),
+            ]),
+          ),
+          const SizedBox(height: 12),
+        ],
       ]),
     );
   }
 }
 
-// ─── Balance card ─────────────────────────────────────────────────────────────
+// ── Equity curve with touch ───────────────────────────────────────────────────
 
-class _BalanceCard extends StatelessWidget {
-  final VirtualPerformanceModel perf;
-  final NumberFormat usd;
-  const _BalanceCard({required this.perf, required this.usd});
+class _EquityCurve extends StatefulWidget {
+  final List<dynamic> curve;
+  final double capital;
+  final Color  profitColor;
+  const _EquityCurve({
+    required this.curve, required this.capital, required this.profitColor});
+
+  @override
+  State<_EquityCurve> createState() => _EquityCurveState();
+}
+
+class _EquityCurveState extends State<_EquityCurve> {
+  int? _touched;
 
   @override
   Widget build(BuildContext context) {
-    final isProfit = perf.isProfitable;
-    final pnlColor = isProfit ? AppColors.buy : AppColors.sell;
+    final spots = widget.curve.asMap().entries.map((e) {
+      final b = (e.value.balance as double);
+      return FlSpot(e.key.toDouble(), b);
+    }).toList();
+
+    final balances = widget.curve.map((p) => p.balance as double).toList();
+    final minY = balances.reduce((a, b) => a < b ? a : b);
+    final maxY = balances.reduce((a, b) => a > b ? a : b);
+    final pad  = ((maxY - minY) * 0.18) + 1;
+
+    return SizedBox(
+      height: 160,
+      child: LineChart(LineChartData(
+        minY: minY - pad,
+        maxY: maxY + pad,
+        gridData: FlGridData(
+          show: true,
+          drawHorizontalLine: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) =>
+              FlLine(color: AppColors.border.withValues(alpha: 0.5), strokeWidth: 0.5),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 52,
+              getTitlesWidget: (v, _) => Text(
+                '\$${v >= 1000 ? '${(v / 1000).toStringAsFixed(1)}k' : v.toStringAsFixed(0)}',
+                style: const TextStyle(fontSize: 9, color: AppColors.textMuted),
+              ),
+            ),
+          ),
+          rightTitles:  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        lineTouchData: LineTouchData(
+          touchCallback: (event, response) {
+            if (response?.lineBarSpots != null) {
+              setState(() =>
+                  _touched = response!.lineBarSpots!.first.spotIndex);
+            } else if (event is FlPointerExitEvent ||
+                       event is FlTapUpEvent ||
+                       event is FlLongPressEnd) {
+              setState(() => _touched = null);
+            }
+          },
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (_) => AppColors.card,
+            tooltipBorder: const BorderSide(color: AppColors.border),
+            getTooltipItems: (spots) => spots.map((s) {
+              final b = s.y;
+              final diff = b - widget.capital;
+              final pct  = (diff / widget.capital * 100);
+              return LineTooltipItem(
+                '\$${b.toStringAsFixed(2)}\n',
+                TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: widget.profitColor),
+                children: [
+                  TextSpan(
+                    text: '${diff >= 0 ? '+' : ''}\$${diff.toStringAsFixed(2)} '
+                          '(${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(1)}%)',
+                    style: const TextStyle(fontSize: 10,
+                        color: AppColors.textSecondary),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+        lineBarsData: [
+          // Capital baseline
+          LineChartBarData(
+            spots: [
+              FlSpot(0, widget.capital),
+              FlSpot((widget.curve.length - 1).toDouble(), widget.capital),
+            ],
+            isCurved: false,
+            color: AppColors.border,
+            barWidth: 1,
+            dotData: const FlDotData(show: false),
+            dashArray: [4, 4],
+          ),
+          // Equity line
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: widget.profitColor,
+            barWidth: 2.5,
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (spot, _, __, index) => FlDotCirclePainter(
+                radius: index == _touched ? 5 : 0,
+                color: widget.profitColor,
+                strokeColor: AppColors.card,
+                strokeWidth: index == _touched ? 2 : 0,
+              ),
+            ),
+            belowBarData: BarAreaData(
+              show: true,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [
+                  widget.profitColor.withValues(alpha: 0.25),
+                  widget.profitColor.withValues(alpha: 0.0),
+                ],
+              ),
+            ),
+          ),
+        ],
+      )),
+    );
+  }
+}
+
+// ── Win/Loss bar ──────────────────────────────────────────────────────────────
+
+class _WinLossBar extends StatelessWidget {
+  final int wins;
+  final int losses;
+  const _WinLossBar({required this.wins, required this.losses});
+
+  @override
+  Widget build(BuildContext context) {
+    final total   = wins + losses;
+    final winFrac = total > 0 ? wins / total : 0.0;
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(16),
@@ -382,370 +467,164 @@ class _BalanceCard extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text('Virtual Balance',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-          if (perf.peakBalance > perf.startingBalance)
-            Text('Peak: ${usd.format(perf.peakBalance)}',
-                style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+          Text('$wins Wins',
+              style: const TextStyle(fontSize: 12, color: AppColors.buy,
+                  fontWeight: FontWeight.w600)),
+          Text('$losses Losses',
+              style: const TextStyle(fontSize: 12, color: AppColors.sell,
+                  fontWeight: FontWeight.w600)),
         ]),
-        const SizedBox(height: 6),
-        Text(usd.format(perf.currentBalance),
-            style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 32,
-                fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Row(children: [
-          Icon(isProfit ? Icons.arrow_upward : Icons.arrow_downward,
-              size: 16, color: pnlColor),
-          const SizedBox(width: 4),
-          Text(
-            '${isProfit ? '+' : ''}${usd.format(perf.netProfit)} '
-            '(${perf.netProfitPct.toStringAsFixed(2)}%)',
-            style: TextStyle(color: pnlColor, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(width: 8),
-          const Text('vs starting',
-              style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
-        ]),
-      ]),
-    );
-  }
-}
-
-// ─── Stat chip ────────────────────────────────────────────────────────────────
-
-class _StatChip extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color? valueColor;
-  const _StatChip(
-      {required this.label, required this.value, required this.icon,
-        this.valueColor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(children: [
-        Icon(icon, size: 18, color: AppColors.textMuted),
-        const SizedBox(width: 8),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label,
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-          Text(value,
-              style: TextStyle(
-                  color: valueColor ?? AppColors.textPrimary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16)),
-        ]),
-      ]),
-    );
-  }
-}
-
-// ─── Win / Loss bar ───────────────────────────────────────────────────────────
-
-class _WinLossBar extends StatelessWidget {
-  final VirtualPerformanceModel perf;
-  final NumberFormat usd;
-  const _WinLossBar({required this.perf, required this.usd});
-
-  @override
-  Widget build(BuildContext context) {
-    final total = perf.winCount + perf.lossCount;
-    final winFrac = total > 0 ? perf.winCount / total : 0.0;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          _PnlLabel(label: 'Wins',    value: usd.format(perf.totalProfit),
-              count: perf.winCount,   color: AppColors.buy),
-          _PnlLabel(label: 'Losses',  value: '-${usd.format(perf.totalLoss)}',
-              count: perf.lossCount,  color: AppColors.sell,
-              align: CrossAxisAlignment.end),
-        ]),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Row(children: [
             Expanded(
-              flex: (winFrac * 100).round().clamp(0, 100),
+              flex: (winFrac * 100).round().clamp(1, 99),
               child: Container(height: 8, color: AppColors.buy),
             ),
             Expanded(
-              flex: 100 - (winFrac * 100).round().clamp(0, 100),
+              flex: 100 - (winFrac * 100).round().clamp(1, 99),
               child: Container(height: 8, color: AppColors.sell),
             ),
           ]),
         ),
+        const SizedBox(height: 6),
+        Center(
+          child: Text('${(winFrac * 100).toStringAsFixed(1)}% win rate',
+              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+        ),
       ]),
     );
   }
 }
 
-class _PnlLabel extends StatelessWidget {
-  final String label, value;
-  final int count;
-  final Color color;
-  final CrossAxisAlignment align;
-  const _PnlLabel(
-      {required this.label, required this.value, required this.count,
-        required this.color, this.align = CrossAxisAlignment.start});
+// ── Decision row ──────────────────────────────────────────────────────────────
+
+class _DecisionRow extends StatelessWidget {
+  final RecentDecision decision;
+  const _DecisionRow({required this.decision});
+
+  Color get _resultColor {
+    switch (decision.result) {
+      case 'WIN':  return AppColors.buy;
+      case 'LOSS': return AppColors.sell;
+      default:     return AppColors.hold;
+    }
+  }
+
+  Color get _actionColor {
+    switch (decision.action) {
+      case 'BUY':  return AppColors.buy;
+      case 'SELL': return AppColors.sell;
+      default:     return AppColors.hold;
+    }
+  }
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: align,
-    children: [
-      Text('$count $label',
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-      Text(value,
-          style: TextStyle(color: color,
-              fontWeight: FontWeight.bold, fontSize: 15)),
-    ],
+  Widget build(BuildContext context) {
+    final hasPct = decision.profitPct != null && decision.result != 'OPEN';
+    final pct    = decision.profitPct ?? 0.0;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(children: [
+        // Result badge
+        Container(
+          width: 46,
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          decoration: BoxDecoration(
+            color: _resultColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(decision.result,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                  color: _resultColor)),
+        ),
+        const SizedBox(width: 12),
+        // Asset + action
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text(decision.displayName,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary)),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _actionColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(decision.action,
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                      color: _actionColor)),
+            ),
+          ]),
+          const SizedBox(height: 2),
+          Text('${decision.confidence}% confidence',
+              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+        ])),
+        // P&L / LIVE badge
+        if (hasPct)
+          Text('${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(1)}%',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                  color: pct >= 0 ? AppColors.buy : AppColors.sell))
+        else if (decision.result == 'OPEN')
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.hold.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text('LIVE',
+                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                    color: AppColors.hold)),
+          ),
+      ]),
+    );
+  }
+}
+
+// ── Helper widgets ────────────────────────────────────────────────────────────
+
+class _StatBox extends StatelessWidget {
+  final String label;
+  final Widget child;
+  const _StatBox({required this.label, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+    decoration: BoxDecoration(
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(children: [
+      child,
+      const SizedBox(height: 4),
+      Text(label, style: const TextStyle(fontSize: 9, color: AppColors.textMuted)),
+    ]),
   );
 }
 
-// ─── Balance chart (custom paint) ─────────────────────────────────────────────
-
-class _BalanceChart extends StatelessWidget {
-  final List<BalancePoint> history;
-  final double starting;
-  const _BalanceChart({required this.history, required this.starting});
+class _PeriodValue extends StatelessWidget {
+  final double value;
+  const _PeriodValue({required this.value});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Balance History',
-            style: TextStyle(color: AppColors.textSecondary,
-                fontSize: 13, fontWeight: FontWeight.w500)),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 120,
-          child: CustomPaint(
-            size: Size.infinite,
-            painter: _LinePainter(history: history, starting: starting),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _LinePainter extends CustomPainter {
-  final List<BalancePoint> history;
-  final double starting;
-  const _LinePainter({required this.history, required this.starting});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (history.length < 2) return;
-
-    final values = history.map((p) => p.balance).toList();
-    final minV   = values.reduce(math.min);
-    final maxV   = values.reduce(math.max);
-    final range  = (maxV - minV).abs();
-    final pad    = range == 0 ? 1.0 : range * 0.1;
-
-    double toY(double v) =>
-        size.height - ((v - (minV - pad)) / (range + 2 * pad)) * size.height;
-    double toX(int i) => (i / (history.length - 1)) * size.width;
-
-    final baseY = toY(starting);
-    canvas.drawLine(
-      Offset(0, baseY), Offset(size.width, baseY),
-      Paint()
-        ..color = AppColors.border
-        ..strokeWidth = 1
-        ..style = PaintingStyle.stroke,
-    );
-
-    final path = Path();
-    path.moveTo(toX(0), toY(values[0]));
-    for (int i = 1; i < values.length; i++) {
-      path.lineTo(toX(i), toY(values[i]));
-    }
-    final fillPath = Path.from(path)
-      ..lineTo(toX(values.length - 1), size.height)
-      ..lineTo(0, size.height)
-      ..close();
-
-    final isProfit = values.last >= starting;
-    final lineColor = isProfit ? AppColors.buy : AppColors.sell;
-
-    canvas.drawPath(fillPath, Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter, end: Alignment.bottomCenter,
-        colors: [lineColor.withAlpha(60), lineColor.withAlpha(5)],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)));
-
-    canvas.drawPath(path, Paint()
-      ..color = lineColor
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round);
-
-    final lastX = toX(values.length - 1);
-    final lastY = toY(values.last);
-    canvas.drawCircle(
-        Offset(lastX, lastY), 4, Paint()..color = lineColor);
-    canvas.drawCircle(
-        Offset(lastX, lastY), 4,
-        Paint()..color = AppColors.card..style = PaintingStyle.stroke..strokeWidth = 2);
-  }
-
-  @override
-  bool shouldRepaint(_LinePainter old) => old.history != history;
-}
-
-// ─── AI Manager Reports section ───────────────────────────────────────────────
-
-class _ReportsSection extends ConsumerWidget {
-  const _ReportsSection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(budgetReportProvider);
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Text('AI Manager Reports',
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary)),
-        const Spacer(),
-        GestureDetector(
-          onTap: () => ref.read(budgetReportProvider.notifier).loadAll(),
-          child: const Icon(Icons.refresh, size: 16, color: AppColors.textSecondary),
-        ),
-      ]),
-      const SizedBox(height: 8),
-      Row(children: [
-        Expanded(child: _ReportCard(
-          label: 'Today',
-          report: state.daily,
-          loading: state.loadingDaily,
-        )),
-        const SizedBox(width: 8),
-        Expanded(child: _ReportCard(
-          label: 'This Week',
-          report: state.weekly,
-          loading: state.loadingWeekly,
-        )),
-      ]),
-    ]);
-  }
-}
-
-class _ReportCard extends StatelessWidget {
-  final String       label;
-  final BudgetReport? report;
-  final bool         loading;
-  const _ReportCard({required this.label, required this.report, required this.loading});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: loading
-          ? const SizedBox(
-              height: 60,
-              child: Center(child: CircularProgressIndicator(
-                  color: AppColors.primary, strokeWidth: 2)))
-          : report == null || report!.trades.total == 0
-              ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(label,
-                      style: const TextStyle(
-                          fontSize: 11, color: AppColors.textMuted)),
-                  const SizedBox(height: 6),
-                  const Text('No trades yet',
-                      style: TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary)),
-                ])
-              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Text(label,
-                        style: const TextStyle(
-                            fontSize: 11, color: AppColors.textMuted)),
-                    const Spacer(),
-                    _WrBadge(winRate: report!.trades.winRate),
-                  ]),
-                  const SizedBox(height: 6),
-                  _PnlValue(pnl: report!.pnl.net),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${report!.trades.wins}W / ${report!.trades.losses}L  ·  ${report!.trades.total} trades',
-                    style: const TextStyle(
-                        fontSize: 10, color: AppColors.textSecondary),
-                  ),
-                ]),
-    );
-  }
-}
-
-class _WrBadge extends StatelessWidget {
-  final double winRate;
-  const _WrBadge({required this.winRate});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = winRate >= 50 ? AppColors.buy : AppColors.sell;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text('${winRate.toStringAsFixed(0)}% WR',
-          style: TextStyle(
-              fontSize: 9, fontWeight: FontWeight.w700, color: color)),
-    );
-  }
-}
-
-class _PnlValue extends StatelessWidget {
-  final double pnl;
-  const _PnlValue({required this.pnl});
-
-  @override
-  Widget build(BuildContext context) {
-    final positive = pnl >= 0;
-    final color = positive ? AppColors.buy : AppColors.sell;
+    final pos   = value >= 0;
+    final color = pos ? AppColors.buy : AppColors.sell;
     return Text(
-      '${positive ? '+' : ''}\$${pnl.abs().toStringAsFixed(2)}',
-      style: TextStyle(
-          fontSize: 15, fontWeight: FontWeight.w800, color: color),
+      '${pos ? '+' : ''}\$${value.abs().toStringAsFixed(2)}',
+      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color),
     );
   }
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 class _ErrorView extends StatelessWidget {
   final String error;
@@ -758,31 +637,10 @@ class _ErrorView extends StatelessWidget {
       const Icon(Icons.cloud_off, color: AppColors.textMuted, size: 48),
       const SizedBox(height: 12),
       Text(error,
-          style: const TextStyle(color: AppColors.textSecondary),
-          textAlign: TextAlign.center),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
       const SizedBox(height: 16),
       ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
     ]),
-  );
-}
-
-class _DialogField extends StatelessWidget {
-  final TextEditingController ctrl;
-  final String label;
-  const _DialogField({required this.ctrl, required this.label});
-
-  @override
-  Widget build(BuildContext context) => TextField(
-    controller: ctrl,
-    keyboardType: TextInputType.number,
-    style: const TextStyle(color: AppColors.textPrimary),
-    decoration: InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: AppColors.textSecondary),
-      enabledBorder: const OutlineInputBorder(
-          borderSide: BorderSide(color: AppColors.border)),
-      focusedBorder: const OutlineInputBorder(
-          borderSide: BorderSide(color: AppColors.primary)),
-    ),
   );
 }
