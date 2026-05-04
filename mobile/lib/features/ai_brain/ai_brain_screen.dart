@@ -1,13 +1,36 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/core_provider.dart';
 import '../../core/theme/app_theme.dart';
 
-class AIBrainScreen extends ConsumerWidget {
+class AIBrainScreen extends ConsumerStatefulWidget {
   const AIBrainScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AIBrainScreen> createState() => _AIBrainScreenState();
+}
+
+class _AIBrainScreenState extends ConsumerState<AIBrainScreen> {
+  Timer? _autoRefresh;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-refresh every 5 minutes to stay in sync with the 15-min decision cycle
+    _autoRefresh = Timer.periodic(const Duration(minutes: 5), (_) {
+      if (mounted) ref.invalidate(coreAdviceProvider);
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRefresh?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final async = ref.watch(coreAdviceProvider);
 
     return Scaffold(

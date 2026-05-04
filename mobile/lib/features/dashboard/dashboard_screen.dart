@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/signals_provider.dart';
 import '../../core/providers/prices_provider.dart';
@@ -11,6 +12,7 @@ import '../../core/providers/budget_provider.dart';
 import '../../core/providers/ai_brain_live_provider.dart';
 import '../../core/providers/tracker_provider.dart';
 import '../../core/providers/macro_provider.dart';
+import '../../core/providers/core_provider.dart';
 import '../../core/models/pnl_model.dart';
 import '../../core/services/storage_service.dart';
 import '../../core/services/websocket_service.dart';
@@ -81,6 +83,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: _SummaryRow(signals: sigState.signals),
+              ),
+            ),
+
+            // AI Core Brain — one decision card
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _CoreDecisionCard(),
               ),
             ),
 
@@ -332,6 +342,88 @@ class _PnLChip extends StatelessWidget {
       child: Text(label,
           style: TextStyle(
               fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+    );
+  }
+}
+
+// ── AI Core Brain — compact decision card ─────────────────────────────────────
+
+class _CoreDecisionCard extends ConsumerWidget {
+  const _CoreDecisionCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(coreAdviceProvider);
+
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error:   (_, __) => const SizedBox.shrink(),
+      data: (advice) {
+        final color = advice.decision == 'BUY'
+            ? AppColors.buy
+            : advice.decision == 'SELL'
+                ? AppColors.sell
+                : AppColors.hold;
+
+        return GestureDetector(
+          onTap: () => context.go('/ai-brain'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
+            ),
+            child: Row(children: [
+              // Decision badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(advice.decision,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w900,
+                        color: Colors.white, letterSpacing: 1)),
+              ),
+
+              const SizedBox(width: 12),
+
+              // Asset + reason
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Icon(Icons.bolt, size: 13, color: AppColors.primary),
+                    const SizedBox(width: 4),
+                    Text('AI Brain  ·  ${advice.displayName}',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary)),
+                    const Spacer(),
+                    Text('${advice.confidence}%',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w700,
+                            color: color)),
+                  ]),
+                  if (advice.reason.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(advice.reason,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppColors.textSecondary)),
+                  ],
+                ],
+              )),
+
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right, size: 16, color: AppColors.textMuted),
+            ]),
+          ),
+        );
+      },
     );
   }
 }
