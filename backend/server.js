@@ -18,6 +18,7 @@ const { startAIWorkerJob }           = require('./src/jobs/aiWorkerJob');
 const { startHourlyReportJob }       = require('./src/jobs/hourlyReportJob');
 const { startTrackerEvalJob }        = require('./src/jobs/trackerEvalJob');
 const { startKeepAliveJob }          = require('./src/jobs/keepAliveJob');
+const { startPriceAlertJob }         = require('./src/jobs/priceAlertJob');
 const { startDecisionTrackingJob }   = require('./src/jobs/decisionTrackingJob');
 const { startAIDecisionJob }         = require('./src/jobs/aiDecisionJob');
 const logger = require('./src/config/logger');
@@ -88,6 +89,9 @@ async function bootstrap() {
 
   // Keep-alive: ping both services every 5 min to prevent Railway sleep
   startKeepAliveJob();
+
+  // Price Alerts: check active alerts every 2 min against live prices
+  startPriceAlertJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);

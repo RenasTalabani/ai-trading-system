@@ -29,6 +29,7 @@ const reportsRoutes    = require('./routes/reports');
 const trackerRoutes    = require('./routes/tracker');
 const macroRoutes      = require('./routes/macro');
 const coreRoutes       = require('./routes/core');
+const priceAlertRoutes = require('./routes/priceAlerts');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -96,6 +97,7 @@ app.use(`${API}/reports`,       reportsRoutes);
 app.use(`${API}/tracker`,       trackerRoutes);
 app.use(`${API}/macro`,         macroRoutes);
 app.use(`${API}/core`,          coreRoutes);
+app.use(`${API}/price-alerts`,  priceAlertRoutes);
 
 // 404 + error handler
 app.use(notFound);
