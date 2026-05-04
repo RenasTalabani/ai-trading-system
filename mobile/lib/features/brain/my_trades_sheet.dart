@@ -61,6 +61,11 @@ class _MyTradesSheet extends ConsumerWidget {
                       color: AppColors.primary)),
           ]),
         ),
+        const SizedBox(height: 10),
+
+        // Stats row
+        if (state.follows.isNotEmpty) _StatsRow(follows: state.follows),
+
         const SizedBox(height: 4),
 
         // Content
@@ -320,4 +325,70 @@ class _SheetLabel extends StatelessWidget {
   Widget build(BuildContext context) => Text(text,
       style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
           color: AppColors.textMuted, letterSpacing: 1.2));
+}
+
+// ── Stats row ─────────────────────────────────────────────────────────────────
+
+class _StatsRow extends StatelessWidget {
+  final List<UserFollow> follows;
+  const _StatsRow({required this.follows});
+
+  @override
+  Widget build(BuildContext context) {
+    final closed   = follows.where((f) => f.outcome == 'WIN' || f.outcome == 'LOSS').toList();
+    final wins     = closed.where((f) => f.outcome == 'WIN').length;
+    final winRate  = closed.isEmpty ? 0 : (wins * 100 ~/ closed.length);
+    final withPct  = closed.where((f) => f.profitPct != null).toList();
+    final avgPnl   = withPct.isEmpty
+        ? null
+        : withPct.map((f) => f.profitPct!).reduce((a, b) => a + b) / withPct.length;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(children: [
+        _StatChip(
+          label: 'Win Rate',
+          value: '$winRate%',
+          color: winRate >= 50 ? AppColors.buy : AppColors.sell,
+        ),
+        const SizedBox(width: 8),
+        _StatChip(
+          label: 'Closed',
+          value: '${closed.length}',
+          color: AppColors.primary,
+        ),
+        if (avgPnl != null) ...[
+          const SizedBox(width: 8),
+          _StatChip(
+            label: 'Avg P&L',
+            value: '${avgPnl >= 0 ? '+' : ''}${avgPnl.toStringAsFixed(1)}%',
+            color: avgPnl >= 0 ? AppColors.buy : AppColors.sell,
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color  color;
+  const _StatChip({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: color.withValues(alpha: 0.25)),
+    ),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Text(value,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+      Text(label,
+          style: const TextStyle(fontSize: 9, color: AppColors.textMuted)),
+    ]),
+  );
 }
