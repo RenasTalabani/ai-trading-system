@@ -1,6 +1,9 @@
+const axios      = require('axios');
 const { getCache: getGlobalCache } = require('../jobs/globalScanJob');
 const AIDecision = require('../models/AIDecision');
 const logger     = require('../config/logger');
+
+const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 // ── GET /api/v1/brain/report/action ──────────────────────────────────────────
 // Report 1: "What To Do" — best asset + full trade plan from all sources
@@ -14,9 +17,15 @@ exports.actionReport = async (req, res) => {
       });
     }
 
-    const best   = cached.result.best;
-    const top    = cached.result.top_opportunities || [];
-    const macro  = cached.result.macro || null;
+    const best = cached.result.best;
+    const top  = cached.result.top_opportunities || [];
+
+    // Fetch macro data from AI service (not in global scan cache)
+    let macro = null;
+    try {
+      const macroResp = await axios.get(`${AI_URL}/api/macro/snapshot`, { timeout: 5_000 });
+      if (macroResp.data?.success !== false) macro = macroResp.data;
+    } catch (_) {}
 
     // Pull recent accuracy for confidence boost context
     const [totalWins, totalLosses] = await Promise.all([
