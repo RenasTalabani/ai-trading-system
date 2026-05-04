@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
+import 'my_trades_sheet.dart';
 
 class BrainReportScreen extends ConsumerStatefulWidget {
   const BrainReportScreen({super.key});
@@ -68,6 +69,21 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                         color: AppColors.textPrimary)),
                 const Spacer(),
+                Consumer(builder: (context, ref, _) {
+                  final openCount = ref.watch(followsProvider
+                      .select((s) => s.follows.where((f) => f.isOpen).length));
+                  return IconButton(
+                    icon: openCount > 0
+                        ? Badge(
+                            label: Text('$openCount'),
+                            child: const Icon(Icons.add_chart_outlined, size: 20,
+                                color: AppColors.textSecondary))
+                        : const Icon(Icons.add_chart_outlined, size: 20,
+                            color: AppColors.textSecondary),
+                    onPressed: () => showMyTradesSheet(context),
+                    tooltip: 'My Trades',
+                  );
+                }),
                 IconButton(
                   icon: const Icon(Icons.refresh, size: 20,
                       color: AppColors.textSecondary),
@@ -179,15 +195,15 @@ class _SectionHeader extends StatelessWidget {
 
 // ── Report 1: Action card ─────────────────────────────────────────────────────
 
-class _ActionReportCard extends StatefulWidget {
+class _ActionReportCard extends ConsumerStatefulWidget {
   final ActionReport report;
   const _ActionReportCard({required this.report});
 
   @override
-  State<_ActionReportCard> createState() => _ActionReportCardState();
+  ConsumerState<_ActionReportCard> createState() => _ActionReportCardState();
 }
 
-class _ActionReportCardState extends State<_ActionReportCard> {
+class _ActionReportCardState extends ConsumerState<_ActionReportCard> {
   bool _showFullReason = false;
 
   Color get _actionColor {
@@ -399,15 +415,23 @@ class _ActionReportCardState extends State<_ActionReportCard> {
           ),
         ],
 
+        // ── Follow This Trade button ─────────────────────────────────────
+        const Divider(color: AppColors.border, height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+          child: _FollowButton(report: widget.report),
+        ),
+
         if (r.generatedAt != null) ...[
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
             child: Text(
               'Updated ${_timeAgo(r.generatedAt!)}',
               style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
             ),
           ),
-        ],
+        ] else
+          const SizedBox(height: 16),
       ]),
     );
   }
@@ -427,6 +451,100 @@ class _ActionReportCardState extends State<_ActionReportCard> {
   }
 }
 
+// ── Follow This Trade button ──────────────────────────────────────────────────
+
+class _FollowButton extends ConsumerStatefulWidget {
+  final ActionReport report;
+  const _FollowButton({required this.report});
+
+  @override
+  ConsumerState<_FollowButton> createState() => _FollowButtonState();
+}
+
+class _FollowButtonState extends ConsumerState<_FollowButton> {
+  bool _loading = false;
+
+  Future<void> _onTap() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    final r = widget.report;
+    final isNew = await ref.read(followsProvider.notifier).followTrade({
+      'asset':       r.bestAsset,
+      'displayName': r.displayName,
+      'action':      r.action,
+      'entryPrice':  r.entryPrice,
+      'stopLoss':    r.stopLoss,
+      'takeProfit':  r.takeProfit,
+      'confidence':  r.confidence,
+      'timeframe':   r.timeframe,
+    });
+    if (mounted) {
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(isNew
+            ? 'Following ${r.displayName} ${r.action} — marked as open trade'
+            : 'Already following ${r.displayName}'),
+        backgroundColor: isNew ? AppColors.buy : AppColors.hold,
+        duration: const Duration(seconds: 2),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final following = ref.watch(followsProvider
+        .select((s) => s.follows.any(
+            (f) => f.asset == widget.report.bestAsset && f.isOpen)));
+    final c = widget.report.action == 'BUY'
+        ? AppColors.buy
+        : widget.report.action == 'SELL'
+            ? AppColors.sell
+            : AppColors.hold;
+
+    if (following) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: c.withValues(alpha: 0.3)),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.check_circle, size: 16, color: c),
+          const SizedBox(width: 8),
+          Text('Following ${widget.report.displayName}',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                  color: c)),
+        ]),
+      );
+    }
+
+    return GestureDetector(
+      onTap: _onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: c,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: _loading
+            ? const Center(child: SizedBox(width: 16, height: 16,
+                child: CircularProgressIndicator(
+                    color: Colors.white, strokeWidth: 2)))
+            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.add_chart, size: 16, color: Colors.white),
+                const SizedBox(width: 8),
+                Text('Follow This Trade',
+                    style: const TextStyle(fontSize: 13,
+                        fontWeight: FontWeight.w700, color: Colors.white)),
+              ]),
+      ),
+    );
+  }
+}
+
 // ── Report 2: Capital selector row ───────────────────────────────────────────
 
 class _CapitalRow extends ConsumerWidget {
@@ -440,7 +558,7 @@ class _CapitalRow extends ConsumerWidget {
         final selected = balance == v.toDouble();
         return Expanded(
           child: GestureDetector(
-            onTap: () => ref.read(brainBalanceProvider.notifier).state = v.toDouble(),
+            onTap: () => ref.read(brainBalanceProvider.notifier).set(v.toDouble()),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               margin: const EdgeInsets.only(right: 6),

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/api_service.dart';
 import 'core_provider.dart' show EquityPoint;
 
@@ -168,7 +169,28 @@ final brainActionProvider = FutureProvider.autoDispose<ActionReport>((ref) async
   return ActionReport.fromJson(resp.data as Map<String, dynamic>);
 });
 
-final brainBalanceProvider = StateProvider<double>((ref) => 500.0);
+class _CapitalNotifier extends StateNotifier<double> {
+  static const _key = 'brain_capital';
+  static const _storage = FlutterSecureStorage();
+
+  _CapitalNotifier() : super(500.0) { _load(); }
+
+  Future<void> _load() async {
+    final saved = await _storage.read(key: _key);
+    if (saved != null) {
+      final v = double.tryParse(saved);
+      if (v != null) state = v;
+    }
+  }
+
+  Future<void> set(double value) async {
+    state = value;
+    await _storage.write(key: _key, value: '$value');
+  }
+}
+
+final brainBalanceProvider =
+    StateNotifierProvider<_CapitalNotifier, double>((_) => _CapitalNotifier());
 
 final brainPerformanceProvider =
     FutureProvider.autoDispose.family<PerformanceReport, double>((ref, balance) async {
@@ -176,3 +198,103 @@ final brainPerformanceProvider =
       queryParameters: {'balance': balance});
   return PerformanceReport.fromJson(resp.data as Map<String, dynamic>);
 });
+
+// ── Follow This Trade ─────────────────────────────────────────────────────────
+
+class UserFollow {
+  final String  id;
+  final String  asset;
+  final String  displayName;
+  final String  action;
+  final String  outcome;
+  final int     confidence;
+  final double? entryPrice;
+  final double? exitPrice;
+  final double? profitPct;
+  final DateTime createdAt;
+
+  const UserFollow({
+    required this.id, required this.asset, required this.displayName,
+    required this.action, required this.outcome, required this.confidence,
+    required this.createdAt,
+    this.entryPrice, this.exitPrice, this.profitPct,
+  });
+
+  factory UserFollow.fromJson(Map<String, dynamic> j) => UserFollow(
+    id:          j['_id']?.toString()          ?? '',
+    asset:       j['asset']?.toString()        ?? '',
+    displayName: j['displayName']?.toString()  ?? j['asset']?.toString() ?? '',
+    action:      j['action']?.toString()       ?? 'BUY',
+    outcome:     j['outcome']?.toString()      ?? 'OPEN',
+    confidence:  (j['confidence'] as num?)?.toInt() ?? 0,
+    entryPrice:  (j['entryPrice'] as num?)?.toDouble(),
+    exitPrice:   (j['exitPrice']  as num?)?.toDouble(),
+    profitPct:   (j['profitPct']  as num?)?.toDouble(),
+    createdAt:   DateTime.tryParse(j['createdAt']?.toString() ?? '') ?? DateTime.now(),
+  );
+
+  bool get isOpen => outcome == 'OPEN';
+}
+
+class FollowsState {
+  final List<UserFollow> follows;
+  final bool loading;
+  const FollowsState({this.follows = const [], this.loading = false});
+  FollowsState copyWith({List<UserFollow>? follows, bool? loading}) =>
+      FollowsState(follows: follows ?? this.follows, loading: loading ?? this.loading);
+}
+
+class FollowsNotifier extends StateNotifier<FollowsState> {
+  FollowsNotifier() : super(const FollowsState()) { fetch(); }
+
+  Future<void> fetch() async {
+    state = state.copyWith(loading: true);
+    try {
+      final resp = await ApiService.dio.get('brain/follows');
+      final list = (resp.data['follows'] as List? ?? [])
+          .map((j) => UserFollow.fromJson(j as Map<String, dynamic>))
+          .toList();
+      state = FollowsState(follows: list);
+    } catch (_) {
+      state = state.copyWith(loading: false);
+    }
+  }
+
+  Future<bool> followTrade(Map<String, dynamic> data) async {
+    try {
+      final resp = await ApiService.dio.post('brain/follows', data: data);
+      await fetch();
+      return resp.data['alreadyFollowing'] != true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> closeTrade(String id,
+      {required String outcome, double? exitPrice, double? profitPct}) async {
+    try {
+      await ApiService.dio.patch('brain/follows/$id/close', data: {
+        'outcome':   outcome,
+        if (exitPrice  != null) 'exitPrice':  exitPrice,
+        if (profitPct  != null) 'profitPct':  profitPct,
+      });
+      await fetch();
+    } catch (_) {}
+  }
+
+  Future<void> removeTrade(String id) async {
+    state = state.copyWith(
+        follows: state.follows.where((f) => f.id != id).toList());
+    try {
+      await ApiService.dio.delete('brain/follows/$id');
+    } catch (_) {
+      await fetch();
+    }
+  }
+
+  bool isFollowing(String asset) =>
+      state.follows.any((f) => f.asset == asset && f.isOpen);
+}
+
+final followsProvider =
+    StateNotifierProvider<FollowsNotifier, FollowsState>((_) => FollowsNotifier());

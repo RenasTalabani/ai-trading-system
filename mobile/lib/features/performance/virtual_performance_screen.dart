@@ -87,7 +87,7 @@ class _CapitalRow extends ConsumerWidget {
           return Expanded(
             child: GestureDetector(
               onTap: () =>
-                  ref.read(brainBalanceProvider.notifier).state = v.toDouble(),
+                  ref.read(brainBalanceProvider.notifier).set(v.toDouble()),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 margin: const EdgeInsets.only(right: 6),
