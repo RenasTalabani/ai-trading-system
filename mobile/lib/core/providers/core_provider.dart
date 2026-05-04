@@ -89,6 +89,75 @@ class CoreSimResult {
   );
 }
 
+// ── Decision history model ────────────────────────────────────────────────────
+
+class DecisionSummary {
+  final int total;
+  final int wins;
+  final int losses;
+  final int open;
+  final int winRate;
+  const DecisionSummary({
+    required this.total, required this.wins,
+    required this.losses, required this.open, required this.winRate,
+  });
+  factory DecisionSummary.fromJson(Map<String, dynamic> j) => DecisionSummary(
+    total:   (j['total']    as num?)?.toInt() ?? 0,
+    wins:    (j['wins']     as num?)?.toInt() ?? 0,
+    losses:  (j['losses']   as num?)?.toInt() ?? 0,
+    open:    (j['open']     as num?)?.toInt() ?? 0,
+    winRate: (j['win_rate'] as num?)?.toInt() ?? 0,
+  );
+}
+
+class DecisionRecord {
+  final String  id;
+  final String  asset;
+  final String  displayName;
+  final String  decision;
+  final int     confidence;
+  final String  timeframe;
+  final double? entryPrice;
+  final double? exitPrice;
+  final double? profitPct;
+  final double? profit;
+  final String  result;       // WIN | LOSS | OPEN
+  final String  reason;
+  final DateTime createdAt;
+  final DateTime? closedAt;
+
+  const DecisionRecord({
+    required this.id, required this.asset, required this.displayName,
+    required this.decision, required this.confidence, required this.timeframe,
+    required this.result, required this.reason, required this.createdAt,
+    this.entryPrice, this.exitPrice, this.profitPct, this.profit, this.closedAt,
+  });
+
+  factory DecisionRecord.fromJson(Map<String, dynamic> j) => DecisionRecord(
+    id:          j['id']?.toString()           ?? '',
+    asset:       j['asset']?.toString()        ?? '',
+    displayName: j['display_name']?.toString() ?? j['asset']?.toString() ?? '',
+    decision:    j['decision']?.toString()     ?? 'HOLD',
+    confidence:  (j['confidence'] as num?)?.toInt()   ?? 0,
+    timeframe:   j['timeframe']?.toString()    ?? '1h',
+    result:      j['result']?.toString()       ?? 'OPEN',
+    reason:      j['reason']?.toString()       ?? '',
+    entryPrice:  (j['entry_price'] as num?)?.toDouble(),
+    exitPrice:   (j['exit_price']  as num?)?.toDouble(),
+    profitPct:   (j['profit_pct']  as num?)?.toDouble(),
+    profit:      (j['profit']      as num?)?.toDouble(),
+    createdAt:   DateTime.tryParse(j['created_at']?.toString() ?? '') ?? DateTime.now(),
+    closedAt:    j['closed_at'] != null
+        ? DateTime.tryParse(j['closed_at'].toString()) : null,
+  );
+}
+
+class CoreDecisionsData {
+  final DecisionSummary summary;
+  final List<DecisionRecord> decisions;
+  const CoreDecisionsData({required this.summary, required this.decisions});
+}
+
 // ── Providers ─────────────────────────────────────────────────────────────────
 
 final coreAdviceProvider = FutureProvider.autoDispose<CoreAdvice>((ref) async {
@@ -99,4 +168,13 @@ final coreAdviceProvider = FutureProvider.autoDispose<CoreAdvice>((ref) async {
 final coreSimProvider = FutureProvider.autoDispose.family<CoreSimResult, double>((ref, capital) async {
   final resp = await ApiService.dio.get('core/simulator', queryParameters: {'capital': capital});
   return CoreSimResult.fromJson(resp.data as Map<String, dynamic>);
+});
+
+final coreDecisionsProvider = FutureProvider.autoDispose<CoreDecisionsData>((ref) async {
+  final resp = await ApiService.dio.get('core/decisions');
+  final summary = DecisionSummary.fromJson(resp.data['summary'] as Map<String, dynamic>);
+  final list = (resp.data['decisions'] as List)
+      .map((d) => DecisionRecord.fromJson(d as Map<String, dynamic>))
+      .toList();
+  return CoreDecisionsData(summary: summary, decisions: list);
 });

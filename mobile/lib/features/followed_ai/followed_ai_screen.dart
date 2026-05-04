@@ -10,8 +10,9 @@ class FollowedAIScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final capital = ref.watch(_capitalProvider);
-    final async   = ref.watch(coreSimProvider(capital));
+    final capital   = ref.watch(_capitalProvider);
+    final simAsync  = ref.watch(coreSimProvider(capital));
+    final histAsync = ref.watch(coreDecisionsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -19,25 +20,42 @@ class FollowedAIScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => ref.refresh(coreSimProvider(capital)),
+            onPressed: () {
+              ref.invalidate(coreSimProvider(capital));
+              ref.invalidate(coreDecisionsProvider);
+            },
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(children: [
-          _CapitalSelector(capital: capital),
-          const SizedBox(height: 16),
-          async.when(
-            loading: () => const _LoadingCard(),
-            error:   (e, _) => _ErrorCard(
-              message: e.toString(),
-              onRetry: () => ref.refresh(coreSimProvider(capital)),
+      body: RefreshIndicator(
+        color: AppColors.primary,
+        onRefresh: () async {
+          ref.invalidate(coreSimProvider(capital));
+          ref.invalidate(coreDecisionsProvider);
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          child: Column(children: [
+            _CapitalSelector(capital: capital),
+            const SizedBox(height: 16),
+            simAsync.when(
+              loading: () => const _LoadingCard(),
+              error:   (e, _) => _ErrorCard(
+                message: e.toString(),
+                onRetry: () => ref.invalidate(coreSimProvider(capital)),
+              ),
+              data:    (result) => _ResultView(result: result),
             ),
-            data:    (result) => _ResultView(result: result),
-          ),
-          const SizedBox(height: 24),
-        ]),
+            const SizedBox(height: 24),
+            histAsync.when(
+              loading: () => const _LoadingCard(),
+              error:   (e, _) => const SizedBox.shrink(),
+              data:    (data) => _DecisionHistory(data: data),
+            ),
+            const SizedBox(height: 24),
+          ]),
+        ),
       ),
     );
   }
@@ -114,7 +132,6 @@ class _ResultView extends StatelessWidget {
     final profitColor    = profitPositive ? AppColors.buy : AppColors.sell;
 
     return Column(children: [
-      // Hero balance card
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(24),
@@ -152,7 +169,6 @@ class _ResultView extends StatelessWidget {
 
       const SizedBox(height: 12),
 
-      // Stats row
       Row(children: [
         _StatBox(
           label: 'Win Rate',
@@ -205,13 +221,139 @@ class _StatBox extends StatelessWidget {
   }
 }
 
+// ── Decision history ──────────────────────────────────────────────────────────
+
+class _DecisionHistory extends StatelessWidget {
+  final CoreDecisionsData data;
+  const _DecisionHistory({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    if (data.decisions.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Decision History',
+            style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+        const SizedBox(height: 10),
+        ...data.decisions.map((d) => _DecisionTile(record: d)),
+      ],
+    );
+  }
+}
+
+class _DecisionTile extends StatelessWidget {
+  final DecisionRecord record;
+  const _DecisionTile({required this.record});
+
+  Color get _resultColor {
+    switch (record.result) {
+      case 'WIN':  return AppColors.buy;
+      case 'LOSS': return AppColors.sell;
+      default:     return AppColors.primary;
+    }
+  }
+
+  Color get _decisionColor {
+    switch (record.decision.toUpperCase()) {
+      case 'BUY':  return AppColors.buy;
+      case 'SELL': return AppColors.sell;
+      default:     return AppColors.primary;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasProfit = record.profitPct != null;
+    final pct       = record.profitPct ?? 0.0;
+    final pctColor  = pct >= 0 ? AppColors.buy : AppColors.sell;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(children: [
+        // Result badge
+        Container(
+          width: 52,
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          decoration: BoxDecoration(
+            color: _resultColor.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(record.result,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w800, color: _resultColor)),
+        ),
+
+        const SizedBox(width: 10),
+
+        // Asset + decision + confidence
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Text(record.displayName,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _decisionColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(record.decision,
+                      style: TextStyle(
+                          fontSize: 9, fontWeight: FontWeight.w800,
+                          color: _decisionColor)),
+                ),
+              ]),
+              const SizedBox(height: 2),
+              Text('${record.confidence}% confidence · ${record.timeframe}',
+                  style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            ],
+          ),
+        ),
+
+        // Profit pct or OPEN
+        if (hasProfit && record.result != 'OPEN')
+          Text('${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(1)}%',
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: pctColor))
+        else if (record.result == 'OPEN')
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text('LIVE',
+                style: TextStyle(
+                    fontSize: 9, fontWeight: FontWeight.w800,
+                    color: AppColors.primary)),
+          ),
+      ]),
+    );
+  }
+}
+
 // ── Helper widgets ────────────────────────────────────────────────────────────
 
 class _LoadingCard extends StatelessWidget {
   const _LoadingCard();
   @override
   Widget build(BuildContext context) => const SizedBox(
-    height: 160,
+    height: 120,
     child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
   );
 }

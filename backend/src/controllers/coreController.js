@@ -52,6 +52,48 @@ exports.advice = async (req, res) => {
   }
 };
 
+// GET /api/v1/core/decisions?limit=20
+exports.decisions = async (req, res) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+
+    const [decisions, total, wins, losses, open] = await Promise.all([
+      AIDecision.find().sort({ createdAt: -1 }).limit(limit).lean(),
+      AIDecision.countDocuments(),
+      AIDecision.countDocuments({ result: 'WIN' }),
+      AIDecision.countDocuments({ result: 'LOSS' }),
+      AIDecision.countDocuments({ result: 'OPEN' }),
+    ]);
+
+    const evaluated = wins + losses;
+    const winRate   = evaluated > 0 ? Math.round(wins / evaluated * 100) : 0;
+
+    res.json({
+      success: true,
+      summary: { total, wins, losses, open, win_rate: winRate },
+      decisions: decisions.map(d => ({
+        id:           d._id,
+        asset:        d.asset,
+        display_name: d.displayName || d.asset,
+        decision:     d.action,
+        confidence:   d.confidence,
+        timeframe:    d.timeframe,
+        entry_price:  d.entryPrice,
+        exit_price:   d.exitPrice,
+        profit_pct:   d.profitPct,
+        profit:       d.profit,
+        result:       d.result,
+        reason:       d.reason,
+        created_at:   d.createdAt,
+        closed_at:    d.closedAt,
+      })),
+    });
+  } catch (err) {
+    logger.error('[Core] decisions error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /api/v1/core/status
 exports.status = (req, res) => {
   const cached = getGlobalCache();

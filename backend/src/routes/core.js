@@ -8,5 +8,6 @@ router.use(protect);
 router.get('/advice',    ctrl.advice);
 router.get('/status',    ctrl.status);
 router.get('/simulator', simCtrl.simulate);
+router.get('/decisions', ctrl.decisions);
 
 module.exports = router;
