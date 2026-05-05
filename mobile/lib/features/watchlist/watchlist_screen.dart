@@ -8,6 +8,7 @@ import '../../core/providers/brain_provider.dart';
 import '../../core/providers/price_alerts_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/sparkline_chart.dart';
+import '../chart/asset_chart_screen.dart';
 
 class WatchlistScreen extends ConsumerWidget {
   const WatchlistScreen({super.key});
@@ -191,7 +192,12 @@ class _WatchlistTile extends ConsumerWidget {
             ]),
           ),
           const SizedBox(width: 8),
-          SparklineChart(asset: asset, width: 64, height: 32),
+          GestureDetector(
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => AssetChartScreen(
+                    asset: asset, signal: signal, signalConf: signalConf))),
+            child: SparklineChart(asset: asset, width: 64, height: 32),
+          ),
           const SizedBox(width: 10),
           tickerAsync.when(
             loading: () => const SizedBox(width: 80,

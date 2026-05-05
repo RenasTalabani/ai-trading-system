@@ -6,6 +6,7 @@ import '../../core/providers/brain_provider.dart';
 import '../../core/providers/prices_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/sparkline_chart.dart';
+import '../chart/asset_chart_screen.dart';
 
 class MarketScannerScreen extends ConsumerStatefulWidget {
   const MarketScannerScreen({super.key});
@@ -531,7 +532,14 @@ class _ScannerTile extends ConsumerWidget {
           ),
 
           const SizedBox(width: 8),
-          SparklineChart(asset: item.asset, width: 56, height: 28),
+          GestureDetector(
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => AssetChartScreen(
+                    asset: item.asset,
+                    signal: item.action,
+                    signalConf: item.confidence))),
+            child: SparklineChart(asset: item.asset, width: 56, height: 28),
+          ),
           const SizedBox(width: 8),
 
           // Price column
