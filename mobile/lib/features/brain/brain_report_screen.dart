@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/providers/price_alerts_provider.dart';
 import 'my_trades_sheet.dart';
 import 'risk_calculator_sheet.dart';
 
@@ -546,10 +547,35 @@ class _FollowButtonState extends ConsumerState<_FollowButton> {
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(isNew
-            ? 'Following ${r.displayName} ${r.action} — marked as open trade'
+            ? 'Following ${r.displayName} ${r.action}'
             : 'Already following ${r.displayName}'),
         backgroundColor: isNew ? AppColors.buy : AppColors.hold,
-        duration: const Duration(seconds: 2),
+        duration: const Duration(seconds: 4),
+        action: isNew && r.takeProfit != null
+            ? SnackBarAction(
+                label: 'Set TP Alert',
+                textColor: Colors.white,
+                onPressed: () async {
+                  final tp        = r.takeProfit!;
+                  final dir       = r.action == 'SELL' ? 'below' : 'above';
+                  final messenger = ScaffoldMessenger.of(context);
+                  final ok = await ref.read(priceAlertsProvider.notifier).create(
+                    asset:        r.bestAsset,
+                    displayName:  r.displayName,
+                    targetPrice:  tp,
+                    direction:    dir,
+                    note:         'TP from AI Brain ${r.action}',
+                  );
+                  messenger.showSnackBar(SnackBar(
+                    content: Text(ok
+                        ? 'Alert set at \$${tp.toStringAsFixed(tp >= 100 ? 0 : 2)}'
+                        : 'Could not set alert'),
+                    backgroundColor: ok ? AppColors.primary : AppColors.sell,
+                    duration: const Duration(seconds: 2),
+                  ));
+                },
+              )
+            : null,
       ));
     }
   }
