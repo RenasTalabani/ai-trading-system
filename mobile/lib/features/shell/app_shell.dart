@@ -11,7 +11,7 @@ class AppShell extends ConsumerWidget {
   static const _tabs = [
     _TabItem(label: 'Brain',     icon: Icons.bolt_outlined,          path: '/'),
     _TabItem(label: 'Portfolio', icon: Icons.bar_chart_outlined,     path: '/performance'),
-    _TabItem(label: 'Advisor',   icon: Icons.psychology_outlined,    path: '/advisor'),
+    _TabItem(label: 'Radar',     icon: Icons.radar,                  path: '/scanner'),
     _TabItem(label: 'Watchlist', icon: Icons.remove_red_eye_outlined, path: '/watchlist'),
     _TabItem(label: 'Alerts',    icon: Icons.notifications_none,     path: '/notifications'),
   ];
@@ -19,7 +19,7 @@ class AppShell extends ConsumerWidget {
   int _indexFor(BuildContext context) {
     final loc = GoRouterState.of(context).matchedLocation;
     if (loc.startsWith('/performance'))   return 1;
-    if (loc.startsWith('/advisor'))       return 2;
+    if (loc.startsWith('/scanner'))       return 2;
     if (loc.startsWith('/watchlist'))     return 3;
     if (loc.startsWith('/notifications')) return 4;
     return 0;
