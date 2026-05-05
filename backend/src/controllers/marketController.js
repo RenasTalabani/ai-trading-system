@@ -3,6 +3,8 @@ const axios = require('axios');
 const logger = require('../config/logger');
 const {
   fetchCurrentPrice,
+  fetch24hTicker,
+  fetchBatchTickers,
   getAllCachedPrices,
   TRACKED_ASSETS,
 } = require('../services/binanceService');
@@ -37,6 +39,33 @@ exports.getAssetPrice = async (req, res, next) => {
       return res.status(404).json({ success: false, message: `Asset ${req.params.asset} not found.` });
     }
     logger.error('Price fetch error:', err.message);
+    next(err);
+  }
+};
+
+exports.getAssetTicker = async (req, res, next) => {
+  try {
+    const asset = req.params.asset.toUpperCase();
+    const ticker = await fetch24hTicker(asset);
+    res.status(200).json({ success: true, ...ticker });
+  } catch (err) {
+    if (err.response?.status === 400) {
+      return res.status(404).json({ success: false, message: `Asset ${req.params.asset} not found.` });
+    }
+    logger.error('Ticker fetch error:', err.message);
+    next(err);
+  }
+};
+
+exports.getBatchTickers = async (req, res, next) => {
+  try {
+    const raw = req.body.assets || req.query.assets;
+    const assets = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split(',') : []);
+    if (!assets.length) return res.status(400).json({ success: false, message: 'assets required' });
+    const tickers = await fetchBatchTickers(assets);
+    res.status(200).json({ success: true, tickers });
+  } catch (err) {
+    logger.error('Batch ticker error:', err.message);
     next(err);
   }
 };

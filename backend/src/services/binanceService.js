@@ -50,6 +50,42 @@ async function fetchCurrentPrice(asset) {
   return parseFloat(resp.data.price);
 }
 
+async function fetch24hTicker(asset) {
+  const resp = await axios.get(`${BINANCE_REST}/api/v3/ticker/24hr`, {
+    params: { symbol: asset.toUpperCase() },
+    timeout: 5000,
+  });
+  const d = resp.data;
+  return {
+    asset:          d.symbol,
+    price:          parseFloat(d.lastPrice),
+    change24h:      parseFloat(d.priceChange),
+    changePercent:  parseFloat(d.priceChangePercent),
+    high24h:        parseFloat(d.highPrice),
+    low24h:         parseFloat(d.lowPrice),
+    volume24h:      parseFloat(d.volume),
+    quoteVolume24h: parseFloat(d.quoteVolume),
+  };
+}
+
+async function fetchBatchTickers(assets) {
+  const symbols = JSON.stringify(assets.map((a) => a.toUpperCase()));
+  const resp = await axios.get(`${BINANCE_REST}/api/v3/ticker/24hr`, {
+    params: { symbols },
+    timeout: 8000,
+  });
+  return resp.data.map((d) => ({
+    asset:          d.symbol,
+    price:          parseFloat(d.lastPrice),
+    change24h:      parseFloat(d.priceChange),
+    changePercent:  parseFloat(d.priceChangePercent),
+    high24h:        parseFloat(d.highPrice),
+    low24h:         parseFloat(d.lowPrice),
+    volume24h:      parseFloat(d.volume),
+    quoteVolume24h: parseFloat(d.quoteVolume),
+  }));
+}
+
 // ─── Historical data collector ────────────────────────────────────────────────
 
 async function collectHistoricalData(asset, interval = '1h', limit = 500) {
@@ -174,6 +210,8 @@ module.exports = {
   startRestPricePoll,
   stopRestPricePoll,
   fetchCurrentPrice,
+  fetch24hTicker,
+  fetchBatchTickers,
   collectHistoricalData,
   collectAllAssets,
   startLivePriceStream,
