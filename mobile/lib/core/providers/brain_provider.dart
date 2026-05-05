@@ -222,11 +222,13 @@ class NewsItem {
   final String  source;
   final String  sentiment;  // bullish / bearish / neutral
   final double  impactScore;
+  final String? url;
   final DateTime publishedAt;
 
   const NewsItem({
     required this.id, required this.title, required this.source,
     required this.sentiment, required this.impactScore, required this.publishedAt,
+    this.url,
   });
 
   factory NewsItem.fromJson(Map<String, dynamic> j) => NewsItem(
@@ -236,6 +238,7 @@ class NewsItem {
     sentiment:   (j['sentiment'] as Map?)?.cast<String,dynamic>()['label']?.toString()
                  ?? j['sentiment']?.toString()    ?? 'neutral',
     impactScore: (j['impactScore'] as num?)?.toDouble() ?? 0,
+    url:         j['url']?.toString(),
     publishedAt: DateTime.tryParse(j['publishedAt']?.toString() ?? '') ?? DateTime.now(),
   );
 }

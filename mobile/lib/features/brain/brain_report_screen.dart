@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/price_alerts_provider.dart';
 import 'my_trades_sheet.dart';
 import 'risk_calculator_sheet.dart';
@@ -1418,45 +1419,55 @@ class _NewsRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(
-        width: 3, height: 42,
-        decoration: BoxDecoration(
-          color: _sentimentColor,
-          borderRadius: BorderRadius.circular(2),
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-        Text(item.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500,
-                color: AppColors.textPrimary, height: 1.4)),
-        const SizedBox(height: 3),
-        Row(children: [
-          Text(item.source,
-              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
-          const SizedBox(width: 8),
-          Text(_timeAgo(item.publishedAt),
-              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: _sentimentColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(3),
-            ),
-            child: Text(item.sentiment.toUpperCase(),
-                style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800,
-                    color: _sentimentColor)),
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: item.url != null
+        ? () => launchUrl(Uri.parse(item.url!),
+              mode: LaunchMode.externalApplication)
+        : null,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 3, height: 42,
+          decoration: BoxDecoration(
+            color: _sentimentColor,
+            borderRadius: BorderRadius.circular(2),
           ),
-        ]),
-      ])),
-    ]),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+          Text(item.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary, height: 1.4)),
+          const SizedBox(height: 3),
+          Row(children: [
+            Text(item.source,
+                style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            const SizedBox(width: 8),
+            Text(_timeAgo(item.publishedAt),
+                style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: _sentimentColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(item.sentiment.toUpperCase(),
+                  style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800,
+                      color: _sentimentColor)),
+            ),
+            if (item.url != null) ...[
+              const SizedBox(width: 6),
+              const Icon(Icons.open_in_new, size: 10, color: AppColors.textMuted),
+            ],
+          ]),
+        ])),
+      ]),
+    ),
   );
 }
 
