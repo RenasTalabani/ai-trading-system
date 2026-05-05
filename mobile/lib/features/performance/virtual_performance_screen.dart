@@ -7,6 +7,7 @@ import '../../core/providers/brain_stats_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../brain/achievements_sheet.dart';
 import '../brain/my_trades_sheet.dart';
+import '../trades/trade_history_screen.dart';
 
 class VirtualPerformanceScreen extends ConsumerWidget {
   const VirtualPerformanceScreen({super.key});
@@ -34,6 +35,14 @@ class VirtualPerformanceScreen extends ConsumerWidget {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                       color: AppColors.textPrimary)),
               actions: [
+                IconButton(
+                  icon: const Icon(Icons.history_edu_outlined, size: 20,
+                      color: AppColors.textSecondary),
+                  tooltip: 'Trade Journal',
+                  onPressed: () => Navigator.push(context,
+                      MaterialPageRoute(
+                          builder: (_) => const TradeHistoryScreen())),
+                ),
                 IconButton(
                   icon: const Icon(Icons.refresh, size: 20,
                       color: AppColors.textSecondary),

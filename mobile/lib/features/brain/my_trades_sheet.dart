@@ -3,6 +3,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../trades/trade_history_screen.dart';
 
 void showMyTradesSheet(BuildContext context) {
   showModalBottomSheet(
@@ -60,6 +61,13 @@ class _MyTradesSheet extends ConsumerWidget {
               const SizedBox(width: 16, height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2,
                       color: AppColors.primary)),
+            TextButton(
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const TradeHistoryScreen())),
+              child: const Text('Full History',
+                  style: TextStyle(fontSize: 12, color: AppColors.primary)),
+            ),
           ]),
         ),
         const SizedBox(height: 10),

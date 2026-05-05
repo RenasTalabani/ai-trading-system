@@ -280,16 +280,17 @@ class UserFollow {
   final String  outcome;
   final int     confidence;
   final String  timeframe;
-  final double? entryPrice;
-  final double? exitPrice;
-  final double? profitPct;
-  final DateTime createdAt;
+  final double?   entryPrice;
+  final double?   exitPrice;
+  final double?   profitPct;
+  final DateTime  createdAt;
+  final DateTime? closedAt;
 
   const UserFollow({
     required this.id, required this.asset, required this.displayName,
     required this.action, required this.outcome, required this.confidence,
     required this.timeframe, required this.createdAt,
-    this.entryPrice, this.exitPrice, this.profitPct,
+    this.entryPrice, this.exitPrice, this.profitPct, this.closedAt,
   });
 
   factory UserFollow.fromJson(Map<String, dynamic> j) => UserFollow(
@@ -304,6 +305,7 @@ class UserFollow {
     exitPrice:   (j['exitPrice']  as num?)?.toDouble(),
     profitPct:   (j['profitPct']  as num?)?.toDouble(),
     createdAt:   DateTime.tryParse(j['createdAt']?.toString() ?? '') ?? DateTime.now(),
+    closedAt:    DateTime.tryParse(j['closedAt']?.toString()  ?? ''),
   );
 
   bool get isOpen => outcome == 'OPEN';
