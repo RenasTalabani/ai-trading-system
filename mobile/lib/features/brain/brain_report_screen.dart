@@ -12,6 +12,7 @@ import '../../core/providers/brain_stats_provider.dart';
 import 'achievements_sheet.dart';
 import 'my_trades_sheet.dart';
 import 'risk_calculator_sheet.dart';
+import 'ask_brain_screen.dart';
 
 bool _isWarmingUp(Object e) {
   final s = e.toString().toLowerCase();
@@ -131,6 +132,13 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                     tooltip: 'My Trades',
                   );
                 }),
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline, size: 20,
+                      color: AppColors.textSecondary),
+                  onPressed: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const AskBrainScreen())),
+                  tooltip: 'Ask the Brain',
+                ),
                 IconButton(
                   icon: const Icon(Icons.refresh, size: 20,
                       color: AppColors.textSecondary),

@@ -10,6 +10,7 @@ import 'features/performance/virtual_performance_screen.dart';
 import 'features/advisor/advisor_screen.dart';
 import 'features/brain/brain_report_screen.dart';
 import 'features/watchlist/watchlist_screen.dart';
+import 'features/brain/ask_brain_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
@@ -37,6 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/watchlist',     builder: (_, __) => const WatchlistScreen()),
           GoRoute(path: '/notifications', builder: (_, __) => const NotificationsScreen()),
           GoRoute(path: '/settings',      builder: (_, __) => const SettingsScreen()),
+          GoRoute(path: '/ask-brain',    builder: (_, __) => const AskBrainScreen()),
         ],
       ),
     ],
