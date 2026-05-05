@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/watchlist_provider.dart';
 import '../../core/providers/brain_provider.dart';
+import '../../core/providers/price_alerts_provider.dart';
 import '../../core/theme/app_theme.dart';
 
 class WatchlistScreen extends ConsumerWidget {
@@ -369,10 +370,9 @@ class _AssetDetailSheet extends ConsumerWidget {
               label: 'Set Alert',
               onTap: () {
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Go to Alerts tab to set a price alert'),
-                  backgroundColor: AppColors.surface,
-                ));
+                final price = tickerAsync.valueOrNull?.price;
+                _showWatchlistAlertSheet(
+                    context, ref, asset, displayNameFor(asset), price);
               },
             )),
             const SizedBox(width: 10),
@@ -381,11 +381,41 @@ class _AssetDetailSheet extends ConsumerWidget {
               label: 'Follow Trade',
               primary: signal != null && signal != 'HOLD',
               onTap: () {
+                if (signal == null || signal == 'HOLD') return;
+                final already = ref.read(followsProvider)
+                    .follows.any((f) => f.asset == asset && f.isOpen);
+                if (already) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Already following this trade'),
+                    backgroundColor: AppColors.surface,
+                  ));
+                  return;
+                }
+                final price = tickerAsync.valueOrNull?.price;
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Go to Brain tab to follow the AI trade'),
-                  backgroundColor: AppColors.surface,
-                ));
+                () async {
+                  final ok = await ref.read(followsProvider.notifier).followTrade({
+                    'asset':       asset,
+                    'displayName': displayNameFor(asset),
+                    'action':      signal,
+                    'confidence':  signalConf ?? 0,
+                    if (price        != null) 'entryPrice': price,
+                    if (fullReport?.stopLoss   != null) 'stopLoss':   fullReport!.stopLoss,
+                    if (fullReport?.takeProfit != null) 'takeProfit': fullReport!.takeProfit,
+                    'timeframe':   fullReport?.timeframe ?? '4H',
+                  });
+                  HapticFeedback.mediumImpact();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(ok
+                        ? '✅ Now following ${displayNameFor(asset)} $signal trade'
+                        : 'Failed to create follow'),
+                    backgroundColor: ok
+                        ? AppColors.buy.withValues(alpha: 0.9)
+                        : AppColors.surface,
+                  ));
+                }();
               },
             )),
           ]),
@@ -660,4 +690,192 @@ String _fmtVol(double v) {
   if (v >= 1e6) return '\$${(v / 1e6).toStringAsFixed(1)}M';
   if (v >= 1e3) return '\$${(v / 1e3).toStringAsFixed(1)}K';
   return '\$${v.toStringAsFixed(0)}';
+}
+
+// ── Watchlist Alert Sheet ─────────────────────────────────────────────────────
+
+void _showWatchlistAlertSheet(
+  BuildContext context,
+  WidgetRef ref,
+  String asset,
+  String displayName,
+  double? currentPrice,
+) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.card,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (_) => _WatchlistAlertSheet(
+      asset: asset,
+      displayName: displayName,
+      currentPrice: currentPrice,
+    ),
+  );
+}
+
+class _WatchlistAlertSheet extends ConsumerStatefulWidget {
+  final String  asset;
+  final String  displayName;
+  final double? currentPrice;
+  const _WatchlistAlertSheet({
+    required this.asset,
+    required this.displayName,
+    this.currentPrice,
+  });
+
+  @override
+  ConsumerState<_WatchlistAlertSheet> createState() =>
+      _WatchlistAlertSheetState();
+}
+
+class _WatchlistAlertSheetState extends ConsumerState<_WatchlistAlertSheet> {
+  final _priceCtrl = TextEditingController();
+  String _direction = 'above';
+  bool   _saving    = false;
+
+  @override
+  void dispose() {
+    _priceCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Center(child: Container(width: 36, height: 4,
+            decoration: BoxDecoration(color: AppColors.border,
+                borderRadius: BorderRadius.circular(2)))),
+        const SizedBox(height: 16),
+
+        Row(children: [
+          _AssetCircle(asset: widget.asset, size: 40),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Set Price Alert',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary)),
+            Text(widget.displayName,
+                style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+          ])),
+          if (widget.currentPrice != null)
+            Text('Now: ${_fmtPrice(widget.currentPrice!)}',
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+        ]),
+        const SizedBox(height: 20),
+
+        // Above / Below toggle
+        Row(children: [
+          Expanded(child: _DirBtn(
+            label: 'Above ↑',
+            selected: _direction == 'above',
+            color: AppColors.buy,
+            onTap: () => setState(() => _direction = 'above'),
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _DirBtn(
+            label: 'Below ↓',
+            selected: _direction == 'below',
+            color: AppColors.sell,
+            onTap: () => setState(() => _direction = 'below'),
+          )),
+        ]),
+        const SizedBox(height: 16),
+
+        TextField(
+          controller: _priceCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(color: AppColors.textPrimary,
+              fontSize: 18, fontWeight: FontWeight.w700),
+          decoration: InputDecoration(
+            prefixText: '\$ ',
+            prefixStyle: const TextStyle(color: AppColors.textMuted, fontSize: 18),
+            hintText: widget.currentPrice != null
+                ? _fmtPrice(widget.currentPrice!).replaceAll('\$', '')
+                : 'Target price',
+            hintStyle: const TextStyle(color: AppColors.textMuted),
+            filled: true,
+            fillColor: AppColors.surface,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.border),
+            ),
+          ),
+          autofocus: true,
+        ),
+        const SizedBox(height: 20),
+
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: _saving ? null : _create,
+            child: _saving
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Text('Create Alert',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _create() async {
+    final raw = double.tryParse(_priceCtrl.text.trim());
+    if (raw == null || raw <= 0) return;
+    setState(() => _saving = true);
+    final ok = await ref.read(priceAlertsProvider.notifier).create(
+      asset:       widget.asset,
+      displayName: widget.displayName,
+      targetPrice: raw,
+      direction:   _direction,
+    );
+    if (!mounted) return;
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? '🔔 Alert set: ${widget.displayName} $_direction ${_fmtPrice(raw)}'
+          : 'Failed to create alert'),
+      backgroundColor:
+          ok ? AppColors.buy.withValues(alpha: 0.9) : AppColors.error,
+    ));
+  }
+}
+
+class _DirBtn extends StatelessWidget {
+  final String label;
+  final bool   selected;
+  final Color  color;
+  final VoidCallback onTap;
+  const _DirBtn({required this.label, required this.selected,
+      required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: selected ? color.withValues(alpha: 0.15) : AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: selected ? color.withValues(alpha: 0.5) : AppColors.border),
+      ),
+      child: Center(child: Text(label,
+          style: TextStyle(fontWeight: FontWeight.w700,
+              color: selected ? color : AppColors.textSecondary))),
+    ),
+  );
 }

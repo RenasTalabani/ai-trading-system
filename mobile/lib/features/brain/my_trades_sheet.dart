@@ -190,6 +190,37 @@ class _FollowTile extends ConsumerWidget {
               style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
         ]),
 
+        // Live unrealized P&L (open trades only)
+        if (follow.isOpen && follow.entryPrice != null) ...[
+          const SizedBox(height: 6),
+          Consumer(builder: (_, lRef, __) {
+            final async = lRef.watch(livePriceProvider(follow.asset));
+            return async.whenOrNull(data: (price) {
+              if (price == null) return const SizedBox.shrink();
+              final rawPct = (price - follow.entryPrice!) / follow.entryPrice! * 100;
+              final pct    = follow.action == 'SELL' ? -rawPct : rawPct;
+              final isPos  = pct >= 0;
+              final c      = isPos ? AppColors.buy : AppColors.sell;
+              return Row(children: [
+                Text('Now \$${_fmt(price)}',
+                    style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(
+                    '${isPos ? '+' : ''}${pct.toStringAsFixed(2)}% unrealized',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: c),
+                  ),
+                ),
+              ]);
+            }) ?? const SizedBox.shrink();
+          }),
+        ],
+
         // Close buttons for open trades
         if (follow.isOpen) ...[
           const SizedBox(height: 10),
