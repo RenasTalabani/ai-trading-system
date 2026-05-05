@@ -56,13 +56,16 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
     super.dispose();
   }
 
-  String _nextScanLabel(DateTime? generatedAt) {
-    if (generatedAt == null) return '';
-    final next = generatedAt.add(const Duration(minutes: 30));
-    final remaining = next.difference(DateTime.now());
-    if (remaining.isNegative) return 'updating…';
-    final m = remaining.inMinutes;
-    return 'next scan: ${m}m';
+  String _nextScanLabel(ActionReport? r) {
+    if (r == null) return '';
+    final parts = <String>[];
+    if (r.totalEvaluated > 0) parts.add('${r.totalEvaluated} assets');
+    if (r.generatedAt != null) {
+      final next = r.generatedAt!.add(const Duration(minutes: 30));
+      final rem  = next.difference(DateTime.now());
+      parts.add(rem.isNegative ? 'updating…' : 'next scan: ${rem.inMinutes}m');
+    }
+    return parts.join(' · ');
   }
 
   Future<void> _refresh() async {
@@ -101,9 +104,9 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                   const Text('AI Brain',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                           color: AppColors.textPrimary)),
-                  if (actionAsync.valueOrNull?.generatedAt != null)
+                  if (actionAsync.valueOrNull != null)
                     Text(
-                      _nextScanLabel(actionAsync.valueOrNull!.generatedAt),
+                      _nextScanLabel(actionAsync.valueOrNull),
                       style: const TextStyle(fontSize: 10,
                           color: AppColors.textMuted),
                     ),
