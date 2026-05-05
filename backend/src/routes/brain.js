@@ -9,6 +9,7 @@ router.get('/report/action',      ctrl.actionReport);
 router.get('/report/performance', ctrl.performanceReport);
 router.get('/stats',              ctrl.brainStats);
 router.get('/analytics',          ctrl.brainAnalytics);
+router.post('/ask',               ctrl.askBrain);
 
 router.get('/follows/stats',      follow.stats);
 router.get('/follows',            follow.list);

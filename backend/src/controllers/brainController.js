@@ -1,6 +1,7 @@
 const axios      = require('axios');
 const { getCache: getGlobalCache } = require('../jobs/globalScanJob');
 const AIDecision = require('../models/AIDecision');
+const NewsData   = require('../models/NewsData');
 const logger     = require('../config/logger');
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -434,4 +435,148 @@ function _computeAchievements({ total, wins, losses, winRate, currentStreak, bes
       unit: total >= 20 ? '%' : ' trades',
     },
   ];
+}
+
+// ── POST /api/v1/brain/ask ────────────────────────────────────────────────────
+exports.askBrain = async (req, res) => {
+  try {
+    const raw = (req.body.question || '').trim();
+    if (!raw) return res.status(400).json({ success: false, message: 'question required' });
+    const q      = raw.toLowerCase();
+    const intent = _detectIntent(q);
+    const answer = await _buildAnswer(intent, q);
+    res.json({ success: true, intent, question: raw, ...answer });
+  } catch (err) {
+    logger.error('[Brain] ask error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+function _detectIntent(q) {
+  if (/\b(buy|sell|trade|invest|what should|best pick|top pick|recommend|signal|action|do now|what to do)\b/.test(q)) return 'action';
+  const assetMap = {
+    bitcoin:'BTCUSDT', btc:'BTCUSDT', ethereum:'ETHUSDT', eth:'ETHUSDT',
+    bnb:'BNBUSDT', solana:'SOLUSDT', sol:'SOLUSDT', xrp:'XRPUSDT', ripple:'XRPUSDT',
+    cardano:'ADAUSDT', ada:'ADAUSDT', doge:'DOGEUSDT', dogecoin:'DOGEUSDT',
+    avax:'AVAXUSDT', avalanche:'AVAXUSDT', link:'LINKUSDT', chainlink:'LINKUSDT',
+    matic:'MATICUSDT', polygon:'MATICUSDT',
+  };
+  for (const [name, sym] of Object.entries(assetMap)) {
+    if (q.includes(name)) return 'asset:' + sym;
+  }
+  if (/\b(performance|accurate|accuracy|win rate|winning|profit|how good|track record|result)\b/.test(q)) return 'performance';
+  if (/\b(streak|consecutive|row|on fire|winning streak)\b/.test(q)) return 'streak';
+  if (/\b(market|sentiment|mood|fear|greed|bearish|bullish|macro|outlook)\b/.test(q)) return 'sentiment';
+  if (/\b(news|headline|happening|latest|update|event)\b/.test(q)) return 'news';
+  if (/\b(top|picks|opportunities|best assets|watch|all assets|which)\b/.test(q)) return 'picks';
+  if (/\b(risk|safe|stop loss|stop|loss|dangerous|careful)\b/.test(q)) return 'risk';
+  if (/\b(portfolio|followed|my trades|my follow|tracking)\b/.test(q)) return 'portfolio';
+  return 'unknown';
+}
+
+async function _buildAnswer(intent, q) {
+  const cached = getGlobalCache();
+
+  if (intent === 'action' || intent === 'picks') {
+    if (!cached?.result?.best) return { type: 'text', text: 'The AI Brain is still warming up. Try again in 30 seconds.' };
+    const best = cached.result.best;
+    const top  = (cached.result.top_opportunities || []).slice(0, 5);
+    return {
+      type: 'action',
+      text: 'The AI Brain currently recommends **' + best.action + '** on **' + (best.display_name || best.asset) + '** with **' + best.confidence + '% confidence**.',
+      data: {
+        bestAsset: best.asset, displayName: best.display_name || best.asset,
+        action: best.action, confidence: best.confidence,
+        entryPrice: best.current_price || null, stopLoss: best.stop_loss || null,
+        takeProfit: best.take_profit || null, riskReward: best.risk_reward || null,
+        reason: best.reason || null,
+        topPicks: top.map(o => ({ asset: o.asset, displayName: o.display_name || o.asset, action: o.action, confidence: o.confidence })),
+      },
+    };
+  }
+
+  if (intent.startsWith('asset:')) {
+    const symbol  = intent.replace('asset:', '');
+    const recent  = await AIDecision.find({ asset: symbol, result: { $in: ['WIN','LOSS','OPEN'] } }).sort({ createdAt: -1 }).limit(5).lean();
+    const closed  = recent.filter(d => d.result !== 'OPEN');
+    const wins    = closed.filter(d => d.result === 'WIN').length;
+    const wr      = closed.length > 0 ? Math.round((wins / closed.length) * 100) : null;
+    let brainSignal = null;
+    if (cached?.result?.best?.asset === symbol) brainSignal = cached.result.best;
+    if (!brainSignal) brainSignal = (cached?.result?.top_opportunities || []).find(o => o.asset === symbol);
+    const news = await NewsData.find({ relevantAssets: symbol }).sort({ publishedAt: -1 }).limit(3).lean();
+    const name = (brainSignal?.display_name || recent[0]?.displayName || symbol).replace('USDT','');
+    const sigText = brainSignal ? 'Current signal: **' + brainSignal.action + '** at ' + brainSignal.confidence + '% confidence.' : 'No active brain signal for this asset.';
+    const perfText = wr !== null ? ' Win rate: **' + wr + '%** over ' + closed.length + ' trades.' : '';
+    return {
+      type: 'asset',
+      text: 'Here\'s what I know about **' + name + '**. ' + sigText + perfText,
+      data: {
+        asset: symbol, displayName: name,
+        signal: brainSignal ? { action: brainSignal.action, confidence: brainSignal.confidence } : null,
+        winRate: wr, totalTrades: closed.length,
+        recentDecisions: recent.slice(0,3).map(d => ({ action: d.action, result: d.result, profitPct: d.profitPct, createdAt: d.createdAt })),
+        news: news.map(n => ({ title: n.title, source: n.source, publishedAt: n.publishedAt })),
+      },
+    };
+  }
+
+  if (intent === 'performance') {
+    const [wins, losses] = await Promise.all([
+      AIDecision.countDocuments({ result: 'WIN' }),
+      AIDecision.countDocuments({ result: 'LOSS' }),
+    ]);
+    const total = wins + losses;
+    const wr    = total > 0 ? Math.round((wins / total) * 100) : 0;
+    const avgR  = await AIDecision.aggregate([{ $match: { result: { $in: ['WIN','LOSS'] }, profitPct: { $ne: null } } }, { $group: { _id: null, avg: { $avg: '$profitPct' } } }]);
+    const avg   = avgR[0]?.avg != null ? Math.round(avgR[0].avg * 10) / 10 : null;
+    const grade = wr >= 80 ? 'S-tier 🏆' : wr >= 70 ? 'A-grade 🎖️' : wr >= 60 ? 'B-grade 📈' : 'Building track record';
+    return {
+      type: 'performance',
+      text: 'The AI has a **' + wr + '% win rate** over **' + total + ' trades** — ' + grade + '.' + (avg != null ? ' Avg P&L: **' + (avg >= 0 ? '+' : '') + avg + '%**.' : ''),
+      data: { wins, losses, total, winRate: wr, avgProfitPct: avg },
+    };
+  }
+
+  if (intent === 'streak') {
+    const evaluated = await AIDecision.find({ result: { $in: ['WIN','LOSS'] } }).sort({ closedAt: -1 }).limit(50).lean();
+    let streak = 0;
+    for (const d of evaluated) { if (d.result === 'WIN') streak++; else break; }
+    const emoji = streak >= 10 ? '💎' : streak >= 5 ? '🔥' : streak >= 3 ? '⚡' : '';
+    return { type: 'streak', text: streak === 0 ? 'No active win streak — last trade was a loss.' : 'The AI is on a **' + streak + '-win streak** ' + emoji + '!', data: { currentStreak: streak } };
+  }
+
+  if (intent === 'sentiment') {
+    let macro = null;
+    try { const r = await axios.get(AI_URL + '/api/macro/snapshot', { timeout: 5000 }); if (r.data?.success !== false) macro = r.data; } catch (_) {}
+    const fg   = macro?.fear_greed?.value;
+    const sent = macro?.macro_sentiment;
+    const fgL  = fg == null ? '' : fg >= 75 ? 'Extreme Greed' : fg >= 55 ? 'Greed' : fg >= 45 ? 'Neutral' : fg >= 25 ? 'Fear' : 'Extreme Fear';
+    return {
+      type: 'sentiment',
+      text: fg != null ? 'Fear & Greed: **' + fg + '/100** (' + fgL + ').' + (sent ? ' Macro: **' + sent.toUpperCase() + '**.' : '') + ' ' + (fg >= 65 ? 'Markets are greedy — manage risk carefully.' : fg <= 35 ? 'Fear is elevated — watch for opportunities.' : 'Markets are neutral.') : 'Macro data unavailable right now.',
+      data: { fearGreed: fg, fearGreedLabel: fgL, macroSentiment: sent },
+    };
+  }
+
+  if (intent === 'news') {
+    const news = await NewsData.find({ impactScore: { $gte: 0.5 } }).sort({ publishedAt: -1 }).limit(5).lean();
+    if (!news.length) return { type: 'text', text: 'No high-impact news available right now.' };
+    const h = news[0];
+    const s = (h.sentiment?.label || h.sentiment || 'neutral').toLowerCase();
+    return { type: 'news', text: 'Latest: **"' + h.title + '"** (' + h.source + ') — ' + s + '.', data: { news: news.map(n => ({ title: n.title, source: n.source, sentiment: n.sentiment?.label || n.sentiment || 'neutral', publishedAt: n.publishedAt, url: n.url })) } };
+  }
+
+  if (intent === 'risk') {
+    const best = cached?.result?.best;
+    if (!best) return { type: 'text', text: 'Load the Brain report first to see risk levels.' };
+    return { type: 'risk', text: 'For **' + best.action + ' ' + (best.display_name || best.asset) + '**: Entry **$' + best.current_price + '**, SL **$' + best.stop_loss + '**, TP **$' + best.take_profit + '**, R:R **' + (best.risk_reward || 'N/A') + '**. Never risk more than 1-3% of capital per trade.', data: { action: best.action, entryPrice: best.current_price, stopLoss: best.stop_loss, takeProfit: best.take_profit, riskReward: best.risk_reward } };
+  }
+
+  if (intent === 'portfolio') {
+    const [open, closed] = await Promise.all([ AIDecision.countDocuments({ result: 'OPEN' }), AIDecision.countDocuments({ result: { $in: ['WIN','LOSS'] } }) ]);
+    return { type: 'text', text: 'The AI has **' + open + ' open trade' + (open !== 1 ? 's' : '') + '** and **' + closed + ' closed trades** total. Check the Portfolio tab for the full breakdown.', data: { openTrades: open, closedTrades: closed } };
+  }
+
+  return { type: 'help', text: 'I didn\'t quite understand that. Try one of the suggestions below!', data: { suggestions: ['What should I buy?', 'Market sentiment?', 'AI win rate?', 'Tell me about Bitcoin', 'Current streak?', 'Latest news'] } };
 }
