@@ -365,6 +365,12 @@ class _ActionReportCardState extends ConsumerState<_ActionReportCard> {
             ]),
           ),
           const SizedBox(height: 14),
+          // Entry validity vs live price
+          _EntryValidityRow(
+            asset:      r.bestAsset,
+            entryPrice: r.entryPrice,
+            action:     r.action,
+          ),
           const Divider(color: AppColors.border, height: 1),
         ],
 
@@ -1069,6 +1075,50 @@ class _MacroChip extends StatelessWidget {
     child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
         color: color)),
   );
+}
+
+class _EntryValidityRow extends ConsumerWidget {
+  final String  asset;
+  final double? entryPrice;
+  final String  action;
+  const _EntryValidityRow({
+    required this.asset, required this.entryPrice, required this.action});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (entryPrice == null) return const SizedBox.shrink();
+    final priceAsync = ref.watch(livePriceProvider(asset));
+    final price = priceAsync.valueOrNull;
+    if (price == null) return const SizedBox.shrink();
+
+    final diff    = price - entryPrice!;
+    final pct     = (diff / entryPrice!) * 100;
+    final isBuy   = action == 'BUY';
+    // For BUY: positive diff means price above entry (missed), negative = still below (good)
+    // For SELL: negative diff means price below entry (missed), positive = still above (good)
+    final missed  = isBuy ? pct > 2 : pct < -2;
+    final optimal = isBuy ? pct < 0 : pct > 0;
+    final color   = missed ? AppColors.warning : optimal ? AppColors.buy : AppColors.hold;
+    final icon    = missed ? Icons.warning_amber_rounded
+                 : optimal ? Icons.check_circle_outline
+                 : Icons.radio_button_unchecked;
+    final label   = missed
+        ? 'Price ${isBuy ? "above" : "below"} entry by ${pct.abs().toStringAsFixed(1)}% — entry may be stale'
+        : optimal
+            ? 'Price ${isBuy ? "below" : "above"} entry — good entry zone'
+            : 'Price near entry (${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(1)}%)';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+      child: Row(children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 6),
+        Expanded(child: Text(label,
+            style: TextStyle(fontSize: 11, color: color,
+                fontWeight: FontWeight.w500))),
+      ]),
+    );
+  }
 }
 
 class _LivePriceBadge extends ConsumerWidget {
