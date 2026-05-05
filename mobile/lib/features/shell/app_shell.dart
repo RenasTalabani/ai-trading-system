@@ -12,16 +12,16 @@ class AppShell extends ConsumerWidget {
     _TabItem(label: 'Brain',     icon: Icons.bolt_outlined,          path: '/'),
     _TabItem(label: 'Portfolio', icon: Icons.bar_chart_outlined,     path: '/performance'),
     _TabItem(label: 'Advisor',   icon: Icons.psychology_outlined,    path: '/advisor'),
+    _TabItem(label: 'Watchlist', icon: Icons.remove_red_eye_outlined, path: '/watchlist'),
     _TabItem(label: 'Alerts',    icon: Icons.notifications_none,     path: '/notifications'),
-    _TabItem(label: 'Settings',  icon: Icons.settings_outlined,      path: '/settings'),
   ];
 
   int _indexFor(BuildContext context) {
     final loc = GoRouterState.of(context).matchedLocation;
     if (loc.startsWith('/performance'))   return 1;
     if (loc.startsWith('/advisor'))       return 2;
-    if (loc.startsWith('/notifications')) return 3;
-    if (loc.startsWith('/settings'))      return 4;
+    if (loc.startsWith('/watchlist'))     return 3;
+    if (loc.startsWith('/notifications')) return 4;
     return 0;
   }
 
@@ -47,7 +47,7 @@ class AppShell extends ConsumerWidget {
           destinations: _tabs.asMap().entries.map((e) {
             final i   = e.key;
             final tab = e.value;
-            final showBadge = i == 3 && unread > 0;
+            final showBadge = i == 4 && unread > 0;
             return NavigationDestination(
               icon: showBadge
                   ? Badge(label: Text('$unread'),

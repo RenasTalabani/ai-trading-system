@@ -7,6 +7,9 @@ import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/price_alerts_provider.dart';
+import 'package:go_router/go_router.dart';
+import '../../core/providers/brain_stats_provider.dart';
+import 'achievements_sheet.dart';
 import 'my_trades_sheet.dart';
 import 'risk_calculator_sheet.dart';
 
@@ -133,7 +136,21 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
                       color: AppColors.textSecondary),
                   onPressed: _refresh,
                 ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined, size: 20,
+                      color: AppColors.textSecondary),
+                  onPressed: () => context.push('/settings'),
+                  tooltip: 'Settings',
+                ),
               ]),
+            ),
+
+            // ── STREAK BANNER ───────────────────────────────────────────────
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _StreakBanner(),
+              ),
             ),
 
             // ── REPORT 1: WHAT TO DO ────────────────────────────────────────
@@ -1570,6 +1587,98 @@ class _LoadingCard extends StatelessWidget {
     child: const Center(child: CircularProgressIndicator(
         color: AppColors.primary, strokeWidth: 2)),
   );
+}
+
+// ── Streak Banner ─────────────────────────────────────────────────────────────
+
+class _StreakBanner extends ConsumerWidget {
+  const _StreakBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final statsAsync = ref.watch(brainStatsProvider);
+
+    return statsAsync.whenOrNull(
+      data: (s) {
+        if (s.totalEvaluated == 0) return const SizedBox.shrink();
+
+        final hasStreak = s.currentStreak >= 3;
+        final streakColor = s.currentStreak >= 10 ? AppColors.hold
+            : s.currentStreak >= 5 ? const Color(0xFFFF6B35)
+            : AppColors.buy;
+
+        return GestureDetector(
+          onTap: () => showAchievementsSheet(context),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: hasStreak
+                  ? streakColor.withValues(alpha: 0.08)
+                  : AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: hasStreak
+                    ? streakColor.withValues(alpha: 0.3)
+                    : AppColors.border,
+              ),
+            ),
+            child: Row(children: [
+              // Streak indicator
+              if (hasStreak) ...[
+                Text(
+                  s.currentStreak >= 10 ? '💎' : s.currentStreak >= 5 ? '🔥' : '⚡',
+                  style: const TextStyle(fontSize: 18),
+                ),
+                const SizedBox(width: 8),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${s.currentStreak}-Win Streak',
+                      style: TextStyle(color: streakColor,
+                          fontWeight: FontWeight.w800, fontSize: 13)),
+                  Text('best: ${s.bestStreak}',
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                ]),
+              ] else ...[
+                const Icon(Icons.military_tech_outlined,
+                    size: 18, color: AppColors.textMuted),
+                const SizedBox(width: 8),
+                const Text('No active streak',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 13)),
+              ],
+
+              const Spacer(),
+
+              // Quick stats
+              _StreakStat(label: 'Wins', value: '${s.totalWins}',
+                  color: AppColors.buy),
+              const SizedBox(width: 14),
+              _StreakStat(label: 'Accuracy', value: '${s.winRate}%',
+                  color: s.winRate >= 60 ? AppColors.buy : AppColors.hold),
+              if (s.weeklyAccuracy != null) ...[
+                const SizedBox(width: 14),
+                _StreakStat(label: '7d', value: '${s.weeklyAccuracy}%',
+                    color: (s.weeklyAccuracy! >= 60) ? AppColors.buy : AppColors.hold),
+              ],
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right, size: 16, color: AppColors.textMuted),
+            ]),
+          ),
+        );
+      },
+    ) ?? const SizedBox.shrink();
+  }
+}
+
+class _StreakStat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _StreakStat({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    Text(value, style: TextStyle(color: color,
+        fontWeight: FontWeight.w800, fontSize: 13)),
+    Text(label, style: const TextStyle(color: AppColors.textMuted, fontSize: 9)),
+  ]);
 }
 
 class _ErrorCard extends StatelessWidget {

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../../core/providers/brain_analytics_provider.dart';
 import '../../core/providers/brain_provider.dart';
+import '../../core/providers/brain_stats_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../brain/achievements_sheet.dart';
 import '../brain/my_trades_sheet.dart';
 
 class VirtualPerformanceScreen extends ConsumerWidget {
@@ -61,6 +64,22 @@ class VirtualPerformanceScreen extends ConsumerWidget {
                   ),
                 ),
                 data: (r) => _PerformanceBody(report: r),
+              ),
+            ),
+
+            // ── Asset Analytics ───────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: const _AssetAnalyticsCard(),
+              ),
+            ),
+
+            // ── AI Performance Calendar ───────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _AiCalendarCard(),
               ),
             ),
 
@@ -773,6 +792,408 @@ class _FolStat extends StatelessWidget {
       Text(label,
           style: const TextStyle(fontSize: 9, color: AppColors.textMuted)),
     ]),
+  );
+}
+
+// ── Asset Analytics Card ──────────────────────────────────────────────────────
+
+class _AssetAnalyticsCard extends ConsumerWidget {
+  const _AssetAnalyticsCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final analyticsAsync = ref.watch(brainAnalyticsProvider);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            const Icon(Icons.bar_chart_rounded, size: 14, color: AppColors.primary),
+            const SizedBox(width: 8),
+            const Text('AI Performance by Asset',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const Spacer(),
+            analyticsAsync.whenOrNull(data: (a) => Text(
+              '${a.assets.length} assets',
+              style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+            )) ?? const SizedBox.shrink(),
+          ]),
+        ),
+
+        const SizedBox(height: 12),
+
+        analyticsAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator(
+                color: AppColors.primary, strokeWidth: 2)),
+          ),
+          error: (_, __) => const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Text('Analytics unavailable',
+                style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+          ),
+          data: (analytics) {
+            if (analytics.assets.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text('No evaluated trades yet',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+              );
+            }
+
+            return Column(children: [
+              // Overall summary strip
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(children: [
+                  _AnaStat('Total Trades', '${analytics.overall.total}',
+                      AppColors.primary),
+                  const SizedBox(width: 8),
+                  _AnaStat('Overall W%', '${analytics.overall.winRate}%',
+                      analytics.overall.winRate >= 60
+                          ? AppColors.buy : AppColors.sell),
+                  const SizedBox(width: 8),
+                  if (analytics.overall.avgProfitPct != null)
+                    _AnaStat('Avg P&L',
+                        '${analytics.overall.avgProfitPct! >= 0 ? '+' : ''}${analytics.overall.avgProfitPct!.toStringAsFixed(1)}%',
+                        analytics.overall.avgProfitPct! >= 0
+                            ? AppColors.buy : AppColors.sell),
+                ]),
+              ),
+
+              const Divider(color: AppColors.border, height: 1),
+
+              // Per-asset rows
+              ...analytics.assets.map((a) => _AssetAnalyticsRow(asset: a)),
+
+              const SizedBox(height: 4),
+            ]);
+          },
+        ),
+      ]),
+    );
+  }
+}
+
+class _AssetAnalyticsRow extends StatelessWidget {
+  final AssetAnalytics asset;
+  const _AssetAnalyticsRow({required this.asset});
+
+  Color get _gradeColor {
+    switch (asset.grade) {
+      case 'S': return const Color(0xFFFFD700);
+      case 'A': return AppColors.buy;
+      case 'B': return AppColors.primary;
+      case 'C': return AppColors.hold;
+      default:  return AppColors.sell;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final winFrac = asset.total > 0 ? asset.wins / asset.total : 0.0;
+    final profitPos = asset.avgProfitPct >= 0;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(children: [
+        // Grade badge
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: _gradeColor.withValues(alpha: 0.15),
+            shape: BoxShape.circle,
+            border: Border.all(color: _gradeColor.withValues(alpha: 0.4)),
+          ),
+          child: Center(
+            child: Text(asset.grade,
+                style: TextStyle(color: _gradeColor,
+                    fontSize: 11, fontWeight: FontWeight.w900)),
+          ),
+        ),
+        const SizedBox(width: 10),
+
+        // Name + win/loss bar
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(asset.displayName,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary)),
+          const SizedBox(height: 4),
+          Row(children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: LinearProgressIndicator(
+                  value: winFrac,
+                  backgroundColor: AppColors.sell.withValues(alpha: 0.25),
+                  valueColor: AlwaysStoppedAnimation(
+                      AppColors.buy.withValues(alpha: 0.8)),
+                  minHeight: 4,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text('${asset.wins}W ${asset.losses}L',
+                style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          ]),
+        ])),
+        const SizedBox(width: 12),
+
+        // Win rate
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('${asset.winRate}%',
+              style: TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800,
+                  color: asset.winRate >= 60 ? AppColors.buy : AppColors.sell)),
+          Text(
+            '${profitPos ? '+' : ''}${asset.avgProfitPct.toStringAsFixed(1)}% avg',
+            style: TextStyle(
+                fontSize: 10,
+                color: profitPos ? AppColors.buy : AppColors.sell),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _AnaStat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _AnaStat(this.label, this.value, this.color);
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(children: [
+        Text(value, style: TextStyle(color: color,
+            fontWeight: FontWeight.w800, fontSize: 14)),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(
+            color: AppColors.textMuted, fontSize: 9)),
+      ]),
+    ),
+  );
+}
+
+// ── AI Performance Calendar ───────────────────────────────────────────────────
+
+class _AiCalendarCard extends ConsumerWidget {
+  const _AiCalendarCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final statsAsync = ref.watch(brainStatsProvider);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header row
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 0),
+          child: Row(children: [
+            const Icon(Icons.calendar_today_outlined,
+                size: 14, color: AppColors.primary),
+            const SizedBox(width: 8),
+            const Text('30-Day Performance',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => showAchievementsSheet(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('🏆', style: TextStyle(fontSize: 11)),
+                  SizedBox(width: 4),
+                  Text('Achievements',
+                      style: TextStyle(fontSize: 11, color: AppColors.primary,
+                          fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+
+        const SizedBox(height: 14),
+
+        statsAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.primary))),
+          ),
+          error: (_, __) => const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Text('Calendar unavailable',
+                style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+          ),
+          data: (stats) => Column(children: [
+            // Weekly accuracy strip
+            if (stats.weeklyAccuracy != null) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(children: [
+                  _CalStat('This Week', '${stats.weeklyAccuracy}%',
+                      stats.weeklyAccuracy! >= 60 ? AppColors.buy : AppColors.sell),
+                  const SizedBox(width: 8),
+                  _CalStat('Best Streak', '${stats.bestStreak}🔥',
+                      AppColors.hold),
+                  const SizedBox(width: 8),
+                  _CalStat('All-time W%', '${stats.winRate}%',
+                      stats.winRate >= 60 ? AppColors.buy : AppColors.sell),
+                ]),
+              ),
+            ],
+
+            // Heatmap grid
+            if (stats.heatmap.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text('No closed trades in the last 30 days',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: _HeatmapGrid(days: stats.heatmap),
+              ),
+
+            // Legend
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Row(children: [
+                _LegendDot(AppColors.buy,  'Win'),
+                const SizedBox(width: 12),
+                _LegendDot(AppColors.sell, 'Loss'),
+                const SizedBox(width: 12),
+                _LegendDot(AppColors.hold, 'Mixed'),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _HeatmapGrid extends StatelessWidget {
+  final List<HeatmapDay> days;
+  const _HeatmapGrid({required this.days});
+
+  @override
+  Widget build(BuildContext context) {
+    // Build a map of date → day for fast lookup
+    final map = { for (final d in days) d.date: d };
+
+    // Generate last 35 days (5 weeks) as a grid
+    final now   = DateTime.now();
+    final cells  = List.generate(35, (i) {
+      final date = now.subtract(Duration(days: 34 - i));
+      final key  = '${date.year}-${date.month.toString().padLeft(2,'0')}-${date.day.toString().padLeft(2,'0')}';
+      return (date: date, day: map[key]);
+    });
+
+    return Wrap(
+      spacing: 5,
+      runSpacing: 5,
+      children: cells.map((c) {
+        final d = c.day;
+        Color color;
+        if (d == null) {
+          color = AppColors.surface;
+        } else if (d.result == 'WIN') {
+          color = AppColors.buy.withValues(alpha: 0.7);
+        } else if (d.result == 'LOSS') {
+          color = AppColors.sell.withValues(alpha: 0.7);
+        } else {
+          color = AppColors.hold.withValues(alpha: 0.7);
+        }
+
+        return Tooltip(
+          message: d != null
+              ? '${c.date.day}/${c.date.month} · ${d.wins}W ${d.losses}L'
+              : '${c.date.day}/${c.date.month}',
+          child: Container(
+            width: 24, height: 24,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _CalStat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _CalStat(this.label, this.value, this.color);
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(children: [
+        Text(value, style: TextStyle(color: color,
+            fontWeight: FontWeight.w800, fontSize: 15)),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(
+            color: AppColors.textMuted, fontSize: 9)),
+      ]),
+    ),
+  );
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color  color;
+  final String label;
+  const _LegendDot(this.color, this.label);
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(width: 10, height: 10,
+          decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(2))),
+      const SizedBox(width: 4),
+      Text(label, style: const TextStyle(
+          color: AppColors.textMuted, fontSize: 10)),
+    ],
   );
 }
 

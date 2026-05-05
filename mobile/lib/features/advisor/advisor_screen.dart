@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/advisor_provider.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
@@ -17,11 +18,11 @@ class AdvisorScreen extends ConsumerWidget {
       backgroundColor: AppColors.background,
       body: CustomScrollView(
         slivers: [
-          SliverAppBar(
+          const SliverAppBar(
             floating: true,
             snap: true,
             backgroundColor: AppColors.background,
-            title: const Text('Deep Advisor',
+            title: Text('Deep Advisor',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                     color: AppColors.textPrimary)),
           ),
@@ -220,6 +221,12 @@ class AdvisorScreen extends ConsumerWidget {
                   child: _TimeframeCard(rec: state.result!.timeframes[i]),
                 ),
                 childCount: state.result!.timeframes.length,
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: _AssetNewsCard(asset: form.asset),
               ),
             ),
           ],
@@ -581,4 +588,99 @@ Color _actionColor(String action) {
   if (action == 'BUY')  return AppColors.buy;
   if (action == 'SELL') return AppColors.sell;
   return AppColors.hold;
+}
+
+// ── Asset news card ───────────────────────────────────────────────────────────
+
+class _AssetNewsCard extends ConsumerWidget {
+  final String asset;
+  const _AssetNewsCard({required this.asset});
+
+  // Strip USDT suffix for the API call — endpoint expects e.g. "BTCUSDT" or "BTC"
+  String get _apiAsset => asset;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final newsAsync = ref.watch(assetNewsProvider(_apiAsset));
+    return newsAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error:   (_, __) => const SizedBox.shrink(),
+      data: (items) {
+        if (items.isEmpty) return const SizedBox.shrink();
+        final base = asset.replaceAll('USDT', '');
+        return Container(
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Row(children: [
+                const Icon(Icons.newspaper_outlined, size: 13,
+                    color: AppColors.textMuted),
+                const SizedBox(width: 6),
+                Text('$base News',
+                    style: const TextStyle(fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const Spacer(),
+                const Text('last 24h',
+                    style: TextStyle(fontSize: 10,
+                        color: AppColors.textMuted)),
+              ]),
+            ),
+            const Divider(color: AppColors.border, height: 1),
+            ...items.map((n) => _AdvisorNewsRow(item: n)),
+            const SizedBox(height: 4),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+class _AdvisorNewsRow extends StatelessWidget {
+  final NewsItem item;
+  const _AdvisorNewsRow({required this.item});
+
+  Color get _c {
+    switch (item.sentiment.toLowerCase()) {
+      case 'bullish': return AppColors.buy;
+      case 'bearish': return AppColors.sell;
+      default:        return AppColors.hold;
+    }
+  }
+
+  String _ago(DateTime dt) {
+    final d = DateTime.now().difference(dt);
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    if (d.inHours < 24)   return '${d.inHours}h';
+    return '${d.inDays}d';
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: item.url != null
+        ? () => launchUrl(Uri.parse(item.url!),
+              mode: LaunchMode.externalApplication)
+        : null,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(width: 3, height: 36,
+            decoration: BoxDecoration(
+                color: _c, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(width: 10),
+        Expanded(child: Text(item.title,
+            maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: AppColors.textPrimary,
+                height: 1.4))),
+        const SizedBox(width: 8),
+        Text(_ago(item.publishedAt),
+            style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+      ]),
+    ),
+  );
 }

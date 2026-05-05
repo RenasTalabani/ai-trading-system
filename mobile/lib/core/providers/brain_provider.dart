@@ -243,6 +243,20 @@ class NewsItem {
   );
 }
 
+// News for a specific asset — used in Advisor screen
+final assetNewsProvider =
+    FutureProvider.autoDispose.family<List<NewsItem>, String>((ref, asset) async {
+  if (asset.isEmpty) return [];
+  try {
+    final resp = await ApiService.dio.get('news/asset/$asset',
+        queryParameters: {'limit': 5, 'hours': 24});
+    final list = resp.data['news'] as List? ?? [];
+    return list.map((j) => NewsItem.fromJson(j as Map<String, dynamic>)).toList();
+  } catch (_) {
+    return [];
+  }
+});
+
 // Returns up to `limit` high-impact news items; used by both brain screen and news tab
 final highImpactNewsProvider =
     FutureProvider.autoDispose.family<List<NewsItem>, int>((ref, limit) async {
