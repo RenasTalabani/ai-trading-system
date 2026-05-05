@@ -288,6 +288,74 @@ exports.brainStats = async (req, res) => {
   }
 };
 
+// ── GET /api/v1/brain/analytics ──────────────────────────────────────────────
+// Per-asset AI performance breakdown
+exports.brainAnalytics = async (req, res) => {
+  try {
+    const byAsset = await AIDecision.aggregate([
+      { $match: { result: { $in: ['WIN', 'LOSS'] }, profitPct: { $ne: null } } },
+      { $group: {
+        _id: '$asset',
+        displayName:   { $last: '$displayName' },
+        assetClass:    { $last: '$assetClass' },
+        total:         { $sum: 1 },
+        wins:          { $sum: { $cond: [{ $eq: ['$result', 'WIN'] }, 1, 0] } },
+        avgProfitPct:  { $avg: '$profitPct' },
+        bestProfitPct: { $max: '$profitPct' },
+        worstProfitPct:{ $min: '$profitPct' },
+        lastSignal:    { $last: '$action' },
+        lastAt:        { $last: '$createdAt' },
+      }},
+      { $addFields: {
+        winRate: { $multiply: [{ $divide: ['$wins', '$total'] }, 100] },
+        losses:  { $subtract: ['$total', '$wins'] },
+      }},
+      { $sort: { winRate: -1, total: -1 } },
+    ]);
+
+    const overall = await AIDecision.aggregate([
+      { $match: { result: { $in: ['WIN', 'LOSS'] } } },
+      { $group: {
+        _id: null,
+        total: { $sum: 1 },
+        wins:  { $sum: { $cond: [{ $eq: ['$result', 'WIN'] }, 1, 0] } },
+        avgProfitPct: { $avg: '$profitPct' },
+      }},
+    ]);
+
+    const ov = overall[0] || { total: 0, wins: 0, avgProfitPct: 0 };
+
+    res.json({
+      success: true,
+      overall: {
+        total:        ov.total,
+        wins:         ov.wins,
+        losses:       ov.total - ov.wins,
+        winRate:      ov.total > 0 ? Math.round((ov.wins / ov.total) * 100) : 0,
+        avgProfitPct: ov.avgProfitPct != null
+          ? Math.round(ov.avgProfitPct * 100) / 100 : null,
+      },
+      assets: byAsset.map(a => ({
+        asset:          a._id,
+        displayName:    a.displayName || a._id,
+        assetClass:     a.assetClass  || 'crypto',
+        total:          a.total,
+        wins:           a.wins,
+        losses:         a.losses,
+        winRate:        Math.round(a.winRate),
+        avgProfitPct:   Math.round(a.avgProfitPct * 100) / 100,
+        bestProfitPct:  Math.round(a.bestProfitPct * 100) / 100,
+        worstProfitPct: Math.round(a.worstProfitPct * 100) / 100,
+        lastSignal:     a.lastSignal,
+        lastAt:         a.lastAt,
+      })),
+    });
+  } catch (err) {
+    logger.error('[Brain] analytics error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 function _computeAchievements({ total, wins, losses, winRate, currentStreak, bestStreak, bestProfitTrade }) {
   return [
     {
