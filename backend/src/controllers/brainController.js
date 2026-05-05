@@ -165,9 +165,14 @@ exports.performanceReport = async (req, res) => {
     const netPct     = Math.round((netProfit / startingBalance) * 10000) / 100;
     const winRate    = Math.round((wins / total) * 100);
 
-    // Recent 10 decisions for display
+    // Recent 20 decisions for display
     const recent = await AIDecision.find({ result: { $ne: 'SKIPPED' } })
-      .sort({ createdAt: -1 }).limit(10).lean();
+      .sort({ createdAt: -1 }).limit(20).lean();
+
+    const closedPnl = recent.filter(d => d.profitPct != null);
+    const avgProfitPct = closedPnl.length > 0
+      ? Math.round(closedPnl.reduce((s, d) => s + d.profitPct, 0) / closedPnl.length * 100) / 100
+      : null;
 
     res.json({
       success:          true,
@@ -183,6 +188,7 @@ exports.performanceReport = async (req, res) => {
       openTrades:       open,
       winRate,
       accuracy:         winRate,
+      avgProfitPct,
       equityCurve,
       recentDecisions:  recent.map(d => ({
         id:          d._id,

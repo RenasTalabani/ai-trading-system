@@ -126,6 +126,7 @@ class PerformanceReport {
   final int    openTrades;
   final int    winRate;
   final int    accuracy;
+  final double? avgProfitPct;
   final List<EquityPoint>    equityCurve;
   final List<RecentDecision> recentDecisions;
   final String? message;
@@ -136,7 +137,8 @@ class PerformanceReport {
     required this.last24hProfit, required this.last7dProfit,
     required this.totalTrades, required this.winTrades, required this.lossTrades,
     required this.openTrades, required this.winRate, required this.accuracy,
-    required this.equityCurve, required this.recentDecisions, this.message,
+    required this.equityCurve, required this.recentDecisions,
+    this.avgProfitPct, this.message,
   });
 
   factory PerformanceReport.fromJson(Map<String, dynamic> j) => PerformanceReport(
@@ -152,6 +154,7 @@ class PerformanceReport {
     openTrades:       (j['openTrades']       as num?)?.toInt()    ?? 0,
     winRate:          (j['winRate']          as num?)?.toInt()    ?? 0,
     accuracy:         (j['accuracy']         as num?)?.toInt()    ?? 0,
+    avgProfitPct:     (j['avgProfitPct']     as num?)?.toDouble(),
     message:          j['message']?.toString(),
     equityCurve:      (j['equityCurve'] as List? ?? [])
         .map((p) => EquityPoint.fromJson(p as Map<String, dynamic>))

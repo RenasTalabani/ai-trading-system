@@ -65,9 +65,9 @@ class VirtualPerformanceScreen extends ConsumerWidget {
             ),
 
             // ── My Follows section ────────────────────────────────────────
-            SliverToBoxAdapter(
+            const SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: _MyFollowsCard(),
               ),
             ),
@@ -231,7 +231,7 @@ class _PerformanceBody extends StatelessWidget {
         // ── Trades grid ───────────────────────────────────────────────────
         Row(children: [
           Expanded(child: _StatBox(
-            label: 'Total Trades',
+            label: 'Total',
             child: Text('${r.totalTrades}',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
                     color: AppColors.primary)),
@@ -251,12 +251,22 @@ class _PerformanceBody extends StatelessWidget {
                     color: AppColors.sell)),
           )),
           const SizedBox(width: 8),
-          Expanded(child: _StatBox(
-            label: 'Open',
-            child: Text('${r.openTrades}',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
-                    color: AppColors.hold)),
-          )),
+          if (r.avgProfitPct != null)
+            Expanded(child: _StatBox(
+              label: 'Avg P&L',
+              child: Text(
+                '${r.avgProfitPct! >= 0 ? '+' : ''}${r.avgProfitPct!.toStringAsFixed(1)}%',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                    color: r.avgProfitPct! >= 0 ? AppColors.buy : AppColors.sell),
+              ),
+            ))
+          else
+            Expanded(child: _StatBox(
+              label: 'Open',
+              child: Text('${r.openTrades}',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                      color: AppColors.hold)),
+            )),
         ]),
 
         const SizedBox(height: 12),
@@ -726,13 +736,13 @@ class _MyFollowsCard extends ConsumerWidget {
 
         // Empty state
         if (state.follows.isEmpty)
-          Padding(
-            padding: const EdgeInsets.all(20),
+          const Padding(
+            padding: EdgeInsets.all(20),
             child: Row(children: [
-              const Icon(Icons.info_outline, size: 16,
+              Icon(Icons.info_outline, size: 16,
                   color: AppColors.textMuted),
-              const SizedBox(width: 10),
-              const Expanded(
+              SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'Tap "Follow This Trade" on the Brain screen to track your trades here.',
                   style: TextStyle(fontSize: 12,
