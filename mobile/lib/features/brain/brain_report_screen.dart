@@ -273,13 +273,15 @@ class _ActionReportCardState extends ConsumerState<_ActionReportCard> {
                 Text(r.displayName,
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900,
                         color: AppColors.textPrimary)),
-                const SizedBox(height: 2),
+                const SizedBox(height: 4),
                 Row(children: [
                   _ClassBadge(cls: r.assetClass),
                   const SizedBox(width: 6),
                   Text(r.timeframe,
                       style: const TextStyle(fontSize: 11,
                           color: AppColors.textSecondary)),
+                  const SizedBox(width: 8),
+                  _LivePriceBadge(asset: r.bestAsset),
                 ]),
               ],
             )),
@@ -1033,6 +1035,53 @@ class _MacroChip extends StatelessWidget {
     child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
         color: color)),
   );
+}
+
+class _LivePriceBadge extends ConsumerWidget {
+  final String asset;
+  const _LivePriceBadge({required this.asset});
+
+  String _fmt(double v) {
+    if (v >= 10000) return '\$${v.toStringAsFixed(0)}';
+    if (v >= 100)   return '\$${v.toStringAsFixed(1)}';
+    if (v >= 1)     return '\$${v.toStringAsFixed(2)}';
+    return '\$${v.toStringAsFixed(4)}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final priceAsync = ref.watch(livePriceProvider(asset));
+    return priceAsync.when(
+      loading: () => const SizedBox(
+        width: 10, height: 10,
+        child: CircularProgressIndicator(strokeWidth: 1.5,
+            color: AppColors.textMuted),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (price) {
+        if (price == null) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 5, height: 5,
+              decoration: const BoxDecoration(
+                  color: AppColors.buy, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 4),
+            Text(_fmt(price),
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                    color: AppColors.primary)),
+          ]),
+        );
+      },
+    );
+  }
 }
 
 class _PickChip extends StatelessWidget {

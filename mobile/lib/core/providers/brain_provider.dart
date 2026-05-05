@@ -169,6 +169,18 @@ final brainActionProvider = FutureProvider.autoDispose<ActionReport>((ref) async
   return ActionReport.fromJson(resp.data as Map<String, dynamic>);
 });
 
+// Live price for a given asset symbol — auto-refreshes every 30s
+final livePriceProvider =
+    FutureProvider.autoDispose.family<double?, String>((ref, asset) async {
+  if (asset.isEmpty) return null;
+  try {
+    final resp = await ApiService.dio.get('market/price/$asset');
+    return (resp.data['price'] as num?)?.toDouble();
+  } catch (_) {
+    return null;
+  }
+});
+
 class _CapitalNotifier extends StateNotifier<double> {
   static const _key = 'brain_capital';
   static const _storage = FlutterSecureStorage();
