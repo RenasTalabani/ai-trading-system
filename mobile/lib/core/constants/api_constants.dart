@@ -5,7 +5,7 @@ class ApiConstants {
   //     --dart-define=WS_URL=wss://YOUR_BACKEND.railway.app/ws
   static const String _base = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:5000', // Android emulator → localhost
+    defaultValue: 'https://distinguished-empathy-production-5d79.up.railway.app',
   );
 
   static const String baseUrl = _base;
@@ -51,6 +51,6 @@ class ApiConstants {
   // WebSocket
   static const String wsUrl = String.fromEnvironment(
     'WS_URL',
-    defaultValue: 'ws://10.0.2.2:5000/ws',
+    defaultValue: 'wss://distinguished-empathy-production-5d79.up.railway.app/ws',
   );
 }
