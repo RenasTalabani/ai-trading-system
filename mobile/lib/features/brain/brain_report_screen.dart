@@ -1313,6 +1313,18 @@ class _ErrorCard extends StatelessWidget {
   final VoidCallback onRetry;
   const _ErrorCard({required this.message, required this.onRetry});
 
+  String get _friendlyMessage {
+    final m = message.toLowerCase();
+    if (m.contains('connection') || m.contains('socket') || m.contains('network')) {
+      return 'No connection — check your internet';
+    }
+    if (m.contains('timeout')) return 'Request timed out';
+    if (m.contains('401') || m.contains('unauthorized')) return 'Session expired — try signing out';
+    if (m.contains('404')) return 'Report not found on server';
+    if (m.contains('500')) return 'Server error — try again shortly';
+    return 'Could not load report';
+  }
+
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(20),
@@ -1324,8 +1336,9 @@ class _ErrorCard extends StatelessWidget {
     child: Column(children: [
       const Icon(Icons.wifi_off, size: 36, color: AppColors.textMuted),
       const SizedBox(height: 10),
-      Text(message, textAlign: TextAlign.center,
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+      Text(_friendlyMessage, textAlign: TextAlign.center,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 13,
+              fontWeight: FontWeight.w500)),
       const SizedBox(height: 14),
       TextButton.icon(
         onPressed: onRetry,
