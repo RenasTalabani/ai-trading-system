@@ -5,6 +5,7 @@ import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'my_trades_sheet.dart';
+import 'risk_calculator_sheet.dart';
 
 bool _isWarmingUp(Object e) {
   final s = e.toString().toLowerCase();
@@ -446,11 +447,33 @@ class _ActionReportCardState extends ConsumerState<_ActionReportCard> {
           ),
         ],
 
-        // ── Follow This Trade button ─────────────────────────────────────
+        // ── Follow This Trade + Risk Calculator ──────────────────────────
         const Divider(color: AppColors.border, height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-          child: _FollowButton(report: widget.report),
+          child: Row(children: [
+            Expanded(child: _FollowButton(report: widget.report)),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: () => showRiskCalculatorSheet(
+                context,
+                entryPrice: widget.report.entryPrice,
+                stopLoss:   widget.report.stopLoss,
+                takeProfit: widget.report.takeProfit,
+                asset:      widget.report.displayName,
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: const Icon(Icons.calculate_outlined,
+                    size: 20, color: AppColors.textSecondary),
+              ),
+            ),
+          ]),
         ),
 
         if (r.generatedAt != null) ...[
