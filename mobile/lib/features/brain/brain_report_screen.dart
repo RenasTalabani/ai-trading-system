@@ -195,6 +195,27 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
               ),
             ),
 
+            // ── REPORT 3: MARKET PULSE ──────────────────────────────────
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 24, 16, 0),
+                child: _SectionHeader(
+                  label: 'REPORT 3',
+                  title: 'Market Pulse',
+                  icon: Icons.bar_chart,
+                  color: AppColors.warning,
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: _MarketPulseCard(
+                  actionReport: actionAsync.valueOrNull,
+                ),
+              ),
+            ),
+
             const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
           ],
         ),
@@ -1205,6 +1226,238 @@ class _PickChip extends StatelessWidget {
       ]),
     );
   }
+}
+
+// ── Report 3: Market Pulse ────────────────────────────────────────────────────
+
+class _MarketPulseCard extends ConsumerWidget {
+  final ActionReport? actionReport;
+  const _MarketPulseCard({this.actionReport});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final newsAsync = ref.watch(highImpactNewsProvider);
+    final fg        = actionReport?.fearGreed;
+    final sentiment = actionReport?.macroSentiment;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+        // ── Fear & Greed + sentiment ─────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(children: [
+            if (fg != null) ...[
+              _FearGreedGauge(value: fg),
+              const SizedBox(width: 20),
+            ],
+            Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Market Sentiment',
+                    style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                const SizedBox(height: 6),
+                if (sentiment != null) ...[
+                  _SentimentBadge(sentiment: sentiment),
+                  const SizedBox(height: 8),
+                ],
+                if (fg != null)
+                  Text(_fgLabel(fg),
+                      style: const TextStyle(fontSize: 12,
+                          color: AppColors.textSecondary, height: 1.4)),
+              ],
+            )),
+          ]),
+        ),
+
+        // ── News headlines ───────────────────────────────────────────────
+        const Divider(color: AppColors.border, height: 1),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 12, 20, 4),
+          child: Row(children: [
+            Icon(Icons.newspaper_outlined, size: 13,
+                color: AppColors.textMuted),
+            SizedBox(width: 6),
+            Text('High-Impact News',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+          ]),
+        ),
+        newsAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: SizedBox(width: 16, height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.primary))),
+          ),
+          error: (_, __) => const Padding(
+            padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
+            child: Text('News unavailable',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+          ),
+          data: (items) => items.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
+                  child: Text('No high-impact news in the last 12h',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                )
+              : Column(children: [
+                  ...items.take(4).map((n) => _NewsRow(item: n)),
+                  const SizedBox(height: 4),
+                ]),
+        ),
+      ]),
+    );
+  }
+
+  String _fgLabel(int v) {
+    if (v >= 75) return 'Extreme greed — market may be overheated';
+    if (v >= 55) return 'Greed — risk-on sentiment dominant';
+    if (v >= 45) return 'Neutral — market in equilibrium';
+    if (v >= 25) return 'Fear — cautious sentiment, potential opportunity';
+    return 'Extreme fear — capitulation possible';
+  }
+}
+
+class _FearGreedGauge extends StatelessWidget {
+  final int value;
+  const _FearGreedGauge({required this.value});
+
+  Color get _color {
+    if (value >= 75) return AppColors.sell;
+    if (value >= 55) return const Color(0xFFF59E0B);
+    if (value >= 45) return AppColors.hold;
+    if (value >= 25) return AppColors.primary;
+    return AppColors.buy;
+  }
+
+  String get _label {
+    if (value >= 75) return 'Extreme\nGreed';
+    if (value >= 55) return 'Greed';
+    if (value >= 45) return 'Neutral';
+    if (value >= 25) return 'Fear';
+    return 'Extreme\nFear';
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 72,
+    child: Column(children: [
+      Container(
+        width: 72, height: 72,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: _color.withValues(alpha: 0.12),
+          border: Border.all(color: _color, width: 3),
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('$value',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900,
+                  color: _color)),
+          const Text('/100',
+              style: TextStyle(fontSize: 8, color: AppColors.textMuted)),
+        ]),
+      ),
+      const SizedBox(height: 4),
+      Text(_label,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
+              color: _color)),
+    ]),
+  );
+}
+
+class _SentimentBadge extends StatelessWidget {
+  final String sentiment;
+  const _SentimentBadge({required this.sentiment});
+
+  Color get _color {
+    switch (sentiment.toLowerCase()) {
+      case 'bullish': return AppColors.buy;
+      case 'bearish': return AppColors.sell;
+      default:        return AppColors.hold;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration: BoxDecoration(
+      color: _color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: _color.withValues(alpha: 0.3)),
+    ),
+    child: Text(sentiment.toUpperCase(),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800,
+            color: _color)),
+  );
+}
+
+class _NewsRow extends StatelessWidget {
+  final NewsItem item;
+  const _NewsRow({required this.item});
+
+  Color get _sentimentColor {
+    switch (item.sentiment.toLowerCase()) {
+      case 'bullish': return AppColors.buy;
+      case 'bearish': return AppColors.sell;
+      default:        return AppColors.hold;
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final d = DateTime.now().difference(dt);
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    if (d.inHours   < 24) return '${d.inHours}h';
+    return '${d.inDays}d';
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: 3, height: 42,
+        decoration: BoxDecoration(
+          color: _sentimentColor,
+          borderRadius: BorderRadius.circular(2),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+        Text(item.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500,
+                color: AppColors.textPrimary, height: 1.4)),
+        const SizedBox(height: 3),
+        Row(children: [
+          Text(item.source,
+              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          const SizedBox(width: 8),
+          Text(_timeAgo(item.publishedAt),
+              style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: _sentimentColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(item.sentiment.toUpperCase(),
+                style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800,
+                    color: _sentimentColor)),
+          ),
+        ]),
+      ])),
+    ]),
+  );
 }
 
 // ── Loading / Error helpers ───────────────────────────────────────────────────

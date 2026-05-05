@@ -214,6 +214,44 @@ final brainPerformanceProvider =
   return PerformanceReport.fromJson(resp.data as Map<String, dynamic>);
 });
 
+// ── Market Intelligence ───────────────────────────────────────────────────────
+
+class NewsItem {
+  final String  id;
+  final String  title;
+  final String  source;
+  final String  sentiment;  // bullish / bearish / neutral
+  final double  impactScore;
+  final DateTime publishedAt;
+
+  const NewsItem({
+    required this.id, required this.title, required this.source,
+    required this.sentiment, required this.impactScore, required this.publishedAt,
+  });
+
+  factory NewsItem.fromJson(Map<String, dynamic> j) => NewsItem(
+    id:          j['_id']?.toString()             ?? '',
+    title:       j['title']?.toString()           ?? '',
+    source:      j['source']?.toString()          ?? 'Crypto News',
+    sentiment:   (j['sentiment'] as Map?)?.cast<String,dynamic>()['label']?.toString()
+                 ?? j['sentiment']?.toString()    ?? 'neutral',
+    impactScore: (j['impactScore'] as num?)?.toDouble() ?? 0,
+    publishedAt: DateTime.tryParse(j['publishedAt']?.toString() ?? '') ?? DateTime.now(),
+  );
+}
+
+final highImpactNewsProvider =
+    FutureProvider.autoDispose<List<NewsItem>>((ref) async {
+  try {
+    final resp = await ApiService.dio.get('news/high-impact',
+        queryParameters: {'limit': 5, 'hours': 12});
+    final list = resp.data['news'] as List? ?? [];
+    return list.map((j) => NewsItem.fromJson(j as Map<String, dynamic>)).toList();
+  } catch (_) {
+    return [];
+  }
+});
+
 // ── Follow This Trade ─────────────────────────────────────────────────────────
 
 class UserFollow {
