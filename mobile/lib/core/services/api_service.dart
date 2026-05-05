@@ -3,6 +3,9 @@ import '../constants/api_constants.dart';
 import 'storage_service.dart';
 
 class ApiService {
+  // Set this in main.dart to handle 401 → logout + redirect to login
+  static void Function()? onUnauthorized;
+
   static final _dio = Dio(BaseOptions(
     baseUrl:        '${ApiConstants.apiV1}/',
     connectTimeout: const Duration(seconds: 15),
@@ -33,8 +36,16 @@ class _AuthInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    // Normalize error message
     final response = err.response;
+
+    // 401 → stale/invalid token; log out and redirect to login
+    if (response?.statusCode == 401) {
+      ApiService.onUnauthorized?.call();
+      handler.next(err);
+      return;
+    }
+
+    // Normalize error message for all other errors
     if (response != null) {
       final msg = response.data is Map
           ? (response.data['message'] ?? err.message)

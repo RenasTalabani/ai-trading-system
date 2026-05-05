@@ -5,6 +5,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/websocket_service.dart';
 import 'core/services/push_notification_service.dart';
+import 'core/services/api_service.dart';
+import 'core/providers/auth_provider.dart';
 import 'router.dart';
 
 void main() async {
@@ -42,6 +44,10 @@ class TradingApp extends ConsumerWidget {
 
     // Wire notification tap navigation to GoRouter
     PushNotificationService.onNavigate = (route) => router.go(route);
+
+    // Wire 401 → auto-logout so stale tokens don't leave the app broken
+    ApiService.onUnauthorized = () =>
+        ref.read(authProvider.notifier).logout();
 
     return MaterialApp.router(
       title:        'AI Trader',
