@@ -779,10 +779,10 @@ class _NewsTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final newsAsync = ref.watch(highImpactNewsProvider);
+    final newsAsync = ref.watch(highImpactNewsProvider(20));
     return RefreshIndicator(
       color: AppColors.primary,
-      onRefresh: () async => ref.invalidate(highImpactNewsProvider),
+      onRefresh: () async => ref.invalidate(highImpactNewsProvider(20)),
       child: newsAsync.when(
         loading: () => const Center(
             child: CircularProgressIndicator(color: AppColors.primary,

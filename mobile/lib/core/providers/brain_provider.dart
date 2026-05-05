@@ -243,11 +243,12 @@ class NewsItem {
   );
 }
 
+// Returns up to `limit` high-impact news items; used by both brain screen and news tab
 final highImpactNewsProvider =
-    FutureProvider.autoDispose<List<NewsItem>>((ref) async {
+    FutureProvider.autoDispose.family<List<NewsItem>, int>((ref, limit) async {
   try {
     final resp = await ApiService.dio.get('news/high-impact',
-        queryParameters: {'limit': 5, 'hours': 12});
+        queryParameters: {'limit': limit, 'hours': 12});
     final list = resp.data['news'] as List? ?? [];
     return list.map((j) => NewsItem.fromJson(j as Map<String, dynamic>)).toList();
   } catch (_) {

@@ -1237,7 +1237,7 @@ class _MarketPulseCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final newsAsync = ref.watch(highImpactNewsProvider);
+    final newsAsync = ref.watch(highImpactNewsProvider(4));
     final fg        = actionReport?.fearGreed;
     final sentiment = actionReport?.macroSentiment;
 
