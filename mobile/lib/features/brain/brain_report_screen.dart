@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/providers/brain_provider.dart';
@@ -537,6 +538,7 @@ class _FollowButtonState extends ConsumerState<_FollowButton> {
 
   Future<void> _onTap() async {
     if (_loading) return;
+    HapticFeedback.mediumImpact();
     setState(() => _loading = true);
     final r = widget.report;
     final isNew = await ref.read(followsProvider.notifier).followTrade({
@@ -654,7 +656,10 @@ class _CapitalRow extends ConsumerWidget {
         final selected = balance == v.toDouble();
         return Expanded(
           child: GestureDetector(
-            onTap: () => ref.read(brainBalanceProvider.notifier).set(v.toDouble()),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              ref.read(brainBalanceProvider.notifier).set(v.toDouble());
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               margin: const EdgeInsets.only(right: 6),

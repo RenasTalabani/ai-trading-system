@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/theme/app_theme.dart';
@@ -196,13 +197,19 @@ class _FollowTile extends ConsumerWidget {
             Expanded(child: _CloseBtn(
               label: 'WIN',
               color: AppColors.buy,
-              onTap: () => _close(context, ref, 'WIN'),
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                _close(context, ref, 'WIN');
+              },
             )),
             const SizedBox(width: 8),
             Expanded(child: _CloseBtn(
               label: 'LOSS',
               color: AppColors.sell,
-              onTap: () => _close(context, ref, 'LOSS'),
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                _close(context, ref, 'LOSS');
+              },
             )),
             const SizedBox(width: 8),
             _CloseBtn(
