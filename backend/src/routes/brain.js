@@ -7,6 +7,7 @@ const { protect } = require('../middleware/auth');
 router.use(protect);
 router.get('/report/action',      ctrl.actionReport);
 router.get('/report/performance', ctrl.performanceReport);
+router.get('/stats',              ctrl.brainStats);
 
 router.get('/follows/stats',      follow.stats);
 router.get('/follows',            follow.list);

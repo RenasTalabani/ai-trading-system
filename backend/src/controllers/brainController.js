@@ -206,3 +206,164 @@ exports.performanceReport = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// ── GET /api/v1/brain/stats ───────────────────────────────────────────────────
+// Streak, achievements, 30-day heatmap
+exports.brainStats = async (req, res) => {
+  try {
+    const evaluated = await AIDecision.find({
+      result: { $in: ['WIN', 'LOSS'] },
+    }).sort({ closedAt: -1 }).lean();
+
+    // Current streak (consecutive wins from most recent)
+    let currentStreak = 0;
+    for (const d of evaluated) {
+      if (d.result === 'WIN') currentStreak++;
+      else break;
+    }
+
+    // Best streak ever
+    let bestStreak = 0;
+    let runningStreak = 0;
+    for (const d of [...evaluated].reverse()) {
+      if (d.result === 'WIN') { runningStreak++; bestStreak = Math.max(bestStreak, runningStreak); }
+      else runningStreak = 0;
+    }
+
+    const wins   = evaluated.filter(d => d.result === 'WIN').length;
+    const losses = evaluated.filter(d => d.result === 'LOSS').length;
+    const total  = wins + losses;
+    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+
+    // Best profit on a single trade
+    const bestProfitTrade = evaluated
+      .filter(d => d.profitPct != null)
+      .sort((a, b) => b.profitPct - a.profitPct)[0];
+
+    // Weekly accuracy (last 7 days)
+    const t7d = new Date(Date.now() - 7 * 86400_000);
+    const weekly = evaluated.filter(d => new Date(d.closedAt) >= t7d);
+    const weeklyWins   = weekly.filter(d => d.result === 'WIN').length;
+    const weeklyAccuracy = weekly.length > 0
+      ? Math.round((weeklyWins / weekly.length) * 100) : null;
+
+    // 30-day heatmap: group by date string 'YYYY-MM-DD'
+    const t30d = new Date(Date.now() - 30 * 86400_000);
+    const recent30 = evaluated.filter(d => new Date(d.closedAt) >= t30d);
+    const heatmapMap = {};
+    for (const d of recent30) {
+      const day = new Date(d.closedAt).toISOString().slice(0, 10);
+      if (!heatmapMap[day]) heatmapMap[day] = { wins: 0, losses: 0 };
+      if (d.result === 'WIN') heatmapMap[day].wins++;
+      else heatmapMap[day].losses++;
+    }
+    const heatmap = Object.entries(heatmapMap).map(([date, v]) => ({
+      date,
+      wins:   v.wins,
+      losses: v.losses,
+      result: v.wins > v.losses ? 'WIN' : v.losses > v.wins ? 'LOSS' : 'MIXED',
+    }));
+
+    // Achievements
+    const achievements = _computeAchievements({
+      total, wins, losses, winRate, currentStreak, bestStreak, bestProfitTrade,
+    });
+
+    res.json({
+      success: true,
+      currentStreak,
+      bestStreak,
+      totalWins:    wins,
+      totalLosses:  losses,
+      totalEvaluated: total,
+      winRate,
+      weeklyAccuracy,
+      weeklyTotal: weekly.length,
+      heatmap,
+      achievements,
+    });
+  } catch (err) {
+    logger.error('[Brain] stats error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+function _computeAchievements({ total, wins, losses, winRate, currentStreak, bestStreak, bestProfitTrade }) {
+  return [
+    {
+      id: 'first_signal',
+      name: 'First Signal',
+      description: 'AI completed its first evaluated trade',
+      icon: '🎯',
+      earned: total >= 1,
+      progress: Math.min(total, 1),
+      goal: 1,
+    },
+    {
+      id: 'hot_streak',
+      name: 'Hot Streak',
+      description: '5 consecutive wins',
+      icon: '🔥',
+      earned: bestStreak >= 5,
+      progress: Math.min(bestStreak, 5),
+      goal: 5,
+    },
+    {
+      id: 'diamond_streak',
+      name: 'Diamond Streak',
+      description: '10 consecutive wins',
+      icon: '💎',
+      earned: bestStreak >= 10,
+      progress: Math.min(bestStreak, 10),
+      goal: 10,
+    },
+    {
+      id: 'twenty_wins',
+      name: '20 Wins',
+      description: 'AI accumulated 20 total wins',
+      icon: '🚀',
+      earned: wins >= 20,
+      progress: Math.min(wins, 20),
+      goal: 20,
+    },
+    {
+      id: 'century',
+      name: 'Century Club',
+      description: '100 total evaluated trades',
+      icon: '🎪',
+      earned: total >= 100,
+      progress: Math.min(total, 100),
+      goal: 100,
+    },
+    {
+      id: 'sharp_shooter',
+      name: 'Sharp Shooter',
+      description: 'Win rate above 70% over 10+ trades',
+      icon: '🎖️',
+      earned: total >= 10 && winRate >= 70,
+      progress: total >= 10 ? Math.min(winRate, 70) : Math.min(total, 10),
+      goal: total >= 10 ? 70 : 10,
+      unit: total >= 10 ? '%' : ' trades',
+    },
+    {
+      id: 'fast_gainer',
+      name: 'Fast Gainer',
+      description: 'Any trade closed with +5% or more',
+      icon: '⚡',
+      earned: bestProfitTrade != null && bestProfitTrade.profitPct >= 5,
+      progress: bestProfitTrade != null ? Math.min(bestProfitTrade.profitPct, 5) : 0,
+      goal: 5,
+      unit: '%',
+    },
+    {
+      id: 'top_performer',
+      name: 'Top Performer',
+      description: 'Win rate above 80% over 20+ trades',
+      icon: '🏆',
+      earned: total >= 20 && winRate >= 80,
+      progress: total >= 20 ? Math.min(winRate, 80) : Math.min(total, 20),
+      goal: total >= 20 ? 80 : 20,
+      unit: total >= 20 ? '%' : ' trades',
+    },
+  ];
+}
