@@ -23,6 +23,7 @@ class BrainReportScreen extends ConsumerStatefulWidget {
 class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
   Timer? _refreshTimer;
   Timer? _tickTimer;
+  Timer? _priceTimer;
 
   @override
   void initState() {
@@ -37,12 +38,19 @@ class _BrainReportScreenState extends ConsumerState<BrainReportScreen> {
     _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
+    // Refresh live price every 30 seconds
+    _priceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      final asset = ref.read(brainActionProvider).valueOrNull?.bestAsset ?? '';
+      if (asset.isNotEmpty) ref.invalidate(livePriceProvider(asset));
+    });
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
     _tickTimer?.cancel();
+    _priceTimer?.cancel();
     super.dispose();
   }
 
