@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/notifications_provider.dart';
 import '../../core/providers/price_alerts_provider.dart';
 import '../../core/providers/prices_provider.dart';
+import '../../core/providers/brain_provider.dart' show highImpactNewsProvider, NewsItem;
 import '../../core/models/notification_model.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -22,7 +24,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -80,6 +82,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen>
           tabs: const [
             Tab(text: 'Notifications'),
             Tab(text: 'Price Alerts'),
+            Tab(text: 'News'),
           ],
           onTap: (_) => setState(() {}),
         ),
@@ -99,6 +102,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen>
         children: [
           _NotificationsTab(state: notifState),
           const _PriceAlertsTab(),
+          const _NewsTab(),
         ],
       ),
     );
@@ -765,5 +769,135 @@ class _Chip extends StatelessWidget {
     ),
     child: Text(label,
         style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+  );
+}
+
+// ── News tab ──────────────────────────────────────────────────────────────────
+
+class _NewsTab extends ConsumerWidget {
+  const _NewsTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final newsAsync = ref.watch(highImpactNewsProvider);
+    return RefreshIndicator(
+      color: AppColors.primary,
+      onRefresh: () async => ref.invalidate(highImpactNewsProvider),
+      child: newsAsync.when(
+        loading: () => const Center(
+            child: CircularProgressIndicator(color: AppColors.primary,
+                strokeWidth: 2)),
+        error: (_, __) => const _EmptyHint(
+          icon: Icons.newspaper_outlined,
+          title: 'News unavailable',
+          subtitle: 'Pull to retry',
+        ),
+        data: (items) => items.isEmpty
+            ? const _EmptyHint(
+                icon: Icons.newspaper_outlined,
+                title: 'No high-impact news',
+                subtitle: 'Nothing significant in the last 12 hours',
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: items.length,
+                separatorBuilder: (_, __) =>
+                    const Divider(color: AppColors.border, height: 1),
+                itemBuilder: (_, i) => _NewsCard(item: items[i]),
+              ),
+      ),
+    );
+  }
+}
+
+class _NewsCard extends StatelessWidget {
+  final NewsItem item;
+  const _NewsCard({required this.item});
+
+  Color get _sentimentColor {
+    switch (item.sentiment.toLowerCase()) {
+      case 'bullish': return AppColors.buy;
+      case 'bearish': return AppColors.sell;
+      default:        return AppColors.hold;
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final d = DateTime.now().difference(dt);
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24)   return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: item.url != null
+        ? () => launchUrl(Uri.parse(item.url!),
+              mode: LaunchMode.externalApplication)
+        : null,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 4, height: 56,
+          decoration: BoxDecoration(
+            color: _sentimentColor,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _sentimentColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(item.sentiment.toUpperCase(),
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
+                      color: _sentimentColor)),
+            ),
+            const SizedBox(width: 8),
+            Text(item.source,
+                style: const TextStyle(fontSize: 10,
+                    color: AppColors.textMuted)),
+            const Spacer(),
+            Text(_timeAgo(item.publishedAt),
+                style: const TextStyle(fontSize: 10,
+                    color: AppColors.textMuted)),
+            if (item.url != null) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.open_in_new, size: 11,
+                  color: AppColors.textMuted),
+            ],
+          ]),
+          const SizedBox(height: 6),
+          Text(item.title,
+              style: const TextStyle(fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary, height: 1.4)),
+          if (item.impactScore > 0) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              const Text('Impact: ',
+                  style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+              SizedBox(
+                width: 60, height: 4,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: (item.impactScore / 10).clamp(0.0, 1.0),
+                    backgroundColor: AppColors.border,
+                    valueColor: AlwaysStoppedAnimation(_sentimentColor),
+                  ),
+                ),
+              ),
+            ]),
+          ],
+        ])),
+      ]),
+    ),
   );
 }
