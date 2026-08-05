@@ -5,10 +5,11 @@ from typing import Optional
 import aiohttp
 import pandas as pd
 import numpy as np
-import ta
 
 import os
 from app.config import get_settings
+from app.services import indicators as ind
+from app.services.collectors import multi_asset_collector
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.data_processor")
@@ -57,27 +58,21 @@ class DataProcessor:
         volume = df["volume"]
 
         # RSI (14)
-        df["rsi"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
+        df["rsi"] = ind.rsi(close, window=14)
 
         # MACD
-        macd_obj = ta.trend.MACD(close=close)
-        df["macd"] = macd_obj.macd()
-        df["macd_signal"] = macd_obj.macd_signal()
-        df["macd_hist"] = macd_obj.macd_diff()
+        df["macd"], df["macd_signal"], df["macd_hist"] = ind.macd(close)
 
         # EMA
-        df["ema20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
-        df["ema50"] = ta.trend.EMAIndicator(close=close, window=50).ema_indicator()
-        df["ema200"] = ta.trend.EMAIndicator(close=close, window=200).ema_indicator()
+        df["ema20"] = ind.ema(close, 20)
+        df["ema50"] = ind.ema(close, 50)
+        df["ema200"] = ind.ema(close, 200)
 
         # Bollinger Bands
-        bb = ta.volatility.BollingerBands(close=close)
-        df["bb_upper"] = bb.bollinger_hband()
-        df["bb_lower"] = bb.bollinger_lband()
-        df["bb_mid"] = bb.bollinger_mavg()
+        df["bb_upper"], df["bb_lower"], df["bb_mid"] = ind.bollinger_bands(close)
 
         # ATR (volatility)
-        df["atr"] = ta.volatility.AverageTrueRange(high=high, low=low, close=close).average_true_range()
+        df["atr"] = ind.atr(high, low, close)
 
         # Volume SMA
         df["vol_sma20"] = volume.rolling(window=20).mean()
@@ -85,6 +80,14 @@ class DataProcessor:
 
         df.dropna(inplace=True)
         return df
+
+    async def get_candles(self, asset: str, interval: str = "1h", limit: int = 500) -> Optional[pd.DataFrame]:
+        """Dispatch to the right collector: Binance for crypto, yfinance for
+        commodities/forex (multi_asset_collector.ALL_MULTI_ASSETS)."""
+        asset = asset.upper()
+        if asset in multi_asset_collector.ALL_MULTI_ASSETS:
+            return await multi_asset_collector.fetch_asset_data(asset)
+        return await self.fetch_market_data(asset, interval, limit)
 
     def build_feature_vector(self, df: pd.DataFrame) -> np.ndarray:
         """Extract last-row features for ML model input."""

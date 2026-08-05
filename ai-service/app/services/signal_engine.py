@@ -256,5 +256,9 @@ class SignalEngine:
                 signal_payload["_seq_snapshot"]     = seq_snapshot
                 signal_payload["_transformer_proba"] = transformer_proba
                 self.feedback_evaluator.record_signal(signal_payload)
+                # These are only for the feedback loop above (raw numpy arrays
+                # aren't JSON-serializable) — strip before returning to callers.
+                signal_payload.pop("_seq_snapshot", None)
+                signal_payload.pop("_transformer_proba", None)
 
         return signal_payload

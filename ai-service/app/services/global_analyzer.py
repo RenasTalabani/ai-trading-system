@@ -1,7 +1,11 @@
 """
-GlobalAnalyzer — scans ALL asset classes and returns the best opportunity.
-Crypto: full UnifiedAnalyzer pipeline (OB + Strategy + News + Social).
-Commodities / Forex: technical indicators + macro news.
+GlobalAnalyzer — Phase 18 Institutional Grade.
+Scans ALL asset classes with:
+  - ATR-based dynamic SL/TP (RiskManager)
+  - Market regime detection (RegimeDetector)
+  - Confidence filter (min 70 %, macro contradiction block)
+  - Trade quality scoring (TradeQualityScorer)
+  - RL adaptive weights (RLWeightEngine)
 """
 import asyncio
 import logging
@@ -14,6 +18,12 @@ from app.services.collectors.multi_asset_collector import (
     fetch_asset_data, ALL_MULTI_ASSETS,
 )
 from app.services.collectors.binance_collector import TRACKED_ASSETS
+from app.services.risk_manager          import RiskManager
+from app.services.regime_detector       import RegimeDetector
+from app.services.rl_weight_engine      import RLWeightEngine
+from app.services.trade_quality_scorer  import (
+    compute_quality_score, build_quality_inputs, passes_quality_gate,
+)
 
 logger = logging.getLogger("ai-service.global_analyzer")
 
@@ -46,8 +56,20 @@ _NEWS_KEYWORDS: dict[str, str] = {
     "USDJPY": "japan",
 }
 
-# How many crypto assets to scan (keeps total latency under 60 s)
 _CRYPTO_SCAN_LIMIT = 6
+
+# ── Phase 18 thresholds ───────────────────────────────────────────────────────
+MIN_CONFIDENCE  = 70
+MIN_FUSED_SCORE = 65
+
+# Macro states that block contradicting actions
+_STRONG_BEAR_BLOCKS_BUY  = {"strong_bear", "bearish"}
+_STRONG_BULL_BLOCKS_SELL = {"strong_bull", "bullish"}
+
+# Singleton services (shared across calls)
+_risk_mgr   = RiskManager()
+_regime_det = RegimeDetector()
+_rl_engine  = RLWeightEngine()
 
 
 class GlobalAnalyzer:
@@ -62,48 +84,79 @@ class GlobalAnalyzer:
     async def scan_all(self, capital: float = 500.0,
                        top_n: int = 5,
                        timeframe: str = "1h") -> dict:
-        """
-        Scan all asset classes in parallel.
-        Returns ranked opportunities with the single best highlighted.
-        """
         crypto_assets = TRACKED_ASSETS[:_CRYPTO_SCAN_LIMIT]
         multi_assets  = list(ALL_MULTI_ASSETS.keys())
 
+        # Fetch macro sentiment once (used in filter + quality score)
+        macro_sentiment = await self._get_macro_sentiment()
+
         tasks = (
-            [self._score_crypto(a, timeframe, capital)   for a in crypto_assets] +
-            [self._score_multi_asset(sym)                for sym in multi_assets]
+            [self._score_crypto(a, timeframe, capital, macro_sentiment)
+             for a in crypto_assets] +
+            [self._score_multi_asset(sym, macro_sentiment)
+             for sym in multi_assets]
         )
 
         raw = await asyncio.gather(*tasks, return_exceptions=True)
 
         scored: list[dict] = []
+        blocked = 0
         for r in raw:
-            if isinstance(r, dict) and r.get("fused_score", 0) > 0:
-                scored.append(r)
-            elif isinstance(r, Exception):
+            if isinstance(r, Exception):
                 logger.warning(f"[Global] scorer error: {r}")
+                continue
+            if not isinstance(r, dict) or r.get("fused_score", 0) <= 0:
+                continue
 
-        scored.sort(key=lambda x: x.get("fused_score", 50), reverse=True)
+            # ── Phase 18 confidence + macro filter ────────────────────────
+            if r.get("confidence", 0) < MIN_CONFIDENCE:
+                blocked += 1
+                continue
+            if r.get("fused_score", 0) < MIN_FUSED_SCORE:
+                blocked += 1
+                continue
+            action = r.get("action", "HOLD")
+            if macro_sentiment in _STRONG_BEAR_BLOCKS_BUY  and action == "BUY":
+                blocked += 1
+                logger.info(f"[Filter] {r['asset']} BUY blocked — strong_bear macro")
+                continue
+            if macro_sentiment in _STRONG_BULL_BLOCKS_SELL and action == "SELL":
+                blocked += 1
+                logger.info(f"[Filter] {r['asset']} SELL blocked — strong_bull macro")
+                continue
+
+            scored.append(r)
+
+        if blocked:
+            logger.info(f"[Global] {blocked} low-quality/macro-blocked signals filtered")
+
+        scored.sort(key=lambda x: x.get("quality_score", x.get("fused_score", 50)),
+                    reverse=True)
 
         best = scored[0] if scored else None
-
-        # Annotate rank
         for i, item in enumerate(scored):
             item["rank"] = i + 1
 
+        weights = _rl_engine.get_weights()
+
         return {
             "success":           True,
-            "scanned":           len(scored),
+            "scanned":           len(scored) + blocked,
+            "passed_filter":     len(scored),
+            "blocked":           blocked,
             "capital":           capital,
             "timeframe":         timeframe,
+            "macro_sentiment":   macro_sentiment,
+            "signal_weights":    weights,
             "best":              best,
             "top_opportunities": scored[:top_n],
         }
 
-    # ── Crypto scorer (full pipeline) ─────────────────────────────────────────
+    # ── Crypto scorer ─────────────────────────────────────────────────────────
 
     async def _score_crypto(self, asset: str, timeframe: str,
-                            capital: float) -> dict[str, Any]:
+                            capital: float,
+                            macro_sentiment: str) -> dict[str, Any]:
         try:
             result = await asyncio.wait_for(
                 self._unified.analyze(asset, timeframe, capital),
@@ -111,34 +164,86 @@ class GlobalAnalyzer:
             )
             if not result.get("success"):
                 return {}
+
             sig  = result["signal"]
             tech = result.get("technical", {})
             sent = result.get("sentiment", {})
             fs   = _action_to_score(sig["action"], sig["confidence"])
+
+            # Regime (needs raw df — fetch separately if not in result)
+            regime    = result.get("regime", "TRENDING")
+            atr       = float(tech.get("atr", 0)) or (
+                float(tech.get("current_price", 0)) * 0.015
+            )
+            entry     = float(tech.get("current_price") or 0)
+
+            # ATR-based SL/TP
+            sl, tp, rr = _risk_mgr.compute_sl_tp(entry, atr, sig["action"], regime)
+
+            # Position size
+            pos_size = _risk_mgr.compute_position_size(capital, atr, entry)
+
+            # Regime score modifier
+            modifier  = _regime_det.regime_score_modifier(regime, sig["action"])
+            adj_score = round(fs * modifier, 1)
+
+            # Trade quality
+            quality_inputs = build_quality_inputs(
+                {**sig, "fused_score": adj_score,
+                 "news_score": sent.get("news_score", 50),
+                 "vol_ratio":  tech.get("vol_ratio", 1.0)},
+                macro_sentiment,
+            )
+            quality_score = compute_quality_score(**quality_inputs)
+
+            # RL-weighted final score
+            weights   = _rl_engine.get_weights()
+            news_sc   = sent.get("news_score", 50)
+            social_sc = sent.get("social_score", 50)
+            macro_sc  = 70 if macro_sentiment in ("bullish","strong_bull") else \
+                        30 if macro_sentiment in ("bearish","strong_bear") else 50
+            rl_score  = round(
+                fs         * weights["technical"] +
+                news_sc    * weights["news"] +
+                social_sc  * weights["social"] +
+                macro_sc   * weights["macro"],
+                1,
+            )
+
             return {
-                "asset":         asset,
-                "display_name":  ASSET_DISPLAY.get(asset, asset),
-                "asset_class":   "crypto",
-                "action":        sig["action"],
-                "confidence":    sig["confidence"],
-                "fused_score":   round(fs, 1),
-                "current_price": tech.get("current_price"),
-                "rsi":           tech.get("rsi"),
-                "trend":         tech.get("trend"),
-                "news_score":    sent.get("news_score", 50),
-                "entry_zone":    sig.get("entry_zone"),
-                "stop_loss":     sig.get("stop_loss"),
-                "take_profit":   sig.get("take_profit"),
-                "risk_reward":   sig.get("risk_reward"),
-                "reason":        sig.get("reason"),
+                "asset":          asset,
+                "display_name":   ASSET_DISPLAY.get(asset, asset),
+                "asset_class":    "crypto",
+                "action":         sig["action"],
+                "confidence":     sig["confidence"],
+                "fused_score":    adj_score,
+                "rl_score":       rl_score,
+                "quality_score":  quality_score,
+                "quality_inputs": quality_inputs,
+                "quality_passed": passes_quality_gate(quality_score),
+                "current_price":  entry or None,
+                "rsi":            tech.get("rsi"),
+                "trend":          tech.get("trend"),
+                "regime":         regime,
+                "news_score":     sent.get("news_score", 50),
+                "vol_ratio":      tech.get("vol_ratio", 1.0),
+                "atr":            round(atr, 6),
+                "position_size":  pos_size,
+                "entry_zone":     sig.get("entry_zone"),
+                "stop_loss":      sl if sl else sig.get("stop_loss"),
+                "take_profit":    tp if tp else sig.get("take_profit"),
+                "risk_reward":    rr,
+                "expected_return": sig.get("expected_return"),
+                "reason":         sig.get("reason"),
             }
         except Exception as e:
             logger.warning(f"[Global] crypto score error {asset}: {e}")
             return {}
 
-    # ── Non-crypto scorer (technical + macro news) ────────────────────────────
+    # ── Non-crypto scorer ─────────────────────────────────────────────────────
 
-    async def _score_multi_asset(self, symbol: str) -> dict[str, Any]:
+    async def _score_multi_asset(self, symbol: str,
+                                 macro_sentiment: str) -> dict[str, Any]:
         symbol = symbol.upper()
 
         async def _safe_df():
@@ -158,6 +263,9 @@ class GlobalAnalyzer:
         trend         = "sideways"
         ema50_val     = None
         ema200_val    = None
+        atr_val       = 0.0
+        vol_ratio     = 1.0
+        regime        = "SIDEWAYS"
 
         if df is not None and len(df) >= 50:
             row           = df.iloc[-1]
@@ -165,6 +273,10 @@ class GlobalAnalyzer:
             ema50_val     = float(row.get("ema50",  current_price))
             ema200_val    = float(row.get("ema200", current_price))
             rsi_val       = float(row.get("rsi",    50))
+            atr_val       = float(row.get("atr",    current_price * 0.015))
+            vol_ratio     = float(row.get("vol_ratio", 1.0))
+
+            regime = _regime_det.detect(df)
 
             if current_price > ema50_val > ema200_val:
                 trend      = "uptrend"
@@ -175,41 +287,81 @@ class GlobalAnalyzer:
             else:
                 tech_score = 50.0
 
-            # Overbought / oversold RSI correction
-            if rsi_val > 75:
-                tech_score = min(tech_score, 38)
-            elif rsi_val < 25:
-                tech_score = max(tech_score, 62)
+            if rsi_val > 75:   tech_score = min(tech_score, 38)
+            elif rsi_val < 25: tech_score = max(tech_score, 62)
 
-        # Fusion: Technical 65 % + Macro News 35 %
-        fused = tech_score * 0.65 + float(news_score) * 0.35
+        # RL-weighted fusion
+        weights    = _rl_engine.get_weights()
+        macro_sc   = 70 if macro_sentiment in ("bullish","strong_bull") else \
+                     30 if macro_sentiment in ("bearish","strong_bear") else 50
+        fused = (
+            tech_score            * (weights["technical"] + weights["social"]) +
+            float(news_score)     * weights["news"] +
+            macro_sc              * weights["macro"]
+        )
+        fused = round(fused, 1)
+
         action, confidence = _score_to_action(fused)
 
-        # Derive rough SL / TP from current price
-        stop_loss   = round(current_price * 0.98, 6) if current_price else None
-        take_profit = round(current_price * 1.04, 6) if current_price else None
+        # Regime modifier
+        modifier = _regime_det.regime_score_modifier(regime, action)
+        adj_fused = round(fused * modifier, 1)
+
+        # ATR-based SL/TP
+        sl, tp, rr = _risk_mgr.compute_sl_tp(current_price, atr_val, action, regime)
+
+        # Position size
+        pos_size = _risk_mgr.compute_position_size(500, atr_val, current_price)
+
+        # Trade quality
+        quality_inputs = build_quality_inputs(
+            {"fused_score": adj_fused, "action": action,
+             "news_score": news_score, "vol_ratio": vol_ratio},
+            macro_sentiment,
+        )
+        quality_score = compute_quality_score(**quality_inputs)
 
         return {
-            "asset":         symbol,
-            "display_name":  ASSET_DISPLAY.get(symbol, symbol),
-            "asset_class":   ASSET_CLASS_MAP.get(symbol, "other"),
-            "action":        action,
-            "confidence":    confidence,
-            "fused_score":   round(fused, 1),
-            "current_price": round(current_price, 6) if current_price else None,
-            "rsi":           round(rsi_val, 1),
-            "ema50":         round(ema50_val, 6)  if ema50_val  else None,
-            "ema200":        round(ema200_val, 6) if ema200_val else None,
-            "trend":         trend,
-            "news_score":    round(float(news_score), 1),
-            "entry_zone":    None,
-            "stop_loss":     stop_loss,
-            "take_profit":   take_profit,
-            "risk_reward":   "1:2",
-            "reason":        f"{trend.capitalize()} trend | RSI {rsi_val:.0f} | News {news_score:.0f}",
+            "asset":          symbol,
+            "display_name":   ASSET_DISPLAY.get(symbol, symbol),
+            "asset_class":    ASSET_CLASS_MAP.get(symbol, "other"),
+            "action":         action,
+            "confidence":     confidence,
+            "fused_score":    adj_fused,
+            "rl_score":       fused,
+            "quality_score":  quality_score,
+            "quality_inputs": quality_inputs,
+            "quality_passed": passes_quality_gate(quality_score),
+            "current_price":  round(current_price, 6) if current_price else None,
+            "rsi":            round(rsi_val, 1),
+            "ema50":          round(ema50_val, 6)  if ema50_val  else None,
+            "ema200":         round(ema200_val, 6) if ema200_val else None,
+            "atr":            round(atr_val, 6),
+            "vol_ratio":      round(vol_ratio, 3),
+            "trend":          trend,
+            "regime":         regime,
+            "news_score":     round(float(news_score), 1),
+            "position_size":  pos_size,
+            "entry_zone":     None,
+            "stop_loss":      sl,
+            "take_profit":    tp,
+            "risk_reward":    rr,
+            "expected_return": None,
+            "reason": (
+                f"{regime} regime | {trend.capitalize()} | "
+                f"RSI {rsi_val:.0f} | News {news_score:.0f} | "
+                f"Quality {quality_score:.0f}"
+            ),
         }
 
-    # ── Macro news scorer ─────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    async def _get_macro_sentiment(self) -> str:
+        try:
+            result = await asyncio.wait_for(self._news.refresh(), timeout=10)
+            return result.get("global", {}).get("overall_sentiment", "neutral")
+        except Exception:
+            return "neutral"
 
     async def _macro_news_score(self, keyword: str) -> float:
         try:
@@ -221,3 +373,15 @@ class GlobalAnalyzer:
             return min(80.0, base + hits * 3.0)
         except Exception:
             return 50.0
+
+
+# ── Module-level RL update helper (called by routes) ─────────────────────────
+
+def rl_record_outcome(result: str, signal_contributions: dict) -> dict:
+    return _rl_engine.record_outcome(result, signal_contributions)
+
+def rl_get_weights() -> dict:
+    return _rl_engine.get_weights()
+
+def rl_stats() -> dict:
+    return _rl_engine.stats()

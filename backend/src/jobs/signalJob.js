@@ -6,6 +6,10 @@ const { broadcastSignal } = require('../websocket/wsServer');
 const { TRACKED_ASSETS } = require('../services/binanceService');
 const logger = require('../config/logger');
 
+// Non-Binance assets (routed by the AI service through Yahoo Finance) that
+// still go through the same predict → signal → notification pipeline.
+const EXTENDED_ASSETS = ['XAUUSD'];
+
 const CONFIDENCE_THRESHOLD = () => parseInt(process.env.SIGNAL_CONFIDENCE_THRESHOLD) || 70;
 const MAX_SIGNALS_PER_HOUR = () => parseInt(process.env.MAX_SIGNALS_PER_HOUR) || 10;
 
@@ -80,10 +84,11 @@ async function runSignalGeneration() {
     return;
   }
 
-  logger.info(`[SignalJob] Running signal generation for ${TRACKED_ASSETS.length} assets...`);
+  const assets = [...TRACKED_ASSETS, ...EXTENDED_ASSETS];
+  logger.info(`[SignalJob] Running signal generation for ${assets.length} assets...`);
   let generated = 0;
 
-  for (const asset of TRACKED_ASSETS) {
+  for (const asset of assets) {
     const signal = await processAsset(asset);
     if (signal) {
       generated++;

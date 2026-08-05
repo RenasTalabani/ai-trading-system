@@ -85,6 +85,7 @@ const _displayNames = {
   'OPUSDT':   'Optimism',
   'INJUSDT':  'Injective',
   'SUIUSDT':  'Sui',
+  'XAUUSD':   'Gold',
 };
 
 String displayNameFor(String asset) =>
@@ -98,6 +99,7 @@ const allSupportedAssets = [
   'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
   'DOTUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
   'APTUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SUIUSDT',
+  'XAUUSD',
 ];
 
 // ── Watchlist state ─────────────────────────────────────────────────────────

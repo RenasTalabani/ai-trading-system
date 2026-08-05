@@ -8,11 +8,15 @@ const AIDecision     = require('../models/AIDecision');
 const VirtualTrade   = require('../models/VirtualTrade');
 const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession  = require('../models/BudgetSession');
+const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger         = require('../config/logger');
 
-const CONFIDENCE_THRESHOLD = parseInt(process.env.AI_CONFIDENCE_THRESHOLD) || 60;
-const MAX_OPEN_TRADES      = parseInt(process.env.AI_MAX_OPEN_TRADES)      || 10;
-const MAX_NEW_PER_CYCLE    = parseInt(process.env.AI_MAX_NEW_PER_CYCLE)    || 3;
+const CONFIDENCE_THRESHOLD  = parseInt(process.env.AI_CONFIDENCE_THRESHOLD)  || 70;  // Phase 18: raised to 70
+const MIN_FUSED_SCORE       = parseInt(process.env.AI_MIN_FUSED_SCORE)       || 65;  // Phase 18
+const MIN_QUALITY_SCORE     = parseInt(process.env.AI_MIN_QUALITY_SCORE)     || 75;  // Phase 18
+const MAX_OPEN_TRADES       = parseInt(process.env.AI_MAX_OPEN_TRADES)       || 5;   // Phase 18: reduced to 5
+const MAX_NEW_PER_CYCLE     = parseInt(process.env.AI_MAX_NEW_PER_CYCLE)     || 3;
+const MAX_DAILY_LOSS_PCT    = parseFloat(process.env.AI_MAX_DAILY_LOSS_PCT)  || 0.05; // 5 %
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,10 +34,22 @@ async function runAIWorkerCycle() {
     return { skipped: 'session_inactive' };
   }
 
-  // 2. Respect max-open-trades limit
+  // 2. Portfolio protection — max open trades
   const openCount = await VirtualTrade.countDocuments({ status: 'open' });
   if (openCount >= MAX_OPEN_TRADES) {
     return { skipped: 'max_trades_reached', openCount };
+  }
+
+  // 2b. Portfolio protection — max daily loss (5 %)
+  const dayStart  = new Date(Date.now() - 86400_000);
+  const todayLosses = await VirtualTrade.aggregate([
+    { $match: { status: 'closed', closedAt: { $gte: dayStart }, pnl: { $lt: 0 } } },
+    { $group: { _id: null, totalLoss: { $sum: '$pnl' } } },
+  ]);
+  const dailyLoss = Math.abs((todayLosses[0]?.totalLoss) || 0);
+  if (portfolio && dailyLoss >= portfolio.currentBalance * MAX_DAILY_LOSS_PCT) {
+    logger.warn(`[AIWorker] Daily loss limit hit ($${dailyLoss.toFixed(2)}) — pausing trading.`);
+    return { skipped: 'daily_loss_limit', dailyLoss };
   }
 
   // 3. Load portfolio for position sizing
@@ -44,7 +60,7 @@ async function runAIWorkerCycle() {
   const aiUrl = (process.env.AI_SERVICE_URL || 'http://localhost:8000').replace(/\/$/, '');
   let scanResult;
   try {
-    const { data } = await axios.post(`${aiUrl}/global/scan`, {
+    const { data } = await axios.post(`${aiUrl}/api/global/scan`, {
       capital:   portfolio.currentBalance,
       timeframe: '1h',
       top_n:     5,
@@ -72,7 +88,9 @@ async function runAIWorkerCycle() {
   for (const opp of scanResult.top_opportunities) {
     if (tradesCreated >= MAX_NEW_PER_CYCLE) break;
     if (opp.action === 'HOLD') continue;
-    if ((opp.confidence || 0) < CONFIDENCE_THRESHOLD) continue;
+    if ((opp.confidence   || 0) < CONFIDENCE_THRESHOLD) continue;
+    if ((opp.fused_score  || 0) < MIN_FUSED_SCORE)      continue;
+    if ((opp.quality_score || 0) < MIN_QUALITY_SCORE)   continue;
     if (openSet.has(opp.asset)) continue;
 
     const entryPrice = _pick(opp, 'current_price', 'currentPrice');
@@ -115,6 +133,17 @@ async function runAIWorkerCycle() {
     // Back-link trade onto the decision
     await AIDecision.updateOne({ _id: decision._id },
       { tradeCreated: true, tradeId: trade._id });
+
+    // Store regime history (Phase 18)
+    if (opp.regime) {
+      MarketRegimeHistory.create({
+        asset:      opp.asset,
+        regime:     opp.regime,
+        action:     opp.action,
+        confidence: opp.confidence,
+        fusedScore: opp.fused_score,
+      }).catch(() => {});
+    }
 
     openSet.add(opp.asset);
     tradesCreated++;

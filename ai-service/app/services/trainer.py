@@ -1,9 +1,7 @@
 import logging
-import os
 from typing import Optional
 
 import pandas as pd
-import aiohttp
 
 from app.config import get_settings
 from app.services.data_processor import DataProcessor
@@ -12,7 +10,6 @@ from app.models.market_model import MarketModel
 settings = get_settings()
 logger = logging.getLogger("ai-service.trainer")
 
-BINANCE_BASE = os.environ.get("BINANCE_BASE_URL", "https://api.binance.com")
 MIN_CANDLES_FOR_TRAINING = 300
 
 
@@ -29,29 +26,8 @@ class ModelTrainer:
     async def fetch_training_data(
         self, asset: str, interval: str = "1h", limit: int = 1000
     ) -> Optional[pd.DataFrame]:
-        url = f"{BINANCE_BASE}/api/v3/klines"
-        params = {"symbol": asset, "interval": interval, "limit": limit}
-
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Binance returned {resp.status} for {asset} training data")
-                        return None
-                    raw = await resp.json()
-
-            df = pd.DataFrame(raw, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_volume", "trades",
-                "taker_buy_base", "taker_buy_quote", "ignore",
-            ])
-            df[["open", "high", "low", "close", "volume"]] = df[
-                ["open", "high", "low", "close", "volume"]
-            ].astype(float)
-            df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms")
-            df = df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
-            return self.processor.compute_indicators(df)
-
+            return await self.processor.get_candles(asset, interval, limit)
         except Exception as e:
             logger.error(f"Training data fetch failed for {asset}: {e}")
             return None

@@ -21,6 +21,7 @@ const { startKeepAliveJob }          = require('./src/jobs/keepAliveJob');
 const { startPriceAlertJob }         = require('./src/jobs/priceAlertJob');
 const { startDecisionTrackingJob }   = require('./src/jobs/decisionTrackingJob');
 const { startAIDecisionJob }         = require('./src/jobs/aiDecisionJob');
+const { start: startPerformanceAnalysisJob } = require('./src/jobs/performanceAnalysisJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -92,6 +93,9 @@ async function bootstrap() {
 
   // Price Alerts: check active alerts every 2 min against live prices
   startPriceAlertJob();
+
+  // Phase 18: Performance analysis + RL weight update every 6 hours
+  startPerformanceAnalysisJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);

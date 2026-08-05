@@ -182,7 +182,7 @@ async def status():
 async def predict(req: PredictRequest):
     try:
         asset = req.asset.upper()
-        candles = await data_processor.fetch_market_data(asset, req.interval)
+        candles = await data_processor.get_candles(asset, req.interval)
         if candles is None or len(candles) < 60:
             raise HTTPException(status_code=422, detail=f"Insufficient market data for {asset}")
         result = await signal_engine.generate_signal(asset, candles)
@@ -362,7 +362,7 @@ async def trigger_evaluation(background_tasks: BackgroundTasks):
 @router.get("/indicators/{asset}")
 async def get_indicators(asset: str, interval: str = "1h"):
     try:
-        candles = await data_processor.fetch_market_data(asset.upper(), interval)
+        candles = await data_processor.get_candles(asset.upper(), interval)
         if candles is None:
             raise HTTPException(status_code=404, detail=f"No data for {asset}")
         row = candles.iloc[-1]
@@ -745,5 +745,70 @@ async def get_funding_rates():
     try:
         result = await macro_service.get_funding_rates()
         return {"success": True, "rates": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Phase 18 — RL Weight Engine ──────────────────────────────────────────────
+
+from app.services.global_analyzer import rl_record_outcome, rl_get_weights, rl_stats
+from app.services.regime_detector import RegimeDetector as _RegimeDetector
+_regime_detector_inst = _RegimeDetector()
+
+class RLOutcomeRequest(BaseModel):
+    result:               str    # "WIN" or "LOSS"
+    technical_contrib:    float  = 0.45
+    news_contrib:         float  = 0.20
+    social_contrib:       float  = 0.10
+    macro_contrib:        float  = 0.25
+
+@router.get("/rl/weights")
+async def get_rl_weights():
+    """Current RL signal weights."""
+    return {"success": True, **rl_stats()}
+
+@router.post("/rl/outcome")
+async def record_rl_outcome(req: RLOutcomeRequest):
+    """Record a trade outcome — updates RL weights."""
+    contribs = {
+        "technical": req.technical_contrib,
+        "news":       req.news_contrib,
+        "social":     req.social_contrib,
+        "macro":      req.macro_contrib,
+    }
+    new_weights = rl_record_outcome(req.result, contribs)
+    return {"success": True, "new_weights": new_weights}
+
+@router.get("/rl/weights/reset")
+async def reset_rl_weights():
+    """Reset RL weights to defaults."""
+    from app.services.rl_weight_engine import RLWeightEngine
+    engine = RLWeightEngine()
+    return {"success": True, "weights": engine.reset()}
+
+
+# ─── Phase 18 — Regime Detection ──────────────────────────────────────────────
+
+@router.get("/regime/{asset}")
+async def get_regime(asset: str, interval: str = "1h"):
+    """Detect market regime for a given asset."""
+    try:
+        candles = await data_processor.get_candles(asset.upper(), interval)
+        if candles is None or len(candles) < 50:
+            raise HTTPException(status_code=422, detail=f"Insufficient data for {asset}")
+        regime = _regime_detector_inst.detect(candles)
+        row    = candles.iloc[-1]
+        return {
+            "success": True,
+            "asset":   asset.upper(),
+            "regime":  regime,
+            "price":   round(float(row["close"]), 6),
+            "ema50":   round(float(row.get("ema50",  0)), 6),
+            "ema200":  round(float(row.get("ema200", 0)), 6),
+            "atr":     round(float(row.get("atr",    0)), 6),
+            "rsi":     round(float(row.get("rsi",    50)), 2),
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
