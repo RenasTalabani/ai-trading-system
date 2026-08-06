@@ -209,7 +209,7 @@ class MultiTimeframeAnalyzer:
     async def _analyze_one(self, asset: str, tf_key: str) -> dict:
         cfg = TIMEFRAME_CONFIG[tf_key]
         try:
-            df = await self._dp.fetch_market_data(asset, cfg["interval"], cfg["limit"])
+            df = await self._dp.get_candles(asset, cfg["interval"], cfg["limit"])
             if df is None or len(df) < 60:
                 return self._fallback(tf_key, cfg)
             df = _compute_indicators(df)

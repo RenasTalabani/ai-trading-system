@@ -53,6 +53,10 @@ class NewsSentimentModel:
         self.is_loaded = True
         self._finbert = None
         self._try_load_finbert()
+        # FinBERT inference is comparatively expensive — the same headlines get
+        # analyzed once globally and again per-asset on overlapping subsets, so
+        # memoize per unique text to avoid re-running the model on repeats.
+        self._sentiment_cache: dict = {}
         logger.info(f"News sentiment model ready (FinBERT={'loaded' if self._finbert else 'not available, using VADER'})")
 
     def _try_load_finbert(self):
@@ -107,11 +111,17 @@ class NewsSentimentModel:
             return self._vader_sentiment(text)
 
     def analyze_single(self, text: str) -> dict:
-        sentiment = (
-            self._finbert_sentiment(text)
-            if self._finbert
-            else self._vader_sentiment(text)
-        )
+        if text in self._sentiment_cache:
+            sentiment = self._sentiment_cache[text]
+        else:
+            sentiment = (
+                self._finbert_sentiment(text)
+                if self._finbert
+                else self._vader_sentiment(text)
+            )
+            if len(self._sentiment_cache) >= 5000:
+                self._sentiment_cache.clear()  # simple bound, avoids unbounded growth
+            self._sentiment_cache[text] = sentiment
         events   = self._detect_events(text)
         assets   = self._detect_assets(text)
         impact   = self._compute_impact(sentiment, events)

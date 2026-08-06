@@ -16,9 +16,11 @@ scipy>=1.13.0
 # separately in Dockerfile via the PyTorch CPU index to keep image size down
 torch>=2.2.0,<2.9.0
 
-# NLP (lightweight — transformers/FinBERT optional, use VADER for cloud deployment)
+# NLP — FinBERT (finance-tuned sentiment) via transformers, falls back to
+# VADER automatically if this ever fails to load (see news_sentiment.py)
 nltk>=3.8.0
 vaderSentiment>=3.3.2
+transformers>=4.40.0
 
 # News collection
 feedparser>=6.0.11

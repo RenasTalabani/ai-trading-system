@@ -39,7 +39,8 @@ FEATURE_COLS = [
 if not TORCH_AVAILABLE:
     class TransformerModel:
         """Stub — PyTorch not installed (lightweight cloud deployment)."""
-        def __init__(self, model_path: str):
+        def __init__(self, model_path: str, asset: str = "BTCUSDT"):
+            self.asset = asset
             self.is_trained = False
             logger.info("TransformerModel: torch not available, using stub.")
 
@@ -100,8 +101,9 @@ else:
             return self.head(x)
 
     class TransformerModel:
-        def __init__(self, model_path: str):
+        def __init__(self, model_path: str, asset: str = "BTCUSDT"):
             self.model_path = model_path
+            self.asset = asset.upper()
             self._model: Optional[_PriceTransformerNet] = None
             self.is_trained = False
             self._feature_mean: Optional[np.ndarray] = None
@@ -109,7 +111,10 @@ else:
             self._try_load()
 
         def _ckpt_path(self) -> str:
-            return os.path.join(self.model_path, "transformer.pt")
+            # BTCUSDT keeps the original bare filename for backward compatibility
+            # with checkpoints/registry entries that predate per-asset models.
+            filename = "transformer.pt" if self.asset == "BTCUSDT" else f"transformer_{self.asset}.pt"
+            return os.path.join(self.model_path, filename)
 
         def _try_load(self):
             p = self._ckpt_path()

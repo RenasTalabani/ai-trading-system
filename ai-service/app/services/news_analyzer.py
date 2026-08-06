@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -48,7 +49,11 @@ class NewsAnalyzer:
         logger.info(f"Quality filter: {q_stats['passed']}/{q_stats['total']} passed")
 
         headlines = [a["title"] for a in filtered] if filtered else [a.title for a in articles[:20]]
-        analysis  = self.model.analyze(headlines)
+        # Sentiment scoring (FinBERT, when active) is CPU-bound and can take a
+        # while over hundreds of headlines — run it in a worker thread so it
+        # doesn't freeze the event loop for every other concurrent request.
+        loop = asyncio.get_event_loop()
+        analysis = await loop.run_in_executor(None, self.model.analyze, headlines)
 
         # Per-asset breakdown
         asset_scores = {}
@@ -56,7 +61,7 @@ class NewsAnalyzer:
             kws = ASSET_KEYWORDS[asset]
             relevant = [a.title for a in articles if any(k in a.title.lower() for k in kws)]
             if relevant:
-                asset_result = self.model.analyze(relevant)
+                asset_result = await loop.run_in_executor(None, self.model.analyze, relevant)
                 asset_scores[asset] = {
                     "market_score": asset_result["market_score"],
                     "sentiment": asset_result["overall_sentiment"],

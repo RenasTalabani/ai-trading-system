@@ -62,7 +62,11 @@ exports.getBatchTickers = async (req, res, next) => {
     const raw = req.body.assets || req.query.assets;
     const assets = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split(',') : []);
     if (!assets.length) return res.status(400).json({ success: false, message: 'assets required' });
-    const tickers = await fetchBatchTickers(assets);
+
+    // Binance's batch endpoint rejects the whole request if any symbol isn't
+    // a Binance pair (e.g. XAUUSD) — only forward the ones it actually knows.
+    const binanceAssets = assets.filter((a) => TRACKED_ASSETS.includes(a.toUpperCase()));
+    const tickers = binanceAssets.length ? await fetchBatchTickers(binanceAssets) : [];
     res.status(200).json({ success: true, tickers });
   } catch (err) {
     logger.error('Batch ticker error:', err.message);

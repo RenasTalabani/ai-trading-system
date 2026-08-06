@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -43,7 +44,19 @@ social_model       = SocialSentimentModel()
 lstm_model         = LSTMModel(model_path=settings.model_path)
 fusion_model       = FusionModel(model_path=settings.model_path)
 calibrator         = ConfidenceCalibrator(model_path=settings.model_path)
-transformer_model  = TransformerModel(model_path=settings.model_path)   # Phase 8
+transformer_model  = TransformerModel(model_path=settings.model_path, asset="BTCUSDT")   # Phase 8
+
+# Per-asset transformer pool — BTCUSDT reuses the singleton above (backward
+# compatible with the existing checkpoint/registry entry), other assets get
+# their own lazily-created + cached instance instead of sharing BTCUSDT's model.
+_transformer_pool = {"BTCUSDT": transformer_model}
+
+
+def get_transformer_for(asset: str) -> "TransformerModel":
+    asset = asset.upper()
+    if asset not in _transformer_pool:
+        _transformer_pool[asset] = TransformerModel(model_path=settings.model_path, asset=asset)
+    return _transformer_pool[asset]
 model_registry     = ModelRegistry(model_path=settings.model_path)      # Phase 8
 drift_detector     = DriftDetector()                                     # Phase 8
 online_learner     = OnlineLearner(                                      # Phase 8
@@ -69,6 +82,7 @@ signal_engine = SignalEngine(
     online_learner=online_learner,         # Phase 8
     drift_detector=drift_detector,         # Phase 8
     model_registry=model_registry,         # Phase 8
+    transformer_for_asset=get_transformer_for,
 )
 
 news_analyzer    = signal_engine.news_analyzer
@@ -170,7 +184,7 @@ async def status():
         "calibrator_ready":  calibrator.is_fitted,
         "tracked_assets":    TRACKED_ASSETS,
         "live_prices":       prices,
-        "feedback_stats":    feedback_evaluator.get_stats(),
+        "feedback_stats":    await feedback_evaluator.get_stats(),
         "drift_status":      drift_detector.status(),
         "registry_summary":  model_registry.summary(),
     }
@@ -243,20 +257,24 @@ class TransformerTrainRequest(BaseModel):
     epochs: int = 30
 
 async def _run_transformer_training(asset: str, epochs: int):
+    asset = asset.upper()
     try:
-        from app.services.data_processor import DataProcessor
-        dp = DataProcessor()
-        df = await dp.fetch_market_data(asset.upper(), "1h", limit=1000)
+        df = await data_processor.get_candles(asset, "1h", limit=1000)
         if df is None or len(df) < 100:
             logger.error(f"Insufficient data to train Transformer on {asset}")
             return
-        result = transformer_model.train(df, epochs=epochs)
-        logger.info(f"Transformer training complete: {result}")
+        model = get_transformer_for(asset)
+        # model.train() is synchronous CPU-bound PyTorch training — run it in a
+        # worker thread so it doesn't freeze the event loop (and every other
+        # concurrent request/predict call) for the ~30-60s a training run takes.
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: model.train(df, epochs=epochs))
+        logger.info(f"Transformer training complete for {asset}: {result}")
         if result.get("success") and model_registry:
-            import os
+            registry_name = "transformer" if asset == "BTCUSDT" else f"transformer_{asset}"
             model_registry.register(
-                "transformer",
-                file_path=os.path.join(settings.model_path, "transformer.pt"),
+                registry_name,
+                file_path=model._ckpt_path(),
                 metrics={
                     "val_accuracy": result.get("val_accuracy"),
                     "sequences":    result.get("sequences"),
@@ -265,7 +283,14 @@ async def _run_transformer_training(asset: str, epochs: int):
                 notes=f"trained-on-{asset}",
             )
     except Exception as e:
-        logger.error(f"Transformer training failed: {e}", exc_info=True)
+        logger.error(f"Transformer training failed for {asset}: {e}", exc_info=True)
+
+
+async def _run_transformer_training_all(epochs: int):
+    assets = list(TRACKED_ASSETS) + ["XAUUSD"]
+    for asset in assets:
+        await _run_transformer_training(asset, epochs)
+    logger.info(f"Transformer batch training complete for {len(assets)} assets.")
 
 @router.post("/train/transformer")
 async def train_transformer(req: TransformerTrainRequest, background_tasks: BackgroundTasks):
@@ -273,6 +298,23 @@ async def train_transformer(req: TransformerTrainRequest, background_tasks: Back
     return {
         "success": True,
         "message": f"Transformer training started in background on {req.asset}",
+        "epochs":  req.epochs,
+    }
+
+class TransformerTrainAllRequest(BaseModel):
+    epochs: int = 30
+
+@router.post("/train/transformer/all")
+async def train_transformer_all(req: TransformerTrainAllRequest, background_tasks: BackgroundTasks):
+    """Train a separate Transformer model per tracked asset (+ gold) instead of
+    sharing the single BTCUSDT-trained model everywhere. Takes real minutes per
+    asset — this is an explicit, operator-triggered batch job, not run on boot."""
+    assets = list(TRACKED_ASSETS) + ["XAUUSD"]
+    background_tasks.add_task(_run_transformer_training_all, req.epochs)
+    return {
+        "success": True,
+        "message": f"Per-asset Transformer training started in background for {len(assets)} assets.",
+        "assets":  assets,
         "epochs":  req.epochs,
     }
 
@@ -349,7 +391,7 @@ async def run_multi_backtest(background_tasks: BackgroundTasks):
 
 @router.get("/feedback/stats")
 async def feedback_stats():
-    return {"success": True, **feedback_evaluator.get_stats()}
+    return {"success": True, **await feedback_evaluator.get_stats()}
 
 @router.post("/feedback/evaluate")
 async def trigger_evaluation(background_tasks: BackgroundTasks):

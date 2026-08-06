@@ -17,11 +17,39 @@ import pandas as pd
 from app.config import get_settings
 from app.services.news_analyzer import NewsAnalyzer
 from app.services.social_analyzer import SocialAnalyzer
+from app.services.regime_detector import RegimeDetector
+from app.services.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.signal_engine")
 
+# Static fallback if the RL weight engine is unavailable — kept in the same
+# shape it's always been (market/transformer split of the RL "technical" bucket).
 WEIGHTS = {"market": 0.45, "transformer": 0.25, "news": 0.20, "social": 0.10}
+_regime_detector = RegimeDetector()
+_mtf_analyzer = MultiTimeframeAnalyzer()
+
+
+def _live_weights() -> dict:
+    """RL-adjusted weights (app.services.global_analyzer), remapped from the RL
+    engine's technical/news/social/macro buckets onto market/transformer/news/social.
+    Falls back to the static WEIGHTS dict if the RL engine can't be reached."""
+    try:
+        from app.services.global_analyzer import rl_get_weights
+        rl = rl_get_weights()
+        technical = rl.get("technical", 0.70) + rl.get("macro", 0.0)
+        market      = technical * (WEIGHTS["market"] / (WEIGHTS["market"] + WEIGHTS["transformer"]))
+        transformer = technical * (WEIGHTS["transformer"] / (WEIGHTS["market"] + WEIGHTS["transformer"]))
+        news   = rl.get("news", WEIGHTS["news"])
+        social = rl.get("social", WEIGHTS["social"])
+        total  = market + transformer + news + social
+        if total <= 0:
+            return dict(WEIGHTS)
+        return {"market": market / total, "transformer": transformer / total,
+                "news": news / total, "social": social / total}
+    except Exception as e:
+        logger.debug(f"RL weights unavailable, using static fallback: {e}")
+        return dict(WEIGHTS)
 
 BEARISH_OVERRIDES = {"hack_exploit", "market_crash", "regulation"}
 BULLISH_OVERRIDES = {"etf", "rally", "halving", "partnership"}
@@ -32,18 +60,22 @@ class SignalEngine:
                  lstm_model=None, fusion_model=None, calibrator=None,
                  feedback_evaluator=None,
                  transformer_model=None, online_learner=None,
-                 drift_detector=None, model_registry=None):
+                 drift_detector=None, model_registry=None,
+                 transformer_for_asset=None):
         self.market_model       = market_model
         self.news_model         = news_model
         self.social_model       = social_model
         self.lstm_model         = lstm_model          # kept for backward compat
-        self.transformer_model  = transformer_model   # Phase 8 primary
+        self.transformer_model  = transformer_model   # Phase 8 primary — default/BTCUSDT
         self.fusion_model       = fusion_model
         self.calibrator         = calibrator
         self.feedback_evaluator = feedback_evaluator
         self.online_learner     = online_learner
         self.drift_detector     = drift_detector
         self.model_registry     = model_registry
+        # Optional per-asset transformer lookup (routes.get_transformer_for);
+        # falls back to the single default transformer_model if not provided.
+        self._transformer_for_asset = transformer_for_asset
         self.news_analyzer      = NewsAnalyzer(news_model)
         self.social_analyzer    = SocialAnalyzer(social_model)
 
@@ -91,6 +123,10 @@ class SignalEngine:
         rf_proba  = rf_result.get("probabilities", {"BUY": 33, "SELL": 33, "HOLD": 34})
 
         # ── 2. Transformer model (primary sequence model, Phase 8) ─────────────
+        # Per-asset model if a pool lookup was injected, else the shared default.
+        active_transformer = (self._transformer_for_asset(asset)
+                               if self._transformer_for_asset else self.transformer_model)
+
         transformer_result = {
             "direction": "HOLD", "confidence": 50,
             "model": "transformer-unavailable",
@@ -98,9 +134,9 @@ class SignalEngine:
         }
         transformer_proba = transformer_result["probabilities"]
 
-        if self.transformer_model and self.transformer_model.is_trained:
+        if active_transformer and active_transformer.is_trained:
             try:
-                transformer_result = self.transformer_model.predict(candles)
+                transformer_result = active_transformer.predict(candles)
                 transformer_proba  = transformer_result.get("probabilities", transformer_proba)
             except Exception as e:
                 logger.debug(f"Transformer predict failed for {asset}: {e}")
@@ -172,8 +208,12 @@ class SignalEngine:
         macd_h = float(row.get("macd_hist", 0))
         vol_r  = float(row.get("vol_ratio", 1))
 
-        if self.fusion_model and self.fusion_model.is_trained:
-            fv = self.fusion_model.build_feature_vector(
+        # Build the feature vector unconditionally — even before the fusion
+        # model is trained, this gets captured by the feedback loop so a
+        # training set accumulates for when there's enough labeled history.
+        fusion_features = None
+        if self.fusion_model:
+            fusion_features = self.fusion_model.build_feature_vector(
                 rf_proba=rf_proba,
                 lstm_proba=lstm_proba,
                 news_score=news_score,
@@ -184,22 +224,26 @@ class SignalEngine:
                 rsi=rsi, macd_hist=macd_h, vol_ratio=vol_r,
                 transformer_proba=transformer_proba,   # Phase 8
             )
-            fusion_result = self.fusion_model.predict(fv)
+
+        if self.fusion_model and self.fusion_model.is_trained:
+            fusion_result = self.fusion_model.predict(fusion_features)
             final_dir     = fusion_result["direction"]
             raw_conf      = fusion_result["confidence"]
         else:
-            # Phase 8 weighted vote: RF 45%, Transformer 25%, News 20%, Social 10%
+            # RL-weighted vote (falls back to the static 45/25/20/10 split if
+            # the RL engine can't be reached — see _live_weights()).
+            weights = _live_weights()
             tf_buy  = transformer_proba.get("BUY",  33.3) / 100.0
             tf_sell = transformer_proba.get("SELL", 33.3) / 100.0
 
-            buy_s = (WEIGHTS["market"]      * rf_proba.get("BUY",  33) / 100 +
-                     WEIGHTS["transformer"] * tf_buy +
-                     WEIGHTS["news"]        * news_score / 100 +
-                     WEIGHTS["social"]      * social_score / 100)
-            sell_s = (WEIGHTS["market"]     * rf_proba.get("SELL", 33) / 100 +
-                      WEIGHTS["transformer"] * tf_sell +
-                      WEIGHTS["news"]        * (1 - news_score / 100) +
-                      WEIGHTS["social"]      * (1 - social_score / 100))
+            buy_s = (weights["market"]      * rf_proba.get("BUY",  33) / 100 +
+                     weights["transformer"] * tf_buy +
+                     weights["news"]        * news_score / 100 +
+                     weights["social"]      * social_score / 100)
+            sell_s = (weights["market"]     * rf_proba.get("SELL", 33) / 100 +
+                      weights["transformer"] * tf_sell +
+                      weights["news"]        * (1 - news_score / 100) +
+                      weights["social"]      * (1 - social_score / 100))
 
             if   buy_s >= 0.58:  final_dir, raw_conf = "BUY",  round(buy_s  * 100, 1)
             elif sell_s >= 0.58: final_dir, raw_conf = "SELL", round(sell_s * 100, 1)
@@ -207,6 +251,30 @@ class SignalEngine:
 
         # ── 6. Event override ──────────────────────────────────────────────────
         final_dir, raw_conf = self._event_override(final_dir, raw_conf, all_events)
+
+        # ── 6b. Regime adjustment ───────────────────────────────────────────────
+        regime = "TRENDING"
+        try:
+            regime = _regime_detector.detect(candles)
+            modifier = _regime_detector.regime_score_modifier(regime, final_dir)
+            raw_conf = round(min(100, max(0, raw_conf * modifier)), 1)
+        except Exception as e:
+            logger.debug(f"Regime detection skipped for {asset}: {e}")
+
+        # ── 6c. Multi-timeframe confirmation ────────────────────────────────────
+        trend_alignment = "neutral"
+        if final_dir != "HOLD":
+            try:
+                mtf = await _mtf_analyzer.analyze(asset, ["4h", "1d"])
+                trend_alignment = mtf.get("trend_alignment", "neutral")
+                agrees = ((trend_alignment == "bullish" and final_dir == "BUY") or
+                          (trend_alignment == "bearish" and final_dir == "SELL"))
+                fights = ((trend_alignment == "bullish" and final_dir == "SELL") or
+                          (trend_alignment == "bearish" and final_dir == "BUY"))
+                if agrees: raw_conf = round(min(100, raw_conf + 5), 1)
+                if fights: raw_conf = round(max(0, raw_conf - 8), 1)
+            except Exception as e:
+                logger.debug(f"Multi-timeframe confirmation skipped for {asset}: {e}")
 
         # ── 7. Confidence calibration ──────────────────────────────────────────
         final_conf = (self.calibrator.calibrate(raw_conf)
@@ -233,6 +301,8 @@ class SignalEngine:
                                     "model": transformer_result.get("model")},
                     "indicators":  {"rsi": round(rsi, 2), "macd_hist": round(macd_h, 4),
                                     "ema20": round(float(row.get("ema20", 0)), 4)},
+                    "regime":            regime,
+                    "trend_alignment":   trend_alignment,
                 },
                 "news":   {"score": news_score, "headlines": news_result.get("headlines", []),
                            "events": all_events},
@@ -251,14 +321,16 @@ class SignalEngine:
             if self.feedback_evaluator:
                 # Attach sequence snapshot for online learner
                 seq_snapshot = None
-                if self.transformer_model and self.transformer_model.is_trained:
-                    seq_snapshot = self.transformer_model.get_sequence_for_replay(candles)
-                signal_payload["_seq_snapshot"]     = seq_snapshot
+                if active_transformer and active_transformer.is_trained:
+                    seq_snapshot = active_transformer.get_sequence_for_replay(candles)
+                signal_payload["_seq_snapshot"]      = seq_snapshot
                 signal_payload["_transformer_proba"] = transformer_proba
-                self.feedback_evaluator.record_signal(signal_payload)
+                signal_payload["_fusion_features"]   = fusion_features
+                await self.feedback_evaluator.record_signal(signal_payload)
                 # These are only for the feedback loop above (raw numpy arrays
                 # aren't JSON-serializable) — strip before returning to callers.
                 signal_payload.pop("_seq_snapshot", None)
                 signal_payload.pop("_transformer_proba", None)
+                signal_payload.pop("_fusion_features", None)
 
         return signal_payload

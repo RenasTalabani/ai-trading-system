@@ -77,11 +77,11 @@ function broadcastSignal(signal) {
 
 function broadcastPriceUpdate(asset, price) {
   if (!wss) return;
-  const payload = JSON.stringify({ type: 'price', asset, price, ts: Date.now() });
+  const payload = JSON.stringify({ type: 'price_update', asset, price, ts: Date.now() });
   wss.clients.forEach((ws) => {
     if (ws.readyState !== WebSocket.OPEN) return;
     const subs = ws.subscriptions || [];
-    if (subs.includes(asset)) ws.send(payload);
+    if (subs.length === 0 || subs.includes(asset)) ws.send(payload);
   });
 }
 
