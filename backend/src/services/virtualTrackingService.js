@@ -11,6 +11,7 @@ const logger           = require('../config/logger');
 
 // Lazy-require to avoid circular dependency at startup
 function notifySvc() { return require('./notificationService'); }
+function aiSvc()     { return require('./aiService'); }
 
 // ─── Portfolio helpers ────────────────────────────────────────────────────────
 
@@ -51,6 +52,12 @@ function updateBestWorst(portfolio, trade, pnl) {
   }
 }
 
+// Default $ distance to trail by, once a trade opts into trailing stop —
+// mirrors the original entry-to-SL distance, or 2% of entry if no SL exists.
+function trailingDistanceFor(entryPrice, stopLoss) {
+  return stopLoss ? Math.abs(entryPrice - stopLoss) : entryPrice * 0.02;
+}
+
 // ─── Pick up new signals and create VirtualTrades ────────────────────────────
 
 async function pickupNewSignals() {
@@ -84,6 +91,7 @@ async function pickupNewSignals() {
         stopLoss:   sig.price.stopLoss   || null,
         takeProfit: sig.price.takeProfit || null,
         sizeUsd:    parseFloat(sizeUsd.toFixed(2)),
+        trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
         openedAt:   sig.createdAt,
       });
     }
@@ -107,6 +115,112 @@ async function pickupNewSignals() {
   }
 }
 
+// ─── Open a leveraged futures position on an existing signal ─────────────────
+// Manual, per-trade opt-in (mirrors real futures trading — you choose leverage
+// per position). Independent of the automatic spot pickup above: a signal can
+// have both a spot VirtualTrade (auto-tracked) and a futures one (this), or
+// just one — whichever happens to run first claims the signalId in the spot
+// dedup check, which is fine (no duplicate exposure to the same signal).
+
+async function openFuturesTrade(signalId, leverage) {
+  leverage = Math.min(20, Math.max(1, parseInt(leverage, 10) || 1));
+
+  const sig = await Signal.findById(signalId);
+  if (!sig || !sig.price?.entry) {
+    throw new Error('Signal not found or missing entry price.');
+  }
+  if (!['BUY', 'SELL'].includes(sig.direction)) {
+    throw new Error('Only BUY/SELL signals can be opened as futures.');
+  }
+
+  const portfolio = await getPortfolio();
+  const marginUsd = parseFloat(
+    ((portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage).toFixed(2)
+  );
+
+  const liquidationPrice = sig.direction === 'BUY'
+    ? sig.price.entry * (1 - 1 / leverage)
+    : sig.price.entry * (1 + 1 / leverage);
+
+  const trade = await VirtualTrade.create({
+    signalId:         sig._id,
+    asset:            sig.asset,
+    direction:        sig.direction,
+    entryPrice:       sig.price.entry,
+    stopLoss:         sig.price.stopLoss   || null,
+    takeProfit:       sig.price.takeProfit || null,
+    sizeUsd:          parseFloat((marginUsd * leverage).toFixed(2)), // notional
+    productType:      'futures',
+    leverage,
+    marginUsd,
+    liquidationPrice: parseFloat(liquidationPrice.toFixed(8)),
+    trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
+    openedAt:         new Date(),
+  });
+
+  logger.info(
+    `[VirtualTracker] Opened FUTURES ${sig.asset} ${sig.direction} @ ${leverage}x ` +
+    `— margin $${marginUsd}, liq @ ${liquidationPrice.toFixed(4)}`
+  );
+  return trade;
+}
+
+// ─── Opt an open trade into trailing stop-loss ────────────────────────────────
+
+async function enableTrailingStop(tradeId) {
+  const trade = await VirtualTrade.findById(tradeId);
+  if (!trade) throw new Error('Trade not found.');
+  if (trade.status !== 'open') throw new Error('Only open trades can enable a trailing stop.');
+
+  trade.trailingStopEnabled = true;
+  if (!trade.trailingStopDistance) {
+    trade.trailingStopDistance = trailingDistanceFor(trade.entryPrice, trade.stopLoss);
+  }
+  await trade.save();
+  logger.info(`[VirtualTracker] Trailing stop enabled for ${trade.asset} trade ${tradeId} (distance $${trade.trailingStopDistance.toFixed(4)})`);
+  return trade;
+}
+
+// ─── Funding payments (every 8h, real Binance perpetual rates) ───────────────
+// Real funding data only covers BTCUSDT/ETHUSDT (ai-service's macro_data_service
+// only fetches those) — other assets simply accrue no funding, rather than a
+// fabricated rate standing in for real market data.
+
+async function applyFundingPayments() {
+  try {
+    const openFutures = await VirtualTrade.find({ status: 'open', productType: 'futures' });
+    if (openFutures.length === 0) return;
+
+    const rates = await aiSvc().getFundingRates();
+    if (!rates || Object.keys(rates).length === 0) return;
+
+    const portfolio = await getPortfolio();
+    let balanceChanged = false;
+
+    for (const trade of openFutures) {
+      const rate = rates[trade.asset]?.funding_rate;
+      if (rate === undefined) continue;
+
+      const notionalUsd = trade.marginUsd * trade.leverage;
+      // Longs pay shorts when the rate is positive (standard perpetual convention).
+      const directionSign = trade.direction === 'BUY' ? -1 : 1;
+      const payment = notionalUsd * (rate / 100) * directionSign;
+
+      await VirtualTrade.updateOne({ _id: trade._id }, { $inc: { fundingPaid: payment } });
+      portfolio.currentBalance += payment;
+      balanceChanged = true;
+    }
+
+    if (balanceChanged) {
+      portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
+      await portfolio.save();
+      logger.info(`[VirtualTracker] Applied funding payments to ${openFutures.length} open futures position(s).`);
+    }
+  } catch (err) {
+    logger.error('[VirtualTracker] applyFundingPayments error:', err.message);
+  }
+}
+
 // ─── Check open trades against current price cache ───────────────────────────
 
 async function checkOpenTrades(priceCache) {
@@ -124,18 +238,44 @@ async function checkOpenTrades(priceCache) {
       const currentPrice = typeof cached === 'object' ? cached.price : cached;
       if (!currentPrice || isNaN(currentPrice)) continue;
 
+      // Trailing stop — tighten stopLoss toward price as it moves favorably.
+      // Never loosens; only takes effect once price has moved far enough
+      // that the trailed stop would sit past the original one.
+      if (trade.trailingStopEnabled && trade.trailingStopDistance) {
+        const trailedStop = trade.direction === 'BUY'
+          ? currentPrice - trade.trailingStopDistance
+          : currentPrice + trade.trailingStopDistance;
+        const improved = trade.direction === 'BUY'
+          ? (trade.stopLoss == null || trailedStop > trade.stopLoss)
+          : (trade.stopLoss == null || trailedStop < trade.stopLoss);
+        if (improved) {
+          trade.stopLoss = trailedStop;
+          await VirtualTrade.updateOne({ _id: trade._id }, { stopLoss: trailedStop });
+        }
+      }
+
       let closed     = false;
       let result     = null;
       let exitPrice  = currentPrice;
       let exitReason = null;
 
-      if (trade.direction === 'BUY') {
+      // Liquidation takes priority over TP/SL — it represents total loss of
+      // the committed margin, checked first since it's the more severe event.
+      if (trade.productType === 'futures' && trade.liquidationPrice) {
+        if (trade.direction === 'BUY' && currentPrice <= trade.liquidationPrice) {
+          closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
+        } else if (trade.direction === 'SELL' && currentPrice >= trade.liquidationPrice) {
+          closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
+        }
+      }
+
+      if (!closed && trade.direction === 'BUY') {
         if (trade.takeProfit && currentPrice >= trade.takeProfit) {
           closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
         } else if (trade.stopLoss && currentPrice <= trade.stopLoss) {
           closed = true; result = 'loss'; exitPrice = trade.stopLoss; exitReason = 'SL';
         }
-      } else if (trade.direction === 'SELL') {
+      } else if (!closed && trade.direction === 'SELL') {
         if (trade.takeProfit && currentPrice <= trade.takeProfit) {
           closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
         } else if (trade.stopLoss && currentPrice >= trade.stopLoss) {
@@ -173,7 +313,15 @@ async function checkOpenTrades(priceCache) {
       } else {
         pnlPct = ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
       }
-      const pnl        = (trade.sizeUsd * pnlPct) / 100;
+
+      let pnl;
+      if (trade.productType === 'futures') {
+        pnlPct = pnlPct * trade.leverage; // % of margin, not raw price move
+        pnl    = (trade.marginUsd * pnlPct) / 100;
+        pnl    = Math.max(pnl, -trade.marginUsd); // can't lose more than margin committed
+      } else {
+        pnl = (trade.sizeUsd * pnlPct) / 100;
+      }
       const balanceAfter = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
 
       await VirtualTrade.updateOne({ _id: trade._id }, {
@@ -321,6 +469,63 @@ async function getPerformance() {
   return getSummary('all');
 }
 
+// ─── Portfolio exposure — concentration & leverage risk across open trades ───
+
+async function getExposureSummary() {
+  const openTrades = await VirtualTrade.find({ status: 'open' }).lean();
+  const portfolio   = await getPortfolio();
+
+  const totalNotional = openTrades.reduce((s, t) => s + (t.sizeUsd || 0), 0);
+  const totalMargin    = openTrades.reduce((s, t) => s + (t.marginUsd ?? t.sizeUsd ?? 0), 0);
+
+  const byAsset = {};
+  for (const t of openTrades) {
+    if (!byAsset[t.asset]) {
+      byAsset[t.asset] = { notionalUsd: 0, count: 0, directions: { BUY: 0, SELL: 0 } };
+    }
+    byAsset[t.asset].notionalUsd += t.sizeUsd || 0;
+    byAsset[t.asset].count += 1;
+    byAsset[t.asset].directions[t.direction] += 1;
+  }
+  for (const asset of Object.keys(byAsset)) {
+    byAsset[asset].concentrationPct = totalNotional > 0
+      ? parseFloat(((byAsset[asset].notionalUsd / totalNotional) * 100).toFixed(1))
+      : 0;
+  }
+
+  // Simple correlation warning: 3+ open positions all pointing the same
+  // direction means the account is effectively one big directional bet,
+  // regardless of how many different assets that spans.
+  const directionCounts = openTrades.reduce((acc, t) => {
+    acc[t.direction] = (acc[t.direction] || 0) + 1;
+    return acc;
+  }, {});
+  const dominantDirection = Object.entries(directionCounts).sort((a, b) => b[1] - a[1])[0];
+  const concentratedDirectionWarning = !!dominantDirection && dominantDirection[1] >= 3
+    && dominantDirection[1] === openTrades.length;
+
+  const futuresTrades = openTrades.filter(t => t.productType === 'futures');
+  const nearLiquidation = futuresTrades.filter(t => {
+    if (!t.liquidationPrice) return false;
+    const distancePct = Math.abs(t.entryPrice - t.liquidationPrice) / t.entryPrice * 100;
+    return distancePct < 5; // liquidation within 5% of entry — high leverage risk
+  }).length;
+
+  return {
+    openPositions:    openTrades.length,
+    totalNotionalUsd: parseFloat(totalNotional.toFixed(2)),
+    totalMarginUsd:   parseFloat(totalMargin.toFixed(2)),
+    exposurePctOfBalance: portfolio.currentBalance > 0
+      ? parseFloat(((totalNotional / portfolio.currentBalance) * 100).toFixed(1))
+      : 0,
+    futuresPositions: futuresTrades.length,
+    nearLiquidationCount: nearLiquidation,
+    byAsset,
+    concentratedDirectionWarning,
+    dominantDirection: dominantDirection ? dominantDirection[0] : null,
+  };
+}
+
 // ─── Reset / set-capital ─────────────────────────────────────────────────────
 
 async function resetPortfolio(startingBalance = 500, riskPerTradePct = 5) {
@@ -350,4 +555,8 @@ async function setCapital(startingBalance, riskPerTradePct) {
   await portfolio.save();
 }
 
-module.exports = { pickupNewSignals, checkOpenTrades, getPerformance, getSummary, resetPortfolio, setCapital };
+module.exports = {
+  pickupNewSignals, checkOpenTrades, getPerformance, getSummary,
+  resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
+  enableTrailingStop, getExposureSummary,
+};

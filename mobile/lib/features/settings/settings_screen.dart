@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/services/api_service.dart';
@@ -185,6 +186,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               label: '${prefs.maxNotificationsPerHour}',
               onChangeEnd: (v) => _savePrefs({'maxNotificationsPerHour': v.round()}),
               onChanged: (_) {},
+            ),
+          ]),
+          const SizedBox(height: 20),
+
+          // Tools
+          const _SectionHeader('Tools'),
+          _SettingsCard(children: [
+            ListTile(
+              title: const Text('AI Model Backtest'),
+              subtitle: const Text('See how the AI would have performed historically'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+              onTap: () => context.push('/backtest'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              title: const Text('DCA Plans'),
+              subtitle: const Text('Simulated dollar-cost averaging'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+              onTap: () => context.push('/dca'),
             ),
           ]),
           const SizedBox(height: 20),

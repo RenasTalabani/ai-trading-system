@@ -91,6 +91,22 @@ class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
     return const VirtualTradesState(loading: true);
   }
 
+  /// Opens a simulated leveraged position from an existing signal. Paper
+  /// trading only — leverage amplifies simulated P&L and introduces a
+  /// simulated liquidation price, same mechanics as real futures.
+  Future<void> openFutures(String signalId, int leverage) async {
+    await ApiService.dio.post('virtual/trades/$signalId/open-futures',
+        data: {'leverage': leverage});
+    await fetch();
+  }
+
+  /// Locks in gains automatically as price moves favorably — the stop only
+  /// ever tightens, never loosens.
+  Future<void> enableTrailingStop(String tradeId) async {
+    await ApiService.dio.post('virtual/trades/$tradeId/trailing-stop');
+    await fetch();
+  }
+
   Future<void> fetch({int page = 1, String? status, String? range}) async {
     final effectiveRange = range ?? state.range;
     state = state.copyWith(loading: true, range: effectiveRange);

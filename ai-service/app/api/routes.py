@@ -442,7 +442,7 @@ async def get_all_prices():
 
 @router.get("/prices/{asset}")
 async def get_price(asset: str):
-    price = await fetch_current_price(asset.upper())
+    price = await data_processor.get_live_price(asset.upper())
     if price is None:
         raise HTTPException(status_code=404, detail=f"Price unavailable for {asset.upper()}")
     return {"success": True, "asset": asset.upper(), "price": price}

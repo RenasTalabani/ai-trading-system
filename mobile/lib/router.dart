@@ -13,6 +13,8 @@ import 'features/watchlist/watchlist_screen.dart';
 import 'features/brain/ask_brain_screen.dart';
 import 'features/scanner/market_scanner_screen.dart';
 import 'features/trades/trade_history_screen.dart';
+import 'features/backtest/backtest_screen.dart';
+import 'features/dca/dca_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
@@ -43,6 +45,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/settings',      builder: (_, __) => const SettingsScreen()),
           GoRoute(path: '/ask-brain',    builder: (_, __) => const AskBrainScreen()),
           GoRoute(path: '/trades',       builder: (_, __) => const TradeHistoryScreen()),
+          GoRoute(path: '/backtest',     builder: (_, __) => const BacktestScreen()),
+          GoRoute(path: '/dca',          builder: (_, __) => const DCAScreen()),
         ],
       ),
     ],

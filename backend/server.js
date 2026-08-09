@@ -22,6 +22,7 @@ const { startPriceAlertJob }         = require('./src/jobs/priceAlertJob');
 const { startDecisionTrackingJob }   = require('./src/jobs/decisionTrackingJob');
 const { startAIDecisionJob }         = require('./src/jobs/aiDecisionJob');
 const { start: startPerformanceAnalysisJob } = require('./src/jobs/performanceAnalysisJob');
+const { startDcaJob }                = require('./src/jobs/dcaJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -65,6 +66,7 @@ async function bootstrap() {
 
   // Virtual Performance Tracker (isolated sidecar — read-only on signals)
   startVirtualTrackingJob();
+  startDcaJob();
 
   // Performance reports: daily at 08:00 UTC, weekly on Mondays
   startDailyReportJob();

@@ -12,8 +12,10 @@ from datetime import datetime, timezone, timedelta
 from typing import List
 import numpy as np
 
-from app.services.collectors.binance_collector import fetch_current_price
+from app.services.data_processor import DataProcessor
 from app.services import feedback_store
+
+_price_lookup = DataProcessor()
 
 logger = logging.getLogger("ai-service.feedback_loop")
 
@@ -77,7 +79,7 @@ class SignalOutcomeEvaluator:
             entry     = sig["entry_price"]
 
             try:
-                current_price = await fetch_current_price(asset)
+                current_price = await _price_lookup.get_live_price(asset)
                 if current_price is None:
                     continue
 

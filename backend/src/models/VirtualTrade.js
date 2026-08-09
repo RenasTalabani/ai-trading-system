@@ -15,6 +15,19 @@ const virtualTradeSchema = new mongoose.Schema(
     takeProfit: { type: Number, default: null },
     sizeUsd:    { type: Number, required: true },
 
+    // Simulated futures/leverage — spot trades leave these at their defaults.
+    productType:      { type: String, enum: ['spot', 'futures'], default: 'spot' },
+    leverage:         { type: Number, default: 1, min: 1, max: 20 },
+    marginUsd:        { type: Number, default: null },  // capital committed (deducted from balance)
+    liquidationPrice: { type: Number, default: null },
+    fundingPaid:      { type: Number, default: 0 },      // cumulative funding payments
+
+    // Trailing stop-loss — opt-in per trade (open trades only). When enabled,
+    // stopLoss only ever tightens toward the current price as it moves
+    // favorably, locking in gains instead of sitting at the original SL.
+    trailingStopEnabled:  { type: Boolean, default: false },
+    trailingStopDistance: { type: Number, default: null }, // $ distance maintained from price
+
     status: {
       type: String,
       enum: ['open', 'closed_profit', 'closed_loss', 'cancelled', 'expired'],
@@ -22,7 +35,7 @@ const virtualTradeSchema = new mongoose.Schema(
       index: true,
     },
     result:     { type: String, enum: ['win', 'loss', 'cancelled', null], default: null },
-    exitReason: { type: String, enum: ['TP', 'SL', 'EXPIRED', 'session_reset', null], default: null },
+    exitReason: { type: String, enum: ['TP', 'SL', 'LIQUIDATED', 'EXPIRED', 'session_reset', null], default: null },
     exitPrice:  { type: Number, default: null },
     pnl:        { type: Number, default: null },
     pnlPct:     { type: Number, default: null },

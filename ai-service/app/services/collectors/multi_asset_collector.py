@@ -78,6 +78,10 @@ def _fetch_sync(yahoo_ticker: str, period: str = "60d", interval: str = "1h") ->
         }, index=idx)
         df.index.name = "time"
         df = df.sort_index()
+        # Match data_processor.py's shape (a real "timestamp" column, not just
+        # a named index) — callers like the backtester expect this uniformly
+        # regardless of whether candles came from Binance or Yahoo Finance.
+        df["timestamp"] = df.index
         return _compute_indicators(df)
     except Exception as e:
         logger.warning(f"[MultiAsset] yfinance fetch failed for {yahoo_ticker}: {e}")

@@ -138,7 +138,7 @@ class Backtester:
         logger.info(f"Backtesting {asset}/{interval} — {max_candles} candles, "
                     f"min_confidence={min_confidence}%")
 
-        df = await self.processor.fetch_market_data(asset, interval, limit=max_candles)
+        df = await self.processor.get_candles(asset, interval, limit=max_candles)
         if df is None or len(df) < 100:
             logger.error(f"Insufficient data for backtest: {asset}")
             return BacktestResult(asset=asset, interval=interval,
@@ -222,7 +222,14 @@ class Backtester:
         result.win_rate         = result.wins / result.total_trades if result.total_trades else 0
         result.total_return_pct = (capital - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100
         result.total_pnl_usd    = capital - INITIAL_CAPITAL
-        result.profit_factor    = gross_wins / gross_losses if gross_losses > 0 else float("inf")
+        # float('inf') isn't JSON-serializable — cap at a large finite sentinel
+        # for the (rare but real) case of zero losing trades in the sample.
+        if gross_losses > 0:
+            result.profit_factor = gross_wins / gross_losses
+        elif gross_wins > 0:
+            result.profit_factor = 999.0
+        else:
+            result.profit_factor = 0.0
         result.avg_win_pct      = float(np.mean(win_pcts))  if win_pcts  else 0
         result.avg_loss_pct     = float(np.mean(loss_pcts)) if loss_pcts else 0
 

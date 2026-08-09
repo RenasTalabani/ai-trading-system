@@ -59,4 +59,27 @@ async function trainModel(asset, interval = '1h') {
   }
 }
 
-module.exports = { generatePrediction, analyzeNews, analyzeSocial, getModelStatus, trainModel };
+async function getFundingRates() {
+  try {
+    const response = await aiClient.get('/api/macro/funding-rates');
+    return response.data.rates || {};
+  } catch (err) {
+    logger.error('AI funding rates fetch failed:', err.message);
+    return {};
+  }
+}
+
+async function getPrice(asset) {
+  try {
+    const response = await aiClient.get(`/api/prices/${asset}`);
+    return response.data.price ?? null;
+  } catch (err) {
+    logger.error(`AI price fetch failed for ${asset}:`, err.message);
+    return null;
+  }
+}
+
+module.exports = {
+  generatePrediction, analyzeNews, analyzeSocial, getModelStatus, trainModel,
+  getFundingRates, getPrice,
+};

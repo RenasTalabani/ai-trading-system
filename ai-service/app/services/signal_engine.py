@@ -54,6 +54,11 @@ def _live_weights() -> dict:
 BEARISH_OVERRIDES = {"hack_exploit", "market_crash", "regulation"}
 BULLISH_OVERRIDES = {"etf", "rally", "halving", "partnership"}
 
+# Funding rate is already expressed in percent (see macro_data_service.py).
+# Binance BTC/ETH perpetual funding is typically ~0.01%/8h in normal markets —
+# anything past 0.05% is a genuinely crowded, overleveraged market.
+FUNDING_EXTREME_THRESHOLD = 0.05
+
 
 class SignalEngine:
     def __init__(self, market_model, news_model, social_model,
@@ -276,6 +281,30 @@ class SignalEngine:
             except Exception as e:
                 logger.debug(f"Multi-timeframe confirmation skipped for {asset}: {e}")
 
+        # ── 6d. Funding-rate contrarian bias ────────────────────────────────────
+        # Extreme perpetual funding rates mean one side of the market is crowded
+        # and overleveraged — a real, known pattern that often precedes reversals.
+        # Only real data available is BTCUSDT/ETHUSDT (ai-service's own fetch).
+        funding_rate = None
+        if final_dir != "HOLD" and asset in ("BTCUSDT", "ETHUSDT"):
+            try:
+                from app.services.macro_data_service import MacroDataService
+                rates = await MacroDataService().get_funding_rates()
+                funding_rate = rates.get(asset, {}).get("funding_rate")
+                if funding_rate is not None:
+                    extreme_positive = funding_rate > FUNDING_EXTREME_THRESHOLD   # crowded longs
+                    extreme_negative = funding_rate < -FUNDING_EXTREME_THRESHOLD  # crowded shorts
+                    if extreme_positive and final_dir == "SELL":
+                        raw_conf = round(min(100, raw_conf + 6), 1)  # contrarian agrees
+                    elif extreme_positive and final_dir == "BUY":
+                        raw_conf = round(max(0, raw_conf - 8), 1)    # buying into crowded longs
+                    elif extreme_negative and final_dir == "BUY":
+                        raw_conf = round(min(100, raw_conf + 6), 1)
+                    elif extreme_negative and final_dir == "SELL":
+                        raw_conf = round(max(0, raw_conf - 8), 1)
+            except Exception as e:
+                logger.debug(f"Funding-rate contrarian check skipped for {asset}: {e}")
+
         # ── 7. Confidence calibration ──────────────────────────────────────────
         final_conf = (self.calibrator.calibrate(raw_conf)
                       if self.calibrator and self.calibrator.is_fitted
@@ -303,6 +332,7 @@ class SignalEngine:
                                     "ema20": round(float(row.get("ema20", 0)), 4)},
                     "regime":            regime,
                     "trend_alignment":   trend_alignment,
+                    "funding_rate":      funding_rate,
                 },
                 "news":   {"score": news_score, "headlines": news_result.get("headlines", []),
                            "events": all_events},

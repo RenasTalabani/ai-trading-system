@@ -147,6 +147,12 @@ class VirtualTradeModel extends Equatable {
   final int?    durationMinutes;
   final DateTime openedAt;
   final DateTime? closedAt;
+  final String  productType;
+  final int     leverage;
+  final double? marginUsd;
+  final double? liquidationPrice;
+  final double  fundingPaid;
+  final bool    trailingStopEnabled;
 
   const VirtualTradeModel({
     required this.id,
@@ -168,6 +174,12 @@ class VirtualTradeModel extends Equatable {
     this.durationMinutes,
     required this.openedAt,
     this.closedAt,
+    this.productType = 'spot',
+    this.leverage = 1,
+    this.marginUsd,
+    this.liquidationPrice,
+    this.fundingPaid = 0,
+    this.trailingStopEnabled = false,
   });
 
   factory VirtualTradeModel.fromJson(Map<String, dynamic> j) => VirtualTradeModel(
@@ -190,12 +202,20 @@ class VirtualTradeModel extends Equatable {
         durationMinutes: j['durationMinutes'] != null ? (j['durationMinutes']) as int  : null,
         openedAt:       DateTime.tryParse(j['openedAt'] ?? '') ?? DateTime.now(),
         closedAt:       j['closedAt'] != null ? DateTime.tryParse(j['closedAt']) : null,
+        productType:      j['productType'] ?? 'spot',
+        leverage:         (j['leverage'] ?? 1) as int,
+        marginUsd:        j['marginUsd']        != null ? (j['marginUsd']).toDouble()        : null,
+        liquidationPrice: j['liquidationPrice']  != null ? (j['liquidationPrice']).toDouble() : null,
+        fundingPaid:      (j['fundingPaid'] ?? 0).toDouble(),
+        trailingStopEnabled: (j['trailingStopEnabled'] ?? false) as bool,
       );
 
-  bool get isOpen   => status == 'open';
-  bool get isWin    => result == 'win';
-  bool get isLoss   => result == 'loss';
-  bool get isBuy    => direction == 'BUY';
+  bool get isOpen     => status == 'open';
+  bool get isWin      => result == 'win';
+  bool get isLoss     => result == 'loss';
+  bool get isBuy      => direction == 'BUY';
+  bool get isFutures  => productType == 'futures';
+  bool get isLiquidated => exitReason == 'LIQUIDATED';
 
   String get baseAsset {
     if (asset.endsWith('USDT')) return asset.replaceAll('USDT', '');

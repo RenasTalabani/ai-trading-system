@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/virtual_portfolio_provider.dart';
+import '../../core/providers/exposure_provider.dart';
 import '../../core/models/virtual_portfolio_model.dart';
+import '../../core/models/exposure_model.dart';
 import '../../core/theme/app_theme.dart';
 
 class VirtualTradesScreen extends ConsumerStatefulWidget {
@@ -95,26 +97,157 @@ class _TradeList extends ConsumerWidget {
       );
     }
 
+    final showExposure = status == 'open';
+    final headerCount = showExposure ? 1 : 0;
+
     return RefreshIndicator(
       color: AppColors.primary,
-      onRefresh: () => ref.read(virtualTradesProvider.notifier).fetch(
-            page: 1, status: status),
+      onRefresh: () async {
+        await ref.read(virtualTradesProvider.notifier).fetch(page: 1, status: status);
+        if (showExposure) await ref.read(exposureProvider.notifier).refresh();
+      },
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: state.trades.length + (state.page < state.pages ? 1 : 0),
+        itemCount: headerCount + state.trades.length + (state.page < state.pages ? 1 : 0),
         itemBuilder: (context, index) {
-          if (index == state.trades.length) {
+          if (showExposure && index == 0) {
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: _ExposureCard(),
+            );
+          }
+          final i = index - headerCount;
+          if (i == state.trades.length) {
             return _LoadMoreButton(
               loading: state.loading,
               onTap: () => ref.read(virtualTradesProvider.notifier).fetch(
                     page: state.page + 1, status: status),
             );
           }
-          return _TradeCard(trade: state.trades[index]);
+          return _TradeCard(trade: state.trades[i]);
         },
       ),
     );
   }
+}
+
+// ─── Portfolio exposure summary ────────────────────────────────────────────────
+
+class _ExposureCard extends ConsumerWidget {
+  const _ExposureCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(exposureProvider);
+
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (exposure) {
+        if (exposure.openPositions == 0) return const SizedBox.shrink();
+
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Portfolio Exposure',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textMuted)),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _ExposureStat(
+                  label: 'Total Exposure',
+                  value: '\$${exposure.totalNotionalUsd.toStringAsFixed(0)}')),
+              Expanded(child: _ExposureStat(
+                  label: '% of Balance',
+                  value: '${exposure.exposurePctOfBalance.toStringAsFixed(0)}%',
+                  color: exposure.exposurePctOfBalance > 100 ? AppColors.error : null)),
+              Expanded(child: _ExposureStat(
+                  label: 'Open Positions',
+                  value: '${exposure.openPositions}')),
+            ]),
+            if (exposure.byAsset.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(spacing: 6, runSpacing: 6, children: exposure.byAsset.map((a) =>
+                _AssetChip(exposure: a)).toList()),
+            ],
+            if (exposure.concentratedDirectionWarning) ...[
+              const SizedBox(height: 10),
+              _WarningRow(
+                icon: Icons.warning_amber_rounded,
+                text: 'All open positions are ${exposure.dominantDirection} — '
+                    'this is effectively one large directional bet, not a diversified portfolio.',
+              ),
+            ],
+            if (exposure.nearLiquidationCount > 0) ...[
+              const SizedBox(height: 8),
+              _WarningRow(
+                icon: Icons.bolt,
+                text: '${exposure.nearLiquidationCount} futures position(s) are within 5% of liquidation.',
+              ),
+            ],
+          ]),
+        );
+      },
+    );
+  }
+}
+
+class _ExposureStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+  const _ExposureStat({required this.label, required this.value, this.color});
+
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+    const SizedBox(height: 2),
+    Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold,
+        color: color ?? AppColors.textPrimary)),
+  ]);
+}
+
+class _AssetChip extends StatelessWidget {
+  final AssetExposure exposure;
+  const _AssetChip({required this.exposure});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    decoration: BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(6),
+    ),
+    child: Text(
+      '${exposure.asset.replaceAll('USDT', '')} ${exposure.concentrationPct.toStringAsFixed(0)}%',
+      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+    ),
+  );
+}
+
+class _WarningRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _WarningRow({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(10),
+    decoration: BoxDecoration(
+      color: AppColors.hold.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, size: 15, color: AppColors.hold),
+      const SizedBox(width: 8),
+      Expanded(child: Text(text,
+          style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary, height: 1.3))),
+    ]),
+  );
 }
 
 // ─── Trade card ───────────────────────────────────────────────────────────────
@@ -169,6 +302,10 @@ class _TradeCard extends StatelessWidget {
               const SizedBox(width: 4),
               const Text('USDT',
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              if (trade.isFutures) ...[
+                const SizedBox(width: 6),
+                _LeverageBadge(leverage: trade.leverage),
+              ],
               const Spacer(),
               // Exit reason badge (TP / SL / EXPIRED) shown only on closed trades
               if (trade.exitReason != null && !isOpen) ...[
@@ -190,20 +327,16 @@ class _TradeCard extends StatelessWidget {
             const SizedBox(height: 10),
 
             // ── Price row ─────────────────────────────────────────────────────
-            Row(children: [
+            Wrap(spacing: 12, runSpacing: 6, children: [
               _InfoChip(label: 'Entry', value: _price(trade.entryPrice)),
-              if (trade.exitPrice != null) ...[
-                const SizedBox(width: 8),
+              if (trade.exitPrice != null)
                 _InfoChip(label: 'Exit', value: _price(trade.exitPrice!)),
-              ],
-              if (trade.exitPrice == null && trade.stopLoss != null) ...[
-                const SizedBox(width: 8),
+              if (trade.exitPrice == null && trade.stopLoss != null)
                 _InfoChip(label: 'SL', value: _price(trade.stopLoss!)),
-              ],
-              if (trade.exitPrice == null && trade.takeProfit != null) ...[
-                const SizedBox(width: 8),
+              if (trade.exitPrice == null && trade.takeProfit != null)
                 _InfoChip(label: 'TP', value: _price(trade.takeProfit!)),
-              ],
+              if (trade.exitPrice == null && trade.isFutures && trade.liquidationPrice != null)
+                _InfoChip(label: 'Liq', value: _price(trade.liquidationPrice!)),
             ]),
 
             const SizedBox(height: 10),
@@ -243,6 +376,16 @@ class _TradeCard extends StatelessWidget {
                 Text(trade.durationLabel,
                     style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
               ],
+              if (trade.isFutures && trade.fundingPaid != 0) ...[
+                const SizedBox(width: 8),
+                Text(
+                  'Funding: ${trade.fundingPaid >= 0 ? '+' : ''}\$${trade.fundingPaid.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    color: trade.fundingPaid >= 0 ? AppColors.success : AppColors.error,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
               const Spacer(),
               if (!isOpen && pnl != null && pnlPct != null) ...[
                 Text(
@@ -262,9 +405,12 @@ class _TradeCard extends StatelessWidget {
                   ),
                 ),
               ],
-              if (isOpen)
+              if (isOpen) ...[
+                _TrailingStopToggle(trade: trade),
+                const SizedBox(width: 8),
                 Text(_timeAgo(trade.openedAt),
                     style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              ],
             ]),
           ],
         ),
@@ -296,10 +442,11 @@ class _ExitReasonBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (reason) {
-      'TP'      => AppColors.buy,
-      'SL'      => AppColors.sell,
-      'EXPIRED' => AppColors.textMuted,
-      _         => AppColors.textMuted,
+      'TP'         => AppColors.buy,
+      'SL'         => AppColors.sell,
+      'LIQUIDATED' => AppColors.error,
+      'EXPIRED'    => AppColors.textMuted,
+      _            => AppColors.textMuted,
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -310,6 +457,79 @@ class _ExitReasonBadge extends StatelessWidget {
       ),
       child: Text(reason,
           style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+    );
+  }
+}
+
+// ─── Trailing stop-loss toggle (open trades only) ─────────────────────────────
+
+class _TrailingStopToggle extends ConsumerStatefulWidget {
+  final VirtualTradeModel trade;
+  const _TrailingStopToggle({required this.trade});
+
+  @override
+  ConsumerState<_TrailingStopToggle> createState() => _TrailingStopToggleState();
+}
+
+class _TrailingStopToggleState extends ConsumerState<_TrailingStopToggle> {
+  bool _loading = false;
+
+  Future<void> _enable() async {
+    setState(() => _loading = true);
+    try {
+      await ref.read(virtualTradesProvider.notifier).enableTrailingStop(widget.trade.id);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to enable trailing stop: $e'),
+          backgroundColor: AppColors.error,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.trade.trailingStopEnabled;
+    if (_loading) {
+      return const SizedBox(width: 14, height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    return GestureDetector(
+      onTap: enabled ? null : _enable,
+      child: Tooltip(
+        message: enabled
+            ? 'Trailing stop active — locks in gains as price moves favorably'
+            : 'Enable trailing stop-loss',
+        child: Icon(
+          Icons.trending_up,
+          size: 16,
+          color: enabled ? AppColors.success : AppColors.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Leverage badge (paper futures only) ──────────────────────────────────────
+
+class _LeverageBadge extends StatelessWidget {
+  final int leverage;
+  const _LeverageBadge({required this.leverage});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.hold.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppColors.hold.withValues(alpha: 0.4)),
+      ),
+      child: Text('${leverage}x',
+          style: const TextStyle(color: AppColors.hold, fontSize: 10, fontWeight: FontWeight.bold)),
     );
   }
 }

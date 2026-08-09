@@ -89,6 +89,17 @@ class DataProcessor:
             return await multi_asset_collector.fetch_asset_data(asset)
         return await self.fetch_market_data(asset, interval, limit)
 
+    async def get_live_price(self, asset: str) -> Optional[float]:
+        """Same dispatch as get_candles, but for a single current price.
+        Named distinctly from get_current_price(df) below, which extracts a
+        price from an already-fetched candles DataFrame — different signature,
+        same name would have silently shadowed one or the other."""
+        from app.services.collectors.binance_collector import fetch_current_price
+        asset = asset.upper()
+        if asset in multi_asset_collector.ALL_MULTI_ASSETS:
+            return await multi_asset_collector.get_current_price(asset)
+        return await fetch_current_price(asset)
+
     def build_feature_vector(self, df: pd.DataFrame) -> np.ndarray:
         """Extract last-row features for ML model input."""
         row = df.iloc[-1]
