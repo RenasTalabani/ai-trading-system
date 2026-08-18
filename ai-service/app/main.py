@@ -122,10 +122,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# allow_credentials=False is intentional, not an oversight: this service is
+# called exclusively server-to-server by the backend (see backend/src/
+# services/aiService.js, aiWorkerService.js, socialService.js) and has no
+# cookie-based auth anywhere in this codebase -- no browser client is meant
+# to hold a credentialed session against it. `allow_origins=["*"]` combined
+# with `allow_credentials=True` is the CORS anti-pattern that made the
+# backend's own ALLOWED_ORIGINS wildcard risky (see backend's CORS
+# hardening, 2026-08-18) -- browsers actually reject that combination
+# outright, or some CORS stacks silently echo back the request Origin
+# instead of "*" to make it spec-compliant, which is more permissive than
+# it looks. Fixed here by setting allow_credentials=False, which matches
+# how this service is actually used: no cookies, no per-browser session.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
