@@ -8,6 +8,7 @@ const VirtualTrade     = require('../models/VirtualTrade');
 const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession    = require('../models/BudgetSession');
 const logger           = require('../config/logger');
+const { withPortfolioLock } = require('../utils/portfolioLock');
 
 // Lazy-require to avoid circular dependency at startup
 function notifySvc() { return require('./notificationService'); }
@@ -316,205 +317,209 @@ async function enableTrailingStop(tradeId) {
 // fabricated rate standing in for real market data.
 
 async function applyFundingPayments() {
-  try {
-    const openFutures = await VirtualTrade.find({ status: 'open', productType: 'futures' });
-    if (openFutures.length === 0) return;
+  return withPortfolioLock(async () => {
+    try {
+      const openFutures = await VirtualTrade.find({ status: 'open', productType: 'futures' });
+      if (openFutures.length === 0) return;
 
-    const rates = await aiSvc().getFundingRates();
-    if (!rates || Object.keys(rates).length === 0) return;
+      const rates = await aiSvc().getFundingRates();
+      if (!rates || Object.keys(rates).length === 0) return;
 
-    const portfolio = await getPortfolio();
-    let balanceChanged = false;
+      const portfolio = await getPortfolio();
+      let balanceChanged = false;
 
-    for (const trade of openFutures) {
-      const rate = rates[trade.asset]?.funding_rate;
-      if (rate === undefined) continue;
+      for (const trade of openFutures) {
+        const rate = rates[trade.asset]?.funding_rate;
+        if (rate === undefined) continue;
 
-      const notionalUsd = trade.marginUsd * trade.leverage;
-      // Longs pay shorts when the rate is positive (standard perpetual convention).
-      const directionSign = trade.direction === 'BUY' ? -1 : 1;
-      const payment = notionalUsd * (rate / 100) * directionSign;
+        const notionalUsd = trade.marginUsd * trade.leverage;
+        // Longs pay shorts when the rate is positive (standard perpetual convention).
+        const directionSign = trade.direction === 'BUY' ? -1 : 1;
+        const payment = notionalUsd * (rate / 100) * directionSign;
 
-      await VirtualTrade.updateOne({ _id: trade._id }, { $inc: { fundingPaid: payment } });
-      portfolio.currentBalance += payment;
-      balanceChanged = true;
+        await VirtualTrade.updateOne({ _id: trade._id }, { $inc: { fundingPaid: payment } });
+        portfolio.currentBalance += payment;
+        balanceChanged = true;
+      }
+
+      if (balanceChanged) {
+        portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
+        await portfolio.save();
+        logger.info(`[VirtualTracker] Applied funding payments to ${openFutures.length} open futures position(s).`);
+      }
+    } catch (err) {
+      logger.error('[VirtualTracker] applyFundingPayments error:', err.message);
     }
-
-    if (balanceChanged) {
-      portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
-      await portfolio.save();
-      logger.info(`[VirtualTracker] Applied funding payments to ${openFutures.length} open futures position(s).`);
-    }
-  } catch (err) {
-    logger.error('[VirtualTracker] applyFundingPayments error:', err.message);
-  }
+  });
 }
 
 // ─── Check open trades against current price cache ───────────────────────────
 
 async function checkOpenTrades(priceCache) {
-  try {
-    const openTrades = await VirtualTrade.find({ status: 'open' });
-    if (openTrades.length === 0) return;
+  return withPortfolioLock(async () => {
+    try {
+      const openTrades = await VirtualTrade.find({ status: 'open' });
+      if (openTrades.length === 0) return;
 
-    const portfolio    = await getPortfolio();
-    let balanceChanged = false;
+      const portfolio    = await getPortfolio();
+      let balanceChanged = false;
 
-    for (const trade of openTrades) {
-      const cached = priceCache[trade.asset];
-      if (!cached) continue;
+      for (const trade of openTrades) {
+        const cached = priceCache[trade.asset];
+        if (!cached) continue;
 
-      const currentPrice = typeof cached === 'object' ? cached.price : cached;
-      if (!currentPrice || isNaN(currentPrice)) continue;
+        const currentPrice = typeof cached === 'object' ? cached.price : cached;
+        if (!currentPrice || isNaN(currentPrice)) continue;
 
-      // Trailing stop — tighten stopLoss toward price as it moves favorably.
-      // Never loosens; only takes effect once price has moved far enough
-      // that the trailed stop would sit past the original one.
-      if (trade.trailingStopEnabled && trade.trailingStopDistance) {
-        const trailedStop = trade.direction === 'BUY'
-          ? currentPrice - trade.trailingStopDistance
-          : currentPrice + trade.trailingStopDistance;
-        const improved = trade.direction === 'BUY'
-          ? (trade.stopLoss == null || trailedStop > trade.stopLoss)
-          : (trade.stopLoss == null || trailedStop < trade.stopLoss);
-        if (improved) {
-          trade.stopLoss = trailedStop;
-          await VirtualTrade.updateOne({ _id: trade._id }, { stopLoss: trailedStop });
+        // Trailing stop — tighten stopLoss toward price as it moves favorably.
+        // Never loosens; only takes effect once price has moved far enough
+        // that the trailed stop would sit past the original one.
+        if (trade.trailingStopEnabled && trade.trailingStopDistance) {
+          const trailedStop = trade.direction === 'BUY'
+            ? currentPrice - trade.trailingStopDistance
+            : currentPrice + trade.trailingStopDistance;
+          const improved = trade.direction === 'BUY'
+            ? (trade.stopLoss == null || trailedStop > trade.stopLoss)
+            : (trade.stopLoss == null || trailedStop < trade.stopLoss);
+          if (improved) {
+            trade.stopLoss = trailedStop;
+            await VirtualTrade.updateOne({ _id: trade._id }, { stopLoss: trailedStop });
+          }
         }
-      }
 
-      let closed     = false;
-      let result     = null;
-      let exitPrice  = currentPrice;
-      let exitReason = null;
+        let closed     = false;
+        let result     = null;
+        let exitPrice  = currentPrice;
+        let exitReason = null;
 
-      // Liquidation takes priority over TP/SL — it represents total loss of
-      // the committed margin, checked first since it's the more severe event.
-      if (trade.productType === 'futures' && trade.liquidationPrice) {
-        if (trade.direction === 'BUY' && currentPrice <= trade.liquidationPrice) {
-          closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
-        } else if (trade.direction === 'SELL' && currentPrice >= trade.liquidationPrice) {
-          closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
+        // Liquidation takes priority over TP/SL — it represents total loss of
+        // the committed margin, checked first since it's the more severe event.
+        if (trade.productType === 'futures' && trade.liquidationPrice) {
+          if (trade.direction === 'BUY' && currentPrice <= trade.liquidationPrice) {
+            closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
+          } else if (trade.direction === 'SELL' && currentPrice >= trade.liquidationPrice) {
+            closed = true; result = 'loss'; exitPrice = trade.liquidationPrice; exitReason = 'LIQUIDATED';
+          }
         }
-      }
 
-      if (!closed && trade.direction === 'BUY') {
-        if (trade.takeProfit && currentPrice >= trade.takeProfit) {
-          closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
-        } else if (trade.stopLoss && currentPrice <= trade.stopLoss) {
-          closed = true; result = 'loss'; exitPrice = trade.stopLoss; exitReason = 'SL';
+        if (!closed && trade.direction === 'BUY') {
+          if (trade.takeProfit && currentPrice >= trade.takeProfit) {
+            closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
+          } else if (trade.stopLoss && currentPrice <= trade.stopLoss) {
+            closed = true; result = 'loss'; exitPrice = trade.stopLoss; exitReason = 'SL';
+          }
+        } else if (!closed && trade.direction === 'SELL') {
+          if (trade.takeProfit && currentPrice <= trade.takeProfit) {
+            closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
+          } else if (trade.stopLoss && currentPrice >= trade.stopLoss) {
+            closed = true; result = 'loss'; exitPrice = trade.stopLoss; exitReason = 'SL';
+          }
         }
-      } else if (!closed && trade.direction === 'SELL') {
-        if (trade.takeProfit && currentPrice <= trade.takeProfit) {
-          closed = true; result = 'win'; exitPrice = trade.takeProfit; exitReason = 'TP';
-        } else if (trade.stopLoss && currentPrice >= trade.stopLoss) {
-          closed = true; result = 'loss'; exitPrice = trade.stopLoss; exitReason = 'SL';
+
+        // Auto-cancel after 24 h
+        const ageHours      = (Date.now() - trade.openedAt.getTime()) / 3_600_000;
+        const durationMinutes = Math.round(ageHours * 60);
+        const balanceBefore = parseFloat(portfolio.currentBalance.toFixed(2));
+
+        if (!closed && ageHours > 24) {
+          await VirtualTrade.updateOne({ _id: trade._id }, {
+            status:          'cancelled',
+            result:          'cancelled',
+            exitPrice:       parseFloat(currentPrice.toFixed(8)),
+            exitReason:      'EXPIRED',
+            pnl:             0,
+            pnlPct:          0,
+            balanceBefore,
+            balanceAfter:    balanceBefore,
+            durationMinutes,
+            closedAt:        new Date(),
+          });
+          continue;
         }
-      }
 
-      // Auto-cancel after 24 h
-      const ageHours      = (Date.now() - trade.openedAt.getTime()) / 3_600_000;
-      const durationMinutes = Math.round(ageHours * 60);
-      const balanceBefore = parseFloat(portfolio.currentBalance.toFixed(2));
+        if (!closed) continue;
 
-      if (!closed && ageHours > 24) {
+        // Calculate P&L
+        let pnlPct;
+        if (trade.direction === 'BUY') {
+          pnlPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+        } else {
+          pnlPct = ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
+        }
+
+        let pnl;
+        if (trade.productType === 'futures') {
+          pnlPct = pnlPct * trade.leverage; // % of margin, not raw price move
+          pnl    = (trade.marginUsd * pnlPct) / 100;
+          pnl    = Math.max(pnl, -trade.marginUsd); // can't lose more than margin committed
+        } else {
+          pnl = (trade.sizeUsd * pnlPct) / 100;
+        }
+        const balanceAfter = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
+
         await VirtualTrade.updateOne({ _id: trade._id }, {
-          status:          'cancelled',
-          result:          'cancelled',
-          exitPrice:       parseFloat(currentPrice.toFixed(8)),
-          exitReason:      'EXPIRED',
-          pnl:             0,
-          pnlPct:          0,
+          status:          result === 'win' ? 'closed_profit' : 'closed_loss',
+          result,
+          exitPrice:       parseFloat(exitPrice.toFixed(8)),
+          exitReason,
+          pnl:             parseFloat(pnl.toFixed(2)),
+          pnlPct:          parseFloat(pnlPct.toFixed(2)),
           balanceBefore,
-          balanceAfter:    balanceBefore,
+          balanceAfter,
           durationMinutes,
           closedAt:        new Date(),
         });
-        continue;
+
+        // Update portfolio aggregates
+        portfolio.currentBalance += pnl;
+        if (result === 'win') {
+          portfolio.totalProfit += pnl;
+          portfolio.winCount    += 1;
+        } else {
+          portfolio.totalLoss += Math.abs(pnl);
+          portfolio.lossCount += 1;
+        }
+
+        updateDrawdown(portfolio);
+        updateBestWorst(portfolio, trade, pnl);
+
+        portfolio.balanceHistory.push({
+          date:    new Date(),
+          balance: parseFloat(portfolio.currentBalance.toFixed(2)),
+        });
+        if (portfolio.balanceHistory.length > 200) {
+          portfolio.balanceHistory = portfolio.balanceHistory.slice(-200);
+        }
+
+        balanceChanged = true;
+
+        logger.info(
+          `[VirtualTracker] Trade closed — ${trade.asset} ${trade.direction} ` +
+          `| ${exitReason} | result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
+          `| balance: $${portfolio.currentBalance.toFixed(2)}`
+        );
+
+        // Fire-and-forget push notification
+        try {
+          const closedTrade = {
+            asset: trade.asset, direction: trade.direction,
+            pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)),
+            exitReason, result,
+          };
+          notifySvc().sendTradeClosedNotification(closedTrade, portfolio).catch(() => {});
+        } catch (_) {}
       }
 
-      if (!closed) continue;
-
-      // Calculate P&L
-      let pnlPct;
-      if (trade.direction === 'BUY') {
-        pnlPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
-      } else {
-        pnlPct = ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
+      if (balanceChanged) {
+        portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
+        portfolio.totalProfit    = parseFloat(portfolio.totalProfit.toFixed(2));
+        portfolio.totalLoss      = parseFloat(portfolio.totalLoss.toFixed(2));
+        await portfolio.save();
       }
-
-      let pnl;
-      if (trade.productType === 'futures') {
-        pnlPct = pnlPct * trade.leverage; // % of margin, not raw price move
-        pnl    = (trade.marginUsd * pnlPct) / 100;
-        pnl    = Math.max(pnl, -trade.marginUsd); // can't lose more than margin committed
-      } else {
-        pnl = (trade.sizeUsd * pnlPct) / 100;
-      }
-      const balanceAfter = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
-
-      await VirtualTrade.updateOne({ _id: trade._id }, {
-        status:          result === 'win' ? 'closed_profit' : 'closed_loss',
-        result,
-        exitPrice:       parseFloat(exitPrice.toFixed(8)),
-        exitReason,
-        pnl:             parseFloat(pnl.toFixed(2)),
-        pnlPct:          parseFloat(pnlPct.toFixed(2)),
-        balanceBefore,
-        balanceAfter,
-        durationMinutes,
-        closedAt:        new Date(),
-      });
-
-      // Update portfolio aggregates
-      portfolio.currentBalance += pnl;
-      if (result === 'win') {
-        portfolio.totalProfit += pnl;
-        portfolio.winCount    += 1;
-      } else {
-        portfolio.totalLoss += Math.abs(pnl);
-        portfolio.lossCount += 1;
-      }
-
-      updateDrawdown(portfolio);
-      updateBestWorst(portfolio, trade, pnl);
-
-      portfolio.balanceHistory.push({
-        date:    new Date(),
-        balance: parseFloat(portfolio.currentBalance.toFixed(2)),
-      });
-      if (portfolio.balanceHistory.length > 200) {
-        portfolio.balanceHistory = portfolio.balanceHistory.slice(-200);
-      }
-
-      balanceChanged = true;
-
-      logger.info(
-        `[VirtualTracker] Trade closed — ${trade.asset} ${trade.direction} ` +
-        `| ${exitReason} | result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
-        `| balance: $${portfolio.currentBalance.toFixed(2)}`
-      );
-
-      // Fire-and-forget push notification
-      try {
-        const closedTrade = {
-          asset: trade.asset, direction: trade.direction,
-          pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)),
-          exitReason, result,
-        };
-        notifySvc().sendTradeClosedNotification(closedTrade, portfolio).catch(() => {});
-      } catch (_) {}
+    } catch (err) {
+      logger.error('[VirtualTracker] checkOpenTrades error:', err.message);
     }
-
-    if (balanceChanged) {
-      portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
-      portfolio.totalProfit    = parseFloat(portfolio.totalProfit.toFixed(2));
-      portfolio.totalLoss      = parseFloat(portfolio.totalLoss.toFixed(2));
-      await portfolio.save();
-    }
-  } catch (err) {
-    logger.error('[VirtualTracker] checkOpenTrades error:', err.message);
-  }
+  });
 }
 
 // ─── Close a position right now, at the current market price ─────────────────
@@ -527,88 +532,90 @@ async function checkOpenTrades(priceCache) {
 // destabilizing the already-verified TP/SL/liquidation logic above.
 
 async function closePositionNow(tradeId, currentPrice) {
-  const trade = await VirtualTrade.findOne({ _id: tradeId, status: 'open' });
-  if (!trade) {
-    throw new Error('Position not found or already closed.');
-  }
-  if (!currentPrice || isNaN(currentPrice)) {
-    throw new Error('No live price available for this asset right now.');
-  }
+  return withPortfolioLock(async () => {
+    const trade = await VirtualTrade.findOne({ _id: tradeId, status: 'open' });
+    if (!trade) {
+      throw new Error('Position not found or already closed.');
+    }
+    if (!currentPrice || isNaN(currentPrice)) {
+      throw new Error('No live price available for this asset right now.');
+    }
 
-  const portfolio = await getPortfolio();
-  const exitPrice = currentPrice;
+    const portfolio = await getPortfolio();
+    const exitPrice = currentPrice;
 
-  let pnlPct = trade.direction === 'BUY'
-    ? ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100
-    : ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
+    let pnlPct = trade.direction === 'BUY'
+      ? ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100
+      : ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
 
-  let pnl;
-  if (trade.productType === 'futures') {
-    pnlPct = pnlPct * trade.leverage;
-    pnl    = (trade.marginUsd * pnlPct) / 100;
-    pnl    = Math.max(pnl, -trade.marginUsd);
-  } else {
-    pnl = (trade.sizeUsd * pnlPct) / 100;
-  }
+    let pnl;
+    if (trade.productType === 'futures') {
+      pnlPct = pnlPct * trade.leverage;
+      pnl    = (trade.marginUsd * pnlPct) / 100;
+      pnl    = Math.max(pnl, -trade.marginUsd);
+    } else {
+      pnl = (trade.sizeUsd * pnlPct) / 100;
+    }
 
-  const result = pnl >= 0 ? 'win' : 'loss';
-  const balanceBefore   = parseFloat(portfolio.currentBalance.toFixed(2));
-  const balanceAfter    = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
-  const durationMinutes = Math.round((Date.now() - trade.openedAt.getTime()) / 60_000);
+    const result = pnl >= 0 ? 'win' : 'loss';
+    const balanceBefore   = parseFloat(portfolio.currentBalance.toFixed(2));
+    const balanceAfter    = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
+    const durationMinutes = Math.round((Date.now() - trade.openedAt.getTime()) / 60_000);
 
-  await VirtualTrade.updateOne({ _id: trade._id }, {
-    status:          result === 'win' ? 'closed_profit' : 'closed_loss',
-    result,
-    exitPrice:       parseFloat(exitPrice.toFixed(8)),
-    exitReason:      'MANUAL',
-    pnl:             parseFloat(pnl.toFixed(2)),
-    pnlPct:          parseFloat(pnlPct.toFixed(2)),
-    balanceBefore,
-    balanceAfter,
-    durationMinutes,
-    closedAt:        new Date(),
+    await VirtualTrade.updateOne({ _id: trade._id }, {
+      status:          result === 'win' ? 'closed_profit' : 'closed_loss',
+      result,
+      exitPrice:       parseFloat(exitPrice.toFixed(8)),
+      exitReason:      'MANUAL',
+      pnl:             parseFloat(pnl.toFixed(2)),
+      pnlPct:          parseFloat(pnlPct.toFixed(2)),
+      balanceBefore,
+      balanceAfter,
+      durationMinutes,
+      closedAt:        new Date(),
+    });
+
+    portfolio.currentBalance += pnl;
+    if (result === 'win') {
+      portfolio.totalProfit += pnl;
+      portfolio.winCount    += 1;
+    } else {
+      portfolio.totalLoss += Math.abs(pnl);
+      portfolio.lossCount += 1;
+    }
+    updateDrawdown(portfolio);
+    updateBestWorst(portfolio, trade, pnl);
+    portfolio.balanceHistory.push({ date: new Date(), balance: parseFloat(portfolio.currentBalance.toFixed(2)) });
+    if (portfolio.balanceHistory.length > 200) {
+      portfolio.balanceHistory = portfolio.balanceHistory.slice(-200);
+    }
+    portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
+    portfolio.totalProfit    = parseFloat(portfolio.totalProfit.toFixed(2));
+    portfolio.totalLoss      = parseFloat(portfolio.totalLoss.toFixed(2));
+    await portfolio.save();
+
+    logger.info(
+      `[VirtualTracker] Manual sell — ${trade.asset} ${trade.direction} ` +
+      `| result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
+      `| balance: $${portfolio.currentBalance}`
+    );
+
+    try {
+      notifySvc().sendTradeClosedNotification(
+        { asset: trade.asset, direction: trade.direction, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), exitReason: 'MANUAL', result },
+        portfolio,
+      ).catch(() => {});
+    } catch (_) {}
+
+    return {
+      asset: trade.asset,
+      direction: trade.direction,
+      pnl: parseFloat(pnl.toFixed(2)),
+      pnlPct: parseFloat(pnlPct.toFixed(2)),
+      result,
+      exitPrice: parseFloat(exitPrice.toFixed(8)),
+    };
   });
-
-  portfolio.currentBalance += pnl;
-  if (result === 'win') {
-    portfolio.totalProfit += pnl;
-    portfolio.winCount    += 1;
-  } else {
-    portfolio.totalLoss += Math.abs(pnl);
-    portfolio.lossCount += 1;
-  }
-  updateDrawdown(portfolio);
-  updateBestWorst(portfolio, trade, pnl);
-  portfolio.balanceHistory.push({ date: new Date(), balance: parseFloat(portfolio.currentBalance.toFixed(2)) });
-  if (portfolio.balanceHistory.length > 200) {
-    portfolio.balanceHistory = portfolio.balanceHistory.slice(-200);
-  }
-  portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
-  portfolio.totalProfit    = parseFloat(portfolio.totalProfit.toFixed(2));
-  portfolio.totalLoss      = parseFloat(portfolio.totalLoss.toFixed(2));
-  await portfolio.save();
-
-  logger.info(
-    `[VirtualTracker] Manual sell — ${trade.asset} ${trade.direction} ` +
-    `| result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
-    `| balance: $${portfolio.currentBalance}`
-  );
-
-  try {
-    notifySvc().sendTradeClosedNotification(
-      { asset: trade.asset, direction: trade.direction, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), exitReason: 'MANUAL', result },
-      portfolio,
-    ).catch(() => {});
-  } catch (_) {}
-
-  return {
-    asset: trade.asset,
-    direction: trade.direction,
-    pnl: parseFloat(pnl.toFixed(2)),
-    pnlPct: parseFloat(pnlPct.toFixed(2)),
-    result,
-    exitPrice: parseFloat(exitPrice.toFixed(8)),
-  };
 }
 
 // ─── Date range helper ────────────────────────────────────────────────────────
