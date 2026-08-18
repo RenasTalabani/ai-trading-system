@@ -89,6 +89,16 @@ async function runAIWorkerCycle() {
   // 6. Process each top opportunity
   for (const opp of scanResult.top_opportunities) {
     if (tradesCreated >= MAX_NEW_PER_CYCLE) break;
+    // Bug found 2026-08-18 (PM continuous-improvement pass): the check at
+    // the top of this function only gates whether the cycle runs *at all*
+    // (openCount >= MAX_OPEN_TRADES -> skip the whole cycle) -- it never
+    // limited how many NEW trades this loop could add on top of that
+    // starting count. With enough qualifying opportunities in one scan,
+    // a cycle could open up to MAX_NEW_PER_CYCLE trades regardless of how
+    // close openCount already was to MAX_OPEN_TRADES, silently exceeding
+    // the portfolio's own declared risk cap (e.g. openCount=4,
+    // MAX_OPEN_TRADES=5, MAX_NEW_PER_CYCLE=3 -> could reach 7 open trades).
+    if (openCount + tradesCreated >= MAX_OPEN_TRADES) break;
     if (opp.action === 'HOLD') continue;
     if ((opp.confidence   || 0) < CONFIDENCE_THRESHOLD) continue;
     if ((opp.fused_score  || 0) < MIN_FUSED_SCORE)      continue;

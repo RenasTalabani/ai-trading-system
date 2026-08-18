@@ -87,3 +87,46 @@ test('skips cleanly when max open trades is reached', async () => {
   const result = await runAIWorkerCycle();
   expect(result.skipped).toBe('max_trades_reached');
 });
+
+test('the per-cycle new-trade loop never lets total open trades exceed MAX_OPEN_TRADES (regression: 2026-08-18 risk-cap bug)', async () => {
+  // 4 trades already open (below MAX_OPEN_TRADES=5, so the cycle is
+  // allowed to run at all), and 3 qualifying opportunities show up in one
+  // scan -- MAX_NEW_PER_CYCLE=3 would previously let all 3 open, taking
+  // total open trades to 7 (2 over the declared cap). The fix should stop
+  // after just 1 new trade (4 + 1 = 5 = the cap).
+  VirtualTrade.countDocuments = async () => 4;
+  SCAN_RESPONSE = {
+    success: true, scanned: 3,
+    top_opportunities: [
+      { asset: 'AAAUSDT', action: 'BUY',  confidence: 99, fused_score: 99, quality_score: 99, current_price: 100, stop_loss: 95,  take_profit: 110 },
+      { asset: 'BBBUSDT', action: 'BUY',  confidence: 99, fused_score: 99, quality_score: 99, current_price: 200, stop_loss: 190, take_profit: 220 },
+      { asset: 'CCCUSDT', action: 'SELL', confidence: 99, fused_score: 99, quality_score: 99, current_price: 300, stop_loss: 310, take_profit: 280 },
+    ],
+  };
+
+  const result = await runAIWorkerCycle();
+
+  expect(result.tradesCreated).toBe(1); // not 3
+  expect(CREATED_TRADES.length).toBe(1);
+  // total open trades after this cycle = openCount (4) + tradesCreated must
+  // never exceed MAX_OPEN_TRADES (5, the default).
+  expect(4 + result.tradesCreated).toBeLessThanOrEqual(5);
+});
+
+test('MAX_NEW_PER_CYCLE still caps a cycle when there is plenty of room under MAX_OPEN_TRADES', async () => {
+  // 0 open trades, 3 qualifying opportunities, default MAX_NEW_PER_CYCLE=3 and
+  // MAX_OPEN_TRADES=5 -- room for more than 3, so MAX_NEW_PER_CYCLE (not the
+  // open-trades cap) should be what stops it, and it should open all 3.
+  VirtualTrade.countDocuments = async () => 0;
+  SCAN_RESPONSE = {
+    success: true, scanned: 3,
+    top_opportunities: [
+      { asset: 'AAAUSDT', action: 'BUY',  confidence: 99, fused_score: 99, quality_score: 99, current_price: 100, stop_loss: 95,  take_profit: 110 },
+      { asset: 'BBBUSDT', action: 'BUY',  confidence: 99, fused_score: 99, quality_score: 99, current_price: 200, stop_loss: 190, take_profit: 220 },
+      { asset: 'CCCUSDT', action: 'SELL', confidence: 99, fused_score: 99, quality_score: 99, current_price: 300, stop_loss: 310, take_profit: 280 },
+    ],
+  };
+
+  const result = await runAIWorkerCycle();
+  expect(result.tradesCreated).toBe(3);
+});
