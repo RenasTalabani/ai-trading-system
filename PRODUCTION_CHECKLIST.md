@@ -3,7 +3,7 @@
 Do not declare this system "production ready" until every item below is actually checked against evidence — not assumed. Status reflects this audit (2026-08-18).
 
 ## Code Quality
-- [x] Backend test suite passes (84/84, verified live — 63 original + 8 CORS + 13 input-validation, all Priority 2 additions)
+- [x] Backend test suite passes (101/101, verified live — 63 original + 14 CORS + 13 input-validation + 11 Telegram webhook, all Priority 2 additions)
 - [x] AI service test suite passes (105/105, verified live; unchanged this pass — no ai-service files touched)
 - [ ] Mobile test suite exists and passes (currently placeholder only)
 - [ ] CI runs both suites automatically on every push/PR
@@ -14,10 +14,11 @@ Do not declare this system "production ready" until every item below is actually
 - [x] No real secrets found committed to git (verified — `.env.railway` is a placeholder template)
 - [x] JWT auth + role-based authorization present
 - [x] Rate limiting + helmet security headers present
-- [x] CORS policy reviewed and enforcement mechanism tested (8 tests) — wildcard *choice* itself still needs explicit owner sign-off (see `PROJECT_STATUS.md`)
+- [x] CORS policy: owner decided against wildcard — production now uses an explicit allowlist (empty until a real web origin exists), enforcement tested (14 tests)
 - [x] Password hashing policy (bcrypt salt rounds) confirmed adequate — 12 rounds
 - [x] Refresh-token flow confirmed unnecessary and removed (dead config deleted, reasoning documented in code)
-- [x] Input validation coverage reviewed across all 27 route groups (risk-based); highest-risk gaps fixed and tested — one item (Telegram webhook authenticity) flagged for owner decision, tracked as T-020
+- [x] Input validation coverage reviewed across all 27 route groups (risk-based); highest-risk gaps fixed and tested
+- [x] Telegram webhook authenticity: secret-token verification implemented and tested (11 tests); **not yet live** — owner still needs to set `TELEGRAM_WEBHOOK_SECRET` in Railway and call Telegram's `setWebhook` with a matching `secret_token` (see `PROJECT_STATUS.md` for exact steps)
 
 ## Infrastructure
 - [ ] Backend Railway service confirmed live and healthy (`/api/v1/health` returns `operational`)
@@ -40,4 +41,4 @@ Do not declare this system "production ready" until every item below is actually
 - [x] Confirmed with owner: paper-trading / signals only, no real exchange order execution — this checklist assumes that scope stays fixed unless the owner explicitly changes it.
 
 ---
-**Current overall status: NOT production-verified.** Code Quality and Security sections are now fully checked off (Priority 1 + Priority 2 complete, both with evidence and tests). Remaining work is Infrastructure (blocked on a Railway token), Documentation (API docs, log triage), and Operational Readiness (monitoring, rollback) — all tracked in `TASKS.md`. Per owner instruction, Priority 3 (Railway) does not start until this checklist's Security section is reviewed.
+**Current overall status: NOT production-verified.** Code Quality and Security sections are now fully checked off (Priority 1 + Priority 2 complete, both with evidence and tests, both CORS and Telegram-webhook owner decisions actioned). Remaining work is Infrastructure (blocked on a Railway token), Documentation (API docs, log triage), and Operational Readiness (monitoring, rollback) — all tracked in `TASKS.md`. One operational note carried forward, not a checklist blocker: the Telegram webhook secret still needs to be set in Railway and registered with Telegram before it's live. Priority 3 (Railway) awaits the owner's review of this report before starting, per standing instruction.

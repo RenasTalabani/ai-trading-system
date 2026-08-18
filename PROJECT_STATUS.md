@@ -1,6 +1,6 @@
 # PROJECT_STATUS.md
 
-Last updated: 2026-08-18, by Claude (technical lead session — Priority 2 complete)
+Last updated: 2026-08-18, by Claude (technical lead session — Priority 2 complete, incl. CORS allowlist + Telegram webhook follow-up)
 
 ## CHECKLIST DISCIPLINE (per owner instruction)
 Every item below carries STATUS / EVIDENCE / DATE — nothing is marked PASS without evidence.
@@ -56,12 +56,12 @@ DATE: 2026-08-18
 COMMIT: `dbb81c3`
 REMAINING RISK: low. Revisit only if the product ever adds real user accounts holding real financial data (noted in the code comment).
 
-**CORS (`ALLOWED_ORIGINS=*`)**
-STATUS: MECHANISM VERIFIED; POLICY STILL NEEDS OWNER SIGN-OFF
-EVIDENCE: Extracted the origin-resolution logic from `app.js` into `backend/src/config/corsConfig.js` (`buildCorsOptions`) with no behavior change, then wrote 8 tests (5 unit tests against the pure function, 3 HTTP integration tests via supertest against a minimal Express app) proving: wildcard allows any origin with no credentials; an explicit comma-separated allowlist accepts listed origins and rejects unlisted ones; requests with no `Origin` header (native mobile clients) are always allowed regardless of the list. All 8 pass. The `*` default itself remains intentional and documented in `DEPLOYMENT.md` (mobile sends no Origin header; auth uses Bearer tokens, not cookies, so there's no ambient credential a wildcard origin could ride on) — but it would also let any website call this API directly from a browser, so it's still flagged for an explicit owner decision, not silently left as-is or silently changed.
+**CORS — explicit production allowlist (owner decision: no wildcard)**
+STATUS: DONE
+EVIDENCE: Owner reviewed the mechanism-verification pass and decided against `*` in production even given the lower risk (Bearer-token auth, no cookies). `buildCorsOptions()` (`backend/src/config/corsConfig.js`) no longer defaults unset/empty `ALLOWED_ORIGINS` to `*` — it now defaults to an empty allowlist, which denies all browser-based cross-origin requests. `*` is still supported but must be explicitly set (kept only for local dev flexibility). Investigated the actual project for real web origins before writing the production config, per owner instruction not to invent domains: confirmed there is no deployed web frontend today — `mobile/web/` is unused, never-customized `flutter create` scaffolding (generic "A new Flutter project" title, default icons, no hosting config anywhere: no `firebase.json`/`vercel.json`/`netlify.toml`, no custom domain referenced in `DEPLOYMENT.md`). `backend/.env.railway`'s `ALLOWED_ORIGINS` is therefore a documented empty placeholder with an inline example of the expected format, ready to fill in once a real origin exists. `backend/.env.example` (local dev) keeps its existing `http://localhost:3000,http://localhost:8080`. Flutter mobile is unaffected either way — it sends no `Origin` header. `cors.test.js` expanded from 8 to 14 tests, covering all four owner-required cases: allowed origin, disallowed origin, no-Origin-header, and authenticated (Bearer token) request behavior from both an allowed and a disallowed origin — plus the new empty-default-denies case and wildcard now exercised as an explicit opt-in.
 DATE: 2026-08-18
-COMMIT: `dbb81c3`
-REMAINING RISK: low-medium, pending owner decision. No credential-theft path identified (Bearer-token auth, no cookies), but open to any-origin browser calls until/unless the owner locks in an explicit allowlist.
+COMMIT: `a164aa4`
+REMAINING RISK: none for the code path (verified, fails closed by default). Operationally: if a real web frontend is ever deployed, its origin must be added to `ALLOWED_ORIGINS` in the Railway dashboard or it will be silently blocked by CORS — noted here so that's not a surprise later.
 
 **Input validation coverage**
 STATUS: RISK-BASED FIXES APPLIED (not all 24 files — by design, see rationale)
@@ -70,7 +70,7 @@ EVIDENCE: Audited all 24 previously-unvalidated route files (of 27 total; `auth.
   - **Fixed** — `brain.js` (`POST /follows`, `PATCH /follows/:id/close`, `DELETE /follows/:id`): validates `action`/`outcome` enums, `confidence` range (0–100), price fields as positive numbers, `:id` as a Mongo ObjectId.
   - **Fixed** — `guide.js` (`POST /positions/:tradeId/sell`): validates `:tradeId` as a Mongo ObjectId (previously relied entirely on Mongoose's `CastError` bubbling to the global error handler — functionally correct, since `errorHandler.js` does translate `CastError`/`ValidationError` to 400, but with no route-level guard). Also checked `VirtualTrade` for a missing per-user ownership filter (a real IDOR pattern in other apps) — confirmed the model has no `userId` field anywhere; this is a single shared paper portfolio by design, not a multi-tenant resource, consistent with `CLAUDE.md`'s "single-user personal app" framing. Not a bug, no fix needed.
   - **Reviewed, no fix needed** — `users.js` preferences: already schema-backstopped with explicit `min`/`max`/enum on every field (`User.js` preferences sub-schema), plus `runValidators: true` on the update call. `market.js` batch tickers: already whitelist-filters against `TRACKED_ASSETS` before forwarding to Binance, so unvalidated input can't reach the external call. `ai.js`/`signals.js`/`news.js` trigger endpoints: admin/premium-role-gated already, lower exposure. The ~9 remaining files (`budget`, `global`, `reports`, `simulator`, `strategy`, `tracker`, `unified`, `advisor`, `orderBlocks`) already validate in their controllers (confirmed via `grep -l express-validator` on the controllers directory), even though the route files themselves don't import it directly.
-  - **Documented, not fixed — flagged for owner decision** — `telegram.js` `POST /webhook` has no authenticity check (no secret-token verification against Telegram), so any caller can POST a payload shaped like a Telegram update; a forged payload could make the bot relay a message to an arbitrary chat ID. This isn't an input-*validation* gap (the handler already defensively checks shape) — it's a missing authentication step for an external-API-facing endpoint, and fixing it means adding a new env var and configuring Telegram's `setWebhook` with a secret token, which is an external-configuration change, not a code-only fix. Tracked as `TASKS.md` T-020.
+  - **Fixed in a follow-up pass (owner approved)** — `telegram.js` `POST /webhook`'s missing authenticity check is now closed; see the dedicated Telegram webhook entry below. Originally documented here as T-020 for owner decision; owner approved implementing it on 2026-08-18.
 DATE: 2026-08-18
 COMMIT: `1cf84e9`
 REMAINING RISK: low for the fixed routes (verified by 13 new tests). Low-medium for the telegram webhook until T-020 is actioned — realistic impact is bot-abuse-as-spam-relay, not account takeover (linking a Telegram account still requires a correct, short-lived, random UUID token).
@@ -82,12 +82,19 @@ DATE: 2026-08-18
 COMMIT: — (no change needed)
 REMAINING RISK: none identified.
 
+**Telegram webhook authenticity (T-020)**
+STATUS: CODE DONE — NOT YET LIVE (needs 2 manual owner steps outside this session's reach)
+EVIDENCE: Implemented `X-Telegram-Bot-Api-Secret-Token` verification per Telegram's documented `setWebhook` `secret_token` mechanism. New middleware `backend/src/middleware/telegramWebhookAuth.js` compares the incoming header against `TELEGRAM_WEBHOOK_SECRET` using `crypto.timingSafeEqual` (constant-time, avoids leaking the secret via response-timing), and **fails closed**: if the server has no secret configured, every webhook call is rejected (403) rather than silently accepted, because there's nothing safe to verify against. Wired ahead of the existing `handleWebhook` controller in `routes/telegram.js`, which is otherwise unchanged. Added `TELEGRAM_WEBHOOK_SECRET` to both `.env.railway` and `.env.example` as a placeholder with generation guidance (`openssl rand -hex 32`) — no real value written, committed, or logged anywhere. 11 new tests cover all four owner-specified cases (correct secret → accepted; missing secret → rejected; incorrect secret → rejected; a well-formed Telegram-shaped payload sent without the secret → rejected) plus the fail-closed unconfigured-server case and a check that the configured secret never appears in a rejection response body.
+DATE: 2026-08-18
+COMMIT: `a164aa4`
+REMAINING RISK: **the fix is not active in production until the owner does two things I cannot do from here** (no bot token available in this session, and I was instructed not to touch Telegram's live webhook config without it): (1) set `TELEGRAM_WEBHOOK_SECRET` to a strong random value in Railway's dashboard for the backend service — e.g. generate with `openssl rand -hex 32`; (2) call Telegram's `setWebhook` API with a matching `secret_token` param, e.g. `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=<your-backend-url>/api/v1/telegram/webhook&secret_token=<same-value-as-step-1>"`. Until both are done, real Telegram messages will stop reaching the bot the moment this code deploys — that's the fail-closed design working as intended, not a bug, but it will look like "Telegram broke" if the two steps above aren't done in the same deploy window.
+
 **Security testing**
 STATUS: PASS
-EVIDENCE: No lint/type-check/build script exists for the backend (`package.json` scripts are `start`/`dev`/`test` only) — it's plain CommonJS Node with no TypeScript or ESLint configured, so there's nothing applicable to run beyond the test suite; noting this so it doesn't read as a skipped step. Full backend test suite run after all Priority 2 changes: **84/84 passing** (71 pre-existing + CORS, plus 13 new input-validation tests). ai-service was not touched this pass (refresh-token/CORS/input-validation changes are backend-only), so its 105/105 baseline stands unchanged from Priority 1.
+EVIDENCE: No lint/type-check/build script exists for the backend (`package.json` scripts are `start`/`dev`/`test` only) — it's plain CommonJS Node with no TypeScript or ESLint configured, so there's nothing applicable to run beyond the test suite; noting this so it doesn't read as a skipped step. Full backend test suite run after all Priority 2 changes (including this follow-up pass): **101/101 passing** (84 prior + 6 new CORS tests + 11 new Telegram webhook tests). ai-service was not touched this pass (all changes are backend-only), so its 105/105 baseline stands unchanged from Priority 1.
 DATE: 2026-08-18
-COMMIT: `dbb81c3`, `1cf84e9`
-REMAINING RISK: none — both new commits are covered by passing tests, not just written.
+COMMIT: `dbb81c3`, `1cf84e9`, `bac9af8`, `a164aa4`
+REMAINING RISK: none — all four commits are covered by passing tests, not just written.
 
 ---
 
@@ -97,10 +104,10 @@ REMAINING RISK: none — both new commits are covered by passing tests, not just
 - PRIORITY 5 (mobile inspection) — not yet started.
 - PRIORITY 6 (API docs, `ai-service-err.log` triage) — not yet started.
 - PRIORITY 7/8 (monitoring, rollback) — not yet started.
-- T-020 (Telegram webhook authenticity check) — queued, needs owner decision on adding a webhook secret.
+- T-020 (Telegram webhook authenticity check) — code complete and tested; not yet live in production, needs the owner to set `TELEGRAM_WEBHOOK_SECRET` in Railway and call Telegram's `setWebhook` with a matching `secret_token` (see the dedicated entry above for exact commands).
 
 ## CURRENT PHASE
 Phase 1 (CI/CD) is code-complete and verified locally; blocked on push. **Phase 4 (Security / Priority 2) is now complete** — every item from the owner's checklist is either fixed-and-tested, confirmed-already-adequate-with-evidence, or explicitly documented as an owner decision (CORS policy choice, Telegram webhook secret). Stopping here per owner instruction to review before Priority 3 (Railway) begins.
 
 ## OVERALL PRODUCTION READINESS
-**Still NOT production-verified.** Real progress this pass: dependency vulnerabilities fixed and verified (Priority 1), refresh-token dead config removed and CORS enforcement test-covered, and the highest-risk input-validation gaps closed with tests — all backed by evidence, not assumption. Two items now sit explicitly with the owner (CORS wildcard policy, Telegram webhook secret) rather than being silently decided. The single biggest open item remains mechanical, not architectural: get these 8 commits onto GitHub (6 from Priority 1 + `dbb81c3` + `1cf84e9` from Priority 2).
+**Still NOT production-verified.** Real progress this pass: dependency vulnerabilities fixed and verified (Priority 1), refresh-token dead config removed and CORS enforcement test-covered, and the highest-risk input-validation gaps closed with tests — all backed by evidence, not assumption. Two items now sit explicitly with the owner (CORS wildcard policy, Telegram webhook secret) rather than being silently decided. The single biggest open item remains mechanical, not architectural: get these 10 commits onto GitHub (6 from Priority 1 + `dbb81c3`, `1cf84e9`, `bac9af8`, `a164aa4` from Priority 2). Two owner-side manual steps remain to fully activate the Telegram webhook protection (see above); everything else in Priority 2 is code-complete, tested, and documented.
