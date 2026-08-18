@@ -51,10 +51,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
       try {
         final user = UserModel.fromJson(jsonDecode(userJson));
         state = AuthState(user: user, token: token);
+        return;
       } catch (_) {
         await StorageService.clear();
       }
     }
+
+    // This is a single-user personal app -- there's nothing to actually log
+    // into (one shared portfolio for everyone), so a login screen is pure
+    // friction. Silently create (or on a later launch, re-find) a local
+    // device account the first time, and never ask again.
+    await loginAsGuest();
   }
 
   Future<String?> login(String email, String password) async {

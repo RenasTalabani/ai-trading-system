@@ -13,7 +13,7 @@ async function runAIDecisionCycle() {
     logger.info('[AIDecisionJob] Running decision cycle…');
     await runGlobalScan();   // re-scans + auto-stores via storeGlobalDecision hook
   } catch (err) {
-    logger.error('[AIDecisionJob] cycle error:', err.message);
+    logger.error(`[AIDecisionJob] cycle error: ${err.stack}`);
   }
 }
 

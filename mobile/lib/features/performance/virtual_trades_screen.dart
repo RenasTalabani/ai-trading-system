@@ -306,6 +306,10 @@ class _TradeCard extends StatelessWidget {
                 const SizedBox(width: 6),
                 _LeverageBadge(leverage: trade.leverage),
               ],
+              if ((trade.sizeMultiplier - 1.0).abs() > 0.05) ...[
+                const SizedBox(width: 6),
+                _EdgeBadge(multiplier: trade.sizeMultiplier),
+              ],
               const Spacer(),
               // Exit reason badge (TP / SL / EXPIRED) shown only on closed trades
               if (trade.exitReason != null && !isOpen) ...[
@@ -530,6 +534,35 @@ class _LeverageBadge extends StatelessWidget {
       ),
       child: Text('${leverage}x',
           style: const TextStyle(color: AppColors.hold, fontSize: 10, fontWeight: FontWeight.bold)),
+    );
+  }
+}
+
+// ─── Edge-based sizing badge — shown when this position was sized up/down ────
+// from the baseline risk% because this asset has a proven recent win/loss edge.
+
+class _EdgeBadge extends StatelessWidget {
+  final double multiplier;
+  const _EdgeBadge({required this.multiplier});
+
+  @override
+  Widget build(BuildContext context) {
+    final boosted = multiplier > 1.0;
+    final color = boosted ? AppColors.success : AppColors.error;
+    return Tooltip(
+      message: boosted
+          ? 'Sized up — this asset has a proven recent edge'
+          : 'Sized down — this asset has been underperforming recently',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Text('${multiplier.toStringAsFixed(1)}x size',
+            style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+      ),
     );
   }
 }

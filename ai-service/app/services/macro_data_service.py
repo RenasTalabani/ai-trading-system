@@ -1,10 +1,11 @@
 """
-MacroDataService — pulls free macro/economic indicators with no API key.
+MacroDataService — pulls free macro/economic indicators.
 Sources:
-  • CoinGecko Global (crypto market cap, dominance, volume)
-  • Binance funding rates (BTC, ETH)
-  • Fear & Greed index via alternative.me
-  • FRED proxy via data.nasdaq.com (10Y yield, DXY)
+  • CoinGecko Global + Trending (crypto market cap, dominance, volume, trending coins) — no key
+  • Binance funding rates (BTC, ETH) — no key
+  • Fear & Greed index via alternative.me — no key
+  • FRED (official Federal Reserve Economic Data) — free key from fred.stlouisfed.org,
+    set FRED_API_KEY in .env; calls silently no-op (empty result) until then
 All calls are cached for 10 minutes to avoid hammering free endpoints.
 """
 import asyncio
@@ -14,7 +15,10 @@ from typing import Any
 
 import httpx
 
+from app.config import get_settings
+
 logger = logging.getLogger("ai-service.macro")
+settings = get_settings()
 
 _CACHE_TTL = 600  # 10 minutes
 _cache: dict[str, tuple[float, Any]] = {}
@@ -76,6 +80,78 @@ class MacroDataService:
         _store(key, result)
         return result
 
+    async def get_trending_coins(self) -> dict:
+        """CoinGecko's free trending endpoint -- covers 'trending cryptocurrencies'
+        without needing a CoinMarketCap key at all."""
+        key = "trending_coins"
+        if hit := _cached(key):
+            return hit
+        try:
+            r = await self._client.get("https://api.coingecko.com/api/v3/search/trending")
+            coins = r.json().get("coins", [])
+            result = {
+                "coins": [
+                    {
+                        "symbol": c.get("item", {}).get("symbol", "").upper(),
+                        "name":   c.get("item", {}).get("name", ""),
+                        "market_cap_rank": c.get("item", {}).get("market_cap_rank"),
+                    }
+                    for c in coins[:7]
+                ],
+            }
+        except Exception as e:
+            logger.warning(f"[Macro] CoinGecko trending fetch failed: {e}")
+            result = {"coins": []}
+        _store(key, result)
+        return result
+
+    async def get_fred_series(self, series_id: str) -> dict:
+        """
+        Latest observation for a FRED economic series. Key series for trading
+        context: FEDFUNDS (effective federal funds rate), CPIAUCSL (CPI,
+        inflation), DFF (daily fed funds rate). Silently returns an empty
+        result if no FRED_API_KEY is configured, rather than failing loudly --
+        this is an optional enhancement, not a hard dependency.
+        """
+        if not settings.fred_api_key:
+            return {}
+        key = f"fred_{series_id}"
+        if hit := _cached(key):
+            return hit
+        try:
+            r = await self._client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": series_id,
+                    "api_key":   settings.fred_api_key,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit":     1,
+                },
+            )
+            obs = r.json().get("observations", [])
+            if not obs:
+                result = {}
+            else:
+                result = {"series_id": series_id, "value": obs[0].get("value"), "date": obs[0].get("date")}
+        except Exception as e:
+            logger.warning(f"[Macro] FRED fetch failed for {series_id}: {e}")
+            result = {}
+        _store(key, result)
+        return result
+
+    async def get_fed_snapshot(self) -> dict:
+        """Convenience wrapper: the handful of FRED series most relevant to
+        trading context, fetched together. Empty dict per series if no key."""
+        funds_rate, cpi = await asyncio.gather(
+            self.get_fred_series("FEDFUNDS"),
+            self.get_fred_series("CPIAUCSL"),
+            return_exceptions=True,
+        )
+        if isinstance(funds_rate, Exception): funds_rate = {}
+        if isinstance(cpi, Exception): cpi = {}
+        return {"fed_funds_rate": funds_rate, "cpi": cpi}
+
     async def get_funding_rates(self) -> dict:
         """Fetch Binance perpetual funding rates for BTC and ETH."""
         key = "funding_rates"
@@ -112,16 +188,20 @@ class MacroDataService:
 
     async def get_macro_snapshot(self) -> dict:
         """Aggregate all macro signals into one dict."""
-        fear_greed, global_crypto, funding = await asyncio.gather(
+        fear_greed, global_crypto, funding, trending, fed = await asyncio.gather(
             self.get_fear_greed(),
             self.get_global_crypto(),
             self.get_funding_rates(),
+            self.get_trending_coins(),
+            self.get_fed_snapshot(),
             return_exceptions=True,
         )
         # Replace exceptions with empty dicts
         if isinstance(fear_greed,   Exception): fear_greed   = {}
         if isinstance(global_crypto, Exception): global_crypto = {}
         if isinstance(funding,       Exception): funding       = {}
+        if isinstance(trending,      Exception): trending      = {"coins": []}
+        if isinstance(fed,           Exception): fed           = {}
 
         fg_val = fear_greed.get("value", 50)
         fg_cls = fear_greed.get("classification", "Neutral")
@@ -137,6 +217,8 @@ class MacroDataService:
             "fear_greed":        fear_greed,
             "global_crypto":     global_crypto,
             "funding_rates":     funding,
+            "trending_coins":    trending,
+            "fed":               fed,
             "macro_sentiment":   macro_sentiment,
             "macro_bias":        _macro_bias(fg_val, mktchg, funding),
         }

@@ -21,7 +21,7 @@ async function runSafe() {
       );
     }
   } catch (err) {
-    logger.error('[AIWorkerJob] Unhandled error:', err.message);
+    logger.error(`[AIWorkerJob] Unhandled error: ${err.stack}`);
   } finally {
     _running = false;
   }

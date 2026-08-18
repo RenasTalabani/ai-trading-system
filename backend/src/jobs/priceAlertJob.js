@@ -49,7 +49,7 @@ async function checkAlerts() {
       logger.info(`[PriceAlert] fired: ${alert.asset} ${alert.direction} ${alert.targetPrice} (now ${currentPrice})`);
     }
   } catch (err) {
-    logger.error('[PriceAlert] check error:', err.message);
+    logger.error(`[PriceAlert] check error: ${err.stack}`);
   }
 }
 

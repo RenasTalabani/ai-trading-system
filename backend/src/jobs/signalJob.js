@@ -73,7 +73,7 @@ async function processAsset(asset) {
 
     return signal;
   } catch (err) {
-    logger.error(`[SignalJob] Error processing ${asset}:`, err.message);
+    logger.error(`[SignalJob] Error processing ${asset}: ${err.stack}`);
     return null;
   }
 }

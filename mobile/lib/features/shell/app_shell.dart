@@ -9,7 +9,7 @@ class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.child});
 
   static const _tabs = [
-    _TabItem(label: 'Brain',     icon: Icons.bolt_outlined,          path: '/'),
+    _TabItem(label: 'Guide',     icon: Icons.lightbulb_outline,      path: '/'),
     _TabItem(label: 'Portfolio', icon: Icons.bar_chart_outlined,     path: '/performance'),
     _TabItem(label: 'Radar',     icon: Icons.radar,                  path: '/scanner'),
     _TabItem(label: 'Watchlist', icon: Icons.remove_red_eye_outlined, path: '/watchlist'),

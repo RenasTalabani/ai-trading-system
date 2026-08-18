@@ -6,7 +6,7 @@ async function runDcaCycle() {
   try {
     await runDueBuys();
   } catch (err) {
-    logger.error('[DCAJob] Cycle error:', err.message);
+    logger.error(`[DCAJob] Cycle error: ${err.stack}`);
   }
 }
 

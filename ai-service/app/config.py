@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
 
+    # FRED (Federal Reserve Economic Data) — free key from fred.stlouisfed.org
+    fred_api_key: str = ""
+
     # Model
     model_path: str = "./saved_models"
     confidence_threshold: int = 70

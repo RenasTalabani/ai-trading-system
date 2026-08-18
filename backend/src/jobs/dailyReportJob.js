@@ -65,7 +65,7 @@ async function runDailyReport() {
 
     logger.info(`[DailyReport] Sent to ${notified} users — ${winCount}W/${lossCount}L | P&L: ${sign}$${Math.abs(totalPnl).toFixed(2)}`);
   } catch (err) {
-    logger.error('[DailyReport] Error:', err.message);
+    logger.error(`[DailyReport] Error: ${err.stack}`);
   }
 }
 

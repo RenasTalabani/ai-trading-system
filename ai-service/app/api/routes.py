@@ -32,6 +32,11 @@ from app.services.unified_analyzer        import UnifiedAnalyzer
 from app.services.global_analyzer         import GlobalAnalyzer
 from app.services.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from app.services.macro_data_service       import MacroDataService
+from app.services.intel import store as intel_store
+from app.services.intel.pipeline import run_cycle
+from app.services.intel.connectors.telegram_source import TelegramSourceConnector
+from app.services.intel.connectors.coingecko_source import CoinGeckoSourceConnector
+from app.services.intel.connectors.fred_source import FredSourceConnector
 
 settings = get_settings()
 logger = logging.getLogger("ai-service.routes")
@@ -852,5 +857,54 @@ async def get_regime(asset: str, interval: str = "1h"):
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Market Intelligence Layer ─────────────────────────────────────────────────
+# Modular source connectors -> classify -> cross-reference -> persist as
+# structured Insights (never raw post dumps). See app/services/intel/ for
+# the full pipeline. Adding a future source means writing one connector
+# class and adding it to this list -- nothing else here changes.
+
+_intel_connectors = [
+    TelegramSourceConnector(),
+    CoinGeckoSourceConnector(macro_service),
+    FredSourceConnector(macro_service),
+]
+
+
+@router.post("/intel/collect")
+async def intel_collect():
+    """Run one collection+processing cycle across all registered source
+    connectors. Returns only a numeric summary -- never raw content."""
+    try:
+        result = await run_cycle(_intel_connectors)
+        return {"success": True, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/intel/insights")
+async def intel_insights(asset: Optional[str] = None, hours: int = 48, limit: int = 100):
+    """Structured insights the pipeline has stored -- summaries and
+    classifications, not raw source content."""
+    try:
+        insights = await intel_store.get_recent_insights(asset=asset.upper() if asset else None, hours=hours, limit=limit)
+        for i in insights:
+            i["_id"] = str(i["_id"])
+        return {"success": True, "count": len(insights), "insights": insights}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/intel/reliability")
+async def intel_reliability():
+    """Current reliability score for every tracked source."""
+    try:
+        sources = await intel_store.get_all_source_reliability()
+        for s in sources:
+            s["_id"] = str(s["_id"])
+        return {"success": True, "sources": sources}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

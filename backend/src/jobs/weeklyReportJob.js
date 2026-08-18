@@ -78,7 +78,7 @@ async function runWeeklyReport() {
 
     logger.info(`[WeeklyReport] Sent to ${notified} users — ${winCount}W/${lossCount}L | P&L: ${sign}$${Math.abs(totalPnl).toFixed(2)}`);
   } catch (err) {
-    logger.error('[WeeklyReport] Error:', err.message);
+    logger.error(`[WeeklyReport] Error: ${err.stack}`);
   }
 }
 

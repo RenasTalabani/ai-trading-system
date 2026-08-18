@@ -48,6 +48,11 @@ class ApiConstants {
   // AI
   static const String aiStatus = '$apiV1/ai/status';
 
+  // Guide — "just tell me what to do"
+  static const String guideSuggestion = '$apiV1/guide/suggestion';
+  static const String guideApprove    = '$apiV1/guide/suggestion/approve';
+  static const String guidePositions  = '$apiV1/guide/positions';
+
   // WebSocket
   static const String wsUrl = String.fromEnvironment(
     'WS_URL',

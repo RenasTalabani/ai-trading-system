@@ -31,6 +31,7 @@ const macroRoutes      = require('./routes/macro');
 const coreRoutes       = require('./routes/core');
 const priceAlertRoutes = require('./routes/priceAlerts');
 const brainRoutes      = require('./routes/brain');
+const guideRoutes      = require('./routes/guide');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 
@@ -100,6 +101,7 @@ app.use(`${API}/macro`,         macroRoutes);
 app.use(`${API}/core`,          coreRoutes);
 app.use(`${API}/price-alerts`,  priceAlertRoutes);
 app.use(`${API}/brain`,         brainRoutes);
+app.use(`${API}/guide`,         guideRoutes);
 
 // 404 + error handler
 app.use(notFound);

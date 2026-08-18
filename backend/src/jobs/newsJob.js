@@ -12,7 +12,7 @@ function startNewsJob() {
       const result = await collectNews();
       logger.info(`[NewsJob] Complete — collected: ${result.collected}, stored: ${result.stored}`);
     } catch (err) {
-      logger.error('[NewsJob] Error:', err.message);
+      logger.error(`[NewsJob] Error: ${err.stack}`);
     }
   });
 
@@ -24,7 +24,7 @@ function startNewsJob() {
     try {
       await collectNews();
     } catch (err) {
-      logger.error('[NewsJob] Initial collection failed:', err.message);
+      logger.error(`[NewsJob] Initial collection failed: ${err.stack}`);
     }
   }, 5000);
 }

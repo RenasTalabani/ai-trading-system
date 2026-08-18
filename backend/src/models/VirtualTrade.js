@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const virtualTradeSchema = new mongoose.Schema(
   {
-    // Source of trade: 'signal' (old flow) or 'ai' (AI worker)
-    source:       { type: String, enum: ['signal', 'ai'], default: 'signal' },
+    // Source of trade: 'signal' (old flow), 'ai' (AI worker), or 'guide' (user tapped Yes on a Guide suggestion)
+    source:       { type: String, enum: ['signal', 'ai', 'guide'], default: 'signal' },
     signalId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Signal',     default: null, index: true },
     aiDecisionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AIDecision', default: null, index: true },
 
@@ -14,6 +14,10 @@ const virtualTradeSchema = new mongoose.Schema(
     stopLoss:   { type: Number, default: null },
     takeProfit: { type: Number, default: null },
     sizeUsd:    { type: Number, required: true },
+    // How much sizeUsd was scaled from the baseline risk% — 1.0 = baseline,
+    // >1 = this asset has a proven recent edge, <1 = it doesn't (yet). See
+    // getEdgeMultiplier() in virtualTrackingService.js.
+    sizeMultiplier: { type: Number, default: 1.0 },
 
     // Simulated futures/leverage — spot trades leave these at their defaults.
     productType:      { type: String, enum: ['spot', 'futures'], default: 'spot' },
@@ -35,7 +39,7 @@ const virtualTradeSchema = new mongoose.Schema(
       index: true,
     },
     result:     { type: String, enum: ['win', 'loss', 'cancelled', null], default: null },
-    exitReason: { type: String, enum: ['TP', 'SL', 'LIQUIDATED', 'EXPIRED', 'session_reset', null], default: null },
+    exitReason: { type: String, enum: ['TP', 'SL', 'LIQUIDATED', 'EXPIRED', 'MANUAL', 'session_reset', null], default: null },
     exitPrice:  { type: Number, default: null },
     pnl:        { type: Number, default: null },
     pnlPct:     { type: Number, default: null },

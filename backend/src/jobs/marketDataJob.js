@@ -22,7 +22,7 @@ function startMarketDataJob() {
       try {
         await collectAllAssets(interval);
       } catch (err) {
-        logger.error(`[MarketDataJob] Failed for ${interval}:`, err.message);
+        logger.error(`[MarketDataJob] Failed for ${interval}: ${err.stack}`);
       }
     });
     logger.info(`  Scheduled ${interval} collection: "${schedule}"`);

@@ -22,7 +22,7 @@ async function runVirtualTrackingCycle() {
       await checkOpenTrades(prices);
     }
   } catch (err) {
-    logger.error('[VirtualTrackingJob] Cycle error:', err.message);
+    logger.error(`[VirtualTrackingJob] Cycle error: ${err.stack}`);
   }
 }
 
@@ -30,7 +30,7 @@ async function runFundingCycle() {
   try {
     await applyFundingPayments();
   } catch (err) {
-    logger.error('[VirtualTrackingJob] Funding cycle error:', err.message);
+    logger.error(`[VirtualTrackingJob] Funding cycle error: ${err.stack}`);
   }
 }
 

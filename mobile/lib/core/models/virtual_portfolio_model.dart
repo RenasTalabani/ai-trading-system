@@ -153,6 +153,7 @@ class VirtualTradeModel extends Equatable {
   final double? liquidationPrice;
   final double  fundingPaid;
   final bool    trailingStopEnabled;
+  final double  sizeMultiplier;
 
   const VirtualTradeModel({
     required this.id,
@@ -180,6 +181,7 @@ class VirtualTradeModel extends Equatable {
     this.liquidationPrice,
     this.fundingPaid = 0,
     this.trailingStopEnabled = false,
+    this.sizeMultiplier = 1.0,
   });
 
   factory VirtualTradeModel.fromJson(Map<String, dynamic> j) => VirtualTradeModel(
@@ -208,6 +210,7 @@ class VirtualTradeModel extends Equatable {
         liquidationPrice: j['liquidationPrice']  != null ? (j['liquidationPrice']).toDouble() : null,
         fundingPaid:      (j['fundingPaid'] ?? 0).toDouble(),
         trailingStopEnabled: (j['trailingStopEnabled'] ?? false) as bool,
+        sizeMultiplier: (j['sizeMultiplier'] ?? 1.0).toDouble(),
       );
 
   bool get isOpen     => status == 'open';

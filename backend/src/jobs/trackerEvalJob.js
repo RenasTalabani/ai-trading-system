@@ -62,7 +62,7 @@ function startTrackerEvalJob() {
     try {
       await evaluatePending();
     } catch (err) {
-      logger.error('[TrackerEval] Job error:', err.message);
+      logger.error(`[TrackerEval] Job error: ${err.stack}`);
     }
   });
   logger.info('[TrackerEval] Job scheduled — every 2 hours at :30');

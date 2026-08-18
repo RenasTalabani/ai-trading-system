@@ -26,7 +26,7 @@ async function runSocialCheck() {
       );
     }
   } catch (err) {
-    logger.error('[SocialJob] Error:', err.message);
+    logger.error(`[SocialJob] Error: ${err.stack}`);
   }
 }
 

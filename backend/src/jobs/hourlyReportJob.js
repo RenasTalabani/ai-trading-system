@@ -127,7 +127,7 @@ async function generateHourlyReport() {
     logger.info(`[HourlyReport] ✓ ${marketMood} | ${best.asset} ${best.direction} ${best.confidence}% | notified ${users.length} users`);
     return report;
   } catch (err) {
-    logger.error('[HourlyReport] failed:', err.message);
+    logger.error(`[HourlyReport] failed: ${err.stack}`);
     return null;
   }
 }

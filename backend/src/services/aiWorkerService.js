@@ -10,6 +10,7 @@ const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession  = require('../models/BudgetSession');
 const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger         = require('../config/logger');
+const { capToMaxRisk } = require('./virtualTrackingService');
 
 const CONFIDENCE_THRESHOLD  = parseInt(process.env.AI_CONFIDENCE_THRESHOLD)  || 70;  // Phase 18: raised to 70
 const MIN_FUSED_SCORE       = parseInt(process.env.AI_MIN_FUSED_SCORE)       || 65;  // Phase 18
@@ -40,21 +41,21 @@ async function runAIWorkerCycle() {
     return { skipped: 'max_trades_reached', openCount };
   }
 
-  // 2b. Portfolio protection — max daily loss (5 %)
-  const dayStart  = new Date(Date.now() - 86400_000);
-  const todayLosses = await VirtualTrade.aggregate([
-    { $match: { status: 'closed', closedAt: { $gte: dayStart }, pnl: { $lt: 0 } } },
-    { $group: { _id: null, totalLoss: { $sum: '$pnl' } } },
-  ]);
-  const dailyLoss = Math.abs((todayLosses[0]?.totalLoss) || 0);
-  if (portfolio && dailyLoss >= portfolio.currentBalance * MAX_DAILY_LOSS_PCT) {
-    logger.warn(`[AIWorker] Daily loss limit hit ($${dailyLoss.toFixed(2)}) — pausing trading.`);
-    return { skipped: 'daily_loss_limit', dailyLoss };
-  }
-
   // 3. Load portfolio for position sizing
   const portfolio = await VirtualPortfolio.findOne({ portfolioKey: 'global' });
   if (!portfolio) return { skipped: 'no_portfolio' };
+
+  // 2b. Portfolio protection — max daily loss (5 %)
+  const dayStart  = new Date(Date.now() - 86400_000);
+  const todayLosses = await VirtualTrade.aggregate([
+    { $match: { status: { $in: ['closed_profit', 'closed_loss'] }, closedAt: { $gte: dayStart }, pnl: { $lt: 0 } } },
+    { $group: { _id: null, totalLoss: { $sum: '$pnl' } } },
+  ]);
+  const dailyLoss = Math.abs((todayLosses[0]?.totalLoss) || 0);
+  if (dailyLoss >= portfolio.currentBalance * MAX_DAILY_LOSS_PCT) {
+    logger.warn(`[AIWorker] Daily loss limit hit ($${dailyLoss.toFixed(2)}) — pausing trading.`);
+    return { skipped: 'daily_loss_limit', dailyLoss };
+  }
 
   // 4. Call Python global scan
   const aiUrl = (process.env.AI_SERVICE_URL || 'http://localhost:8000').replace(/\/$/, '');
@@ -78,8 +79,9 @@ async function runAIWorkerCycle() {
   // 5. Assets already in open trades — avoid doubling up
   const openAssets  = await VirtualTrade.distinct('asset', { status: 'open' });
   const openSet     = new Set(openAssets);
+  const rawSizeUsd  = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100;
   const sizeUsd     = parseFloat(
-    ((portfolio.currentBalance * portfolio.riskPerTradePct) / 100).toFixed(2)
+    capToMaxRisk(rawSizeUsd, portfolio.currentBalance, 'AI worker cycle').toFixed(2)
   );
 
   let tradesCreated = 0;

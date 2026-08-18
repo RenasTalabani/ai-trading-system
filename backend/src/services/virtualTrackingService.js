@@ -58,6 +58,85 @@ function trailingDistanceFor(entryPrice, stopLoss) {
   return stopLoss ? Math.abs(entryPrice - stopLoss) : entryPrice * 0.02;
 }
 
+// ─── Dynamic position sizing — bet more where there's a proven edge ─────────
+//
+// Every trade used to risk the same fixed % of balance regardless of whether
+// that asset had actually been winning. This scales position size using a
+// quarter-Kelly-inspired multiplier from each asset's own recent closed-trade
+// history: f* = winRate - (1-winRate)/payoffRatio (classic Kelly fraction),
+// taken at 1/4 strength (industry-standard — full Kelly is high-variance) and
+// clamped to 0.5x-1.5x so a bad recent streak can't zero out a still-plausible
+// signal and a good one can't over-concentrate the account.
+const MIN_TRADES_FOR_EDGE = 10;   // below this, not enough data — use baseline (1x)
+const KELLY_FRACTION      = 0.25; // quarter-Kelly
+const MIN_MULTIPLIER      = 0.5;
+const MAX_MULTIPLIER      = 1.5;
+
+// Absolute, final backstop on capital committed to a single position — applied
+// AFTER riskPerTradePct and the edge multiplier, so no combination of the two
+// (e.g. riskPerTradePct at its schema max of 50% together with the multiplier
+// near its practical max of ~1.25x, which alone risks ~61% of balance on one
+// trade — confirmed by direct testing) can ever put more than this fraction
+// of current balance at risk on one trade. This is a hard ceiling, not a
+// suggestion: every caller of the sizing helpers below is capped through it.
+const MAX_POSITION_RISK_PCT = 10;
+
+function capToMaxRisk(rawAmountUsd, currentBalance, label) {
+  const ceiling = currentBalance * MAX_POSITION_RISK_PCT / 100;
+  if (rawAmountUsd > ceiling) {
+    logger.warn(
+      `[VirtualTracker] Position size capped — ${label} wanted $${rawAmountUsd.toFixed(2)} ` +
+      `(${((rawAmountUsd / currentBalance) * 100).toFixed(1)}% of balance), ` +
+      `capped to $${ceiling.toFixed(2)} (${MAX_POSITION_RISK_PCT}% hard limit).`
+    );
+    return ceiling;
+  }
+  return rawAmountUsd;
+}
+
+async function getEdgeMultiplier(asset) {
+  const recent = await VirtualTrade.find({
+    asset,
+    status: { $in: ['closed_profit', 'closed_loss'] },
+  }).sort({ closedAt: -1 }).limit(30).lean();
+
+  if (recent.length < MIN_TRADES_FOR_EDGE) return 1.0;
+
+  const wins   = recent.filter(t => t.result === 'win');
+  const losses = recent.filter(t => t.result === 'loss');
+  if (wins.length === 0 || losses.length === 0) return 1.0; // can't compute a payoff ratio
+
+  const winRate      = wins.length / recent.length;
+  const avgWinPct    = wins.reduce((s, t)   => s + Math.abs(t.pnlPct ?? 0), 0) / wins.length;
+  const avgLossPct   = losses.reduce((s, t) => s + Math.abs(t.pnlPct ?? 0), 0) / losses.length;
+  if (avgLossPct <= 0) return 1.0;
+
+  const payoffRatio = avgWinPct / avgLossPct;
+  const kelly       = winRate - (1 - winRate) / payoffRatio; // can be negative — no edge or a losing edge
+
+  const multiplier = 1.0 + (kelly * KELLY_FRACTION);
+  return Math.min(MAX_MULTIPLIER, Math.max(MIN_MULTIPLIER, multiplier));
+}
+
+// Shared spot-sizing math (riskPerTradePct × edge multiplier, hard-capped) —
+// used by pickupNewSignals, approveSuggestion, and previewSizeUsd so every
+// caller that opens a spot position sizes it identically.
+async function computeSpotSizeUsd(asset, portfolio, label) {
+  const baseSizeUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100;
+  const edgeMultiplier = await getEdgeMultiplier(asset);
+  const sizeUsd = capToMaxRisk(baseSizeUsd * edgeMultiplier, portfolio.currentBalance, label || `${asset} sizing`);
+  return { sizeUsd: parseFloat(sizeUsd.toFixed(2)), edgeMultiplier: parseFloat(edgeMultiplier.toFixed(2)) };
+}
+
+// Read-only preview of what a trade in this asset would be sized at right
+// now, without creating anything — used by the Guide screen to show a dollar
+// amount before the user taps "Yes".
+async function previewSizeUsd(asset) {
+  const portfolio = await getPortfolio();
+  const { sizeUsd } = await computeSpotSizeUsd(asset, portfolio, `${asset} preview`);
+  return sizeUsd;
+}
+
 // ─── Pick up new signals and create VirtualTrades ────────────────────────────
 
 async function pickupNewSignals() {
@@ -81,7 +160,7 @@ async function pickupNewSignals() {
     for (const sig of newSignals) {
       if (!sig.price?.entry) continue;
 
-      const sizeUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100;
+      const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(sig.asset, portfolio, `${sig.asset} spot pickup`);
 
       trades.push({
         signalId:   sig._id,
@@ -90,7 +169,8 @@ async function pickupNewSignals() {
         entryPrice: sig.price.entry,
         stopLoss:   sig.price.stopLoss   || null,
         takeProfit: sig.price.takeProfit || null,
-        sizeUsd:    parseFloat(sizeUsd.toFixed(2)),
+        sizeUsd,
+        sizeMultiplier: edgeMultiplier,
         trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
         openedAt:   sig.createdAt,
       });
@@ -115,6 +195,52 @@ async function pickupNewSignals() {
   }
 }
 
+// ─── Approve a suggested trade immediately (Guide feature) ───────────────────
+// The Guide screen's suggestion comes from the live AI Brain global-scan
+// cache (globalScanJob), not from a persisted Signal document, so this takes
+// the trade parameters directly rather than a signalId. Same sizing math
+// (riskPerTradePct × edge multiplier, hard-capped) as every other path that
+// opens a spot position, so a manually-approved trade can never risk more
+// than an automatically-picked-up one would.
+
+async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit }) {
+  if (!asset || !entryPrice) {
+    throw new Error('Missing asset or entry price.');
+  }
+  if (!['BUY', 'SELL'].includes(direction)) {
+    throw new Error('Only BUY/SELL suggestions can be approved.');
+  }
+
+  const alreadyOpen = await VirtualTrade.findOne({ asset, status: 'open' });
+  if (alreadyOpen) {
+    throw new Error(`Already have an open ${asset} position — nothing new to approve.`);
+  }
+
+  const portfolio = await getPortfolio();
+  const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(asset, portfolio, `${asset} guide approval`);
+
+  const trade = await VirtualTrade.create({
+    source:     'guide',
+    asset,
+    direction,
+    entryPrice,
+    stopLoss:   stopLoss   || null,
+    takeProfit: takeProfit || null,
+    sizeUsd,
+    sizeMultiplier: edgeMultiplier,
+    trailingStopDistance: trailingDistanceFor(entryPrice, stopLoss),
+    openedAt:   new Date(),
+  });
+
+  if (!portfolio.startedAt) {
+    portfolio.startedAt = trade.openedAt;
+    await portfolio.save();
+  }
+
+  logger.info(`[VirtualTracker] Guide suggestion approved — ${asset} ${direction} @ $${sizeUsd.toFixed(2)}`);
+  return trade;
+}
+
 // ─── Open a leveraged futures position on an existing signal ─────────────────
 // Manual, per-trade opt-in (mirrors real futures trading — you choose leverage
 // per position). Independent of the automatic spot pickup above: a signal can
@@ -134,8 +260,10 @@ async function openFuturesTrade(signalId, leverage) {
   }
 
   const portfolio = await getPortfolio();
+  const edgeMultiplier = await getEdgeMultiplier(sig.asset);
+  const baseMarginUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage;
   const marginUsd = parseFloat(
-    ((portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage).toFixed(2)
+    capToMaxRisk(baseMarginUsd * edgeMultiplier, portfolio.currentBalance, `${sig.asset} futures margin`).toFixed(2)
   );
 
   const liquidationPrice = sig.direction === 'BUY'
@@ -150,6 +278,7 @@ async function openFuturesTrade(signalId, leverage) {
     stopLoss:         sig.price.stopLoss   || null,
     takeProfit:       sig.price.takeProfit || null,
     sizeUsd:          parseFloat((marginUsd * leverage).toFixed(2)), // notional
+    sizeMultiplier:   parseFloat(edgeMultiplier.toFixed(2)),
     productType:      'futures',
     leverage,
     marginUsd,
@@ -388,6 +517,100 @@ async function checkOpenTrades(priceCache) {
   }
 }
 
+// ─── Close a position right now, at the current market price ─────────────────
+// Powers the Guide screen's "Sell Now" button — when the AI flags a position
+// as SELL, this actually closes it immediately rather than waiting for
+// price to reach the original TP/SL. The P&L math intentionally mirrors
+// checkOpenTrades' closing block exactly (same formulas, same portfolio
+// aggregate updates) but is kept as its own function rather than a shared
+// helper, so refactoring this newer, less-tested path can never risk
+// destabilizing the already-verified TP/SL/liquidation logic above.
+
+async function closePositionNow(tradeId, currentPrice) {
+  const trade = await VirtualTrade.findOne({ _id: tradeId, status: 'open' });
+  if (!trade) {
+    throw new Error('Position not found or already closed.');
+  }
+  if (!currentPrice || isNaN(currentPrice)) {
+    throw new Error('No live price available for this asset right now.');
+  }
+
+  const portfolio = await getPortfolio();
+  const exitPrice = currentPrice;
+
+  let pnlPct = trade.direction === 'BUY'
+    ? ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100
+    : ((trade.entryPrice - exitPrice) / trade.entryPrice) * 100;
+
+  let pnl;
+  if (trade.productType === 'futures') {
+    pnlPct = pnlPct * trade.leverage;
+    pnl    = (trade.marginUsd * pnlPct) / 100;
+    pnl    = Math.max(pnl, -trade.marginUsd);
+  } else {
+    pnl = (trade.sizeUsd * pnlPct) / 100;
+  }
+
+  const result = pnl >= 0 ? 'win' : 'loss';
+  const balanceBefore   = parseFloat(portfolio.currentBalance.toFixed(2));
+  const balanceAfter    = parseFloat((portfolio.currentBalance + pnl).toFixed(2));
+  const durationMinutes = Math.round((Date.now() - trade.openedAt.getTime()) / 60_000);
+
+  await VirtualTrade.updateOne({ _id: trade._id }, {
+    status:          result === 'win' ? 'closed_profit' : 'closed_loss',
+    result,
+    exitPrice:       parseFloat(exitPrice.toFixed(8)),
+    exitReason:      'MANUAL',
+    pnl:             parseFloat(pnl.toFixed(2)),
+    pnlPct:          parseFloat(pnlPct.toFixed(2)),
+    balanceBefore,
+    balanceAfter,
+    durationMinutes,
+    closedAt:        new Date(),
+  });
+
+  portfolio.currentBalance += pnl;
+  if (result === 'win') {
+    portfolio.totalProfit += pnl;
+    portfolio.winCount    += 1;
+  } else {
+    portfolio.totalLoss += Math.abs(pnl);
+    portfolio.lossCount += 1;
+  }
+  updateDrawdown(portfolio);
+  updateBestWorst(portfolio, trade, pnl);
+  portfolio.balanceHistory.push({ date: new Date(), balance: parseFloat(portfolio.currentBalance.toFixed(2)) });
+  if (portfolio.balanceHistory.length > 200) {
+    portfolio.balanceHistory = portfolio.balanceHistory.slice(-200);
+  }
+  portfolio.currentBalance = parseFloat(portfolio.currentBalance.toFixed(2));
+  portfolio.totalProfit    = parseFloat(portfolio.totalProfit.toFixed(2));
+  portfolio.totalLoss      = parseFloat(portfolio.totalLoss.toFixed(2));
+  await portfolio.save();
+
+  logger.info(
+    `[VirtualTracker] Manual sell — ${trade.asset} ${trade.direction} ` +
+    `| result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
+    `| balance: $${portfolio.currentBalance}`
+  );
+
+  try {
+    notifySvc().sendTradeClosedNotification(
+      { asset: trade.asset, direction: trade.direction, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), exitReason: 'MANUAL', result },
+      portfolio,
+    ).catch(() => {});
+  } catch (_) {}
+
+  return {
+    asset: trade.asset,
+    direction: trade.direction,
+    pnl: parseFloat(pnl.toFixed(2)),
+    pnlPct: parseFloat(pnlPct.toFixed(2)),
+    result,
+    exitPrice: parseFloat(exitPrice.toFixed(8)),
+  };
+}
+
 // ─── Date range helper ────────────────────────────────────────────────────────
 
 function rangeStart(range) {
@@ -558,5 +781,6 @@ async function setCapital(startingBalance, riskPerTradePct) {
 module.exports = {
   pickupNewSignals, checkOpenTrades, getPerformance, getSummary,
   resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
-  enableTrailingStop, getExposureSummary,
+  enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
+  approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
 };

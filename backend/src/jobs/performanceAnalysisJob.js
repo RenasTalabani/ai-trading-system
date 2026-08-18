@@ -102,7 +102,7 @@ async function runPerformanceAnalysis() {
 
     logger.info(`[PerfAnalysis] Complete — ${pushed}/${recent.length} outcomes pushed to RL engine.`);
   } catch (err) {
-    logger.error('[PerfAnalysis] Error:', err.message);
+    logger.error(`[PerfAnalysis] Error: ${err.stack}`);
   }
 }
 
