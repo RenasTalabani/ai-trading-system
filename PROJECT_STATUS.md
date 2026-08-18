@@ -136,8 +136,13 @@ REMAINING RISK: medium-low. Coverage is real but partial — see round 2 below f
 
 **Round 2 (same session, later pass)**: added 4 more model test files — `pnl_model_test.dart` (4 tests), `exposure_model_test.dart` (6 tests), `dca_model_test.dart` (6 tests), `order_block_model_test.dart` (13 tests) — bringing coverage to 7 of ~10 files in `mobile/lib/core/models/`. `flutter test test/core/models/` — 74/74 passing. Noticed and documented (not "fixed" — it's an intentional, consistent pattern once traced) that `PnLModel` and `OrderBlockResult` use strict, non-defaulting `as num`/`as String` casts unlike the more defensive `?? 0` style in `SignalModel`/`VirtualTradeModel` — confirmed both are consumed via Riverpod `AsyncNotifier`s (`pnl_provider.dart`, `order_block_provider.dart`), so a thrown parse error becomes a normal `AsyncValue.error` UI state, not a crash. This is a real, deliberate two-tier convention in the codebase (strict-parse-plus-framework-error-handling for single-item detail views vs. defensive-defaulting for bulk list views) — documented via test comments so a future pass doesn't "fix" the strict models into silently swallowing bad data.
 DATE: 2026-08-18 (round 2)
+COMMIT: `6d18b6e`
+REMAINING RISK: medium-low. See round 3 below.
+
+**Round 3 (same session)**: added the last 3 model files — `backtest_model_test.dart` (4 tests), `notification_model_test.dart` (6 tests), `strategy_model_test.dart` (13 tests). **All 10 of `mobile/lib/core/models/` now have real test coverage.** `flutter test test/core/models/` — 97/97 passing. Found (via `strategy_model.dart`'s `AssetRecommendation.fromJson`) and tested a real, deliberate wire-format compatibility shim: `expected_move_percent`/`current_price` fall back to `expectedMove`/`currentPrice` if the snake_case key is absent, with snake_case taking precedence when both exist — this dual-format tolerance is now regression-tested, not just implicit.
+DATE: 2026-08-18 (round 3)
 COMMIT: `[pending]`
-REMAINING RISK: medium-low. Still 3 of ~10 model files uncovered, 0 of ~28 providers, 0 widget tests. `mobile` remains the least-tested part of the stack relative to backend (130 tests) and ai-service (123 tests) as of this pass. Continuing incrementally per the owner's "no need to rush, quality over speed" instruction.
+REMAINING RISK: medium-low. Model layer is now fully covered (97 tests, 0 → 97 this session). Still 0 of ~28 providers and 0 widget tests — that's the natural next slice, but a large enough scope that it's better picked up as its own deliberate pass than squeezed in at the end of this one. `mobile` has gone from the least-tested part of the stack to having a solid data-layer foundation; providers/widgets remain the gap relative to backend (130 tests) and ai-service (123 tests).
 
 ### PRIORITY 1 (continuous) — ai-service CORS misconfiguration (T-022)
 STATUS: DONE
