@@ -174,6 +174,14 @@ DATE: 2026-08-18
 COMMIT: `051be27`
 REMAINING RISK: none identified for this specific cap. This was found by reading the core AI-decision cycle end to end looking for correctness issues, the same way T-023 was found -- worth continuing that kind of close read of the remaining trading-logic files (`pickupNewSignals`, `computeSpotSizeUsd`, `getEdgeMultiplier`) as a standing practice rather than a one-time pass, since this is exactly the class of bug that's easy to miss in review but has real capital-at-risk consequences (even in paper trading, it defeats the purpose of the risk cap the product advertises).
 
+### PRIORITY 4 (found, not actioned) — pickupNewSignals() is dead code with a latent risk-cap gap (T-026)
+STATUS: TODO — documented, not fixed, pending an owner call on intent
+EVIDENCE: While reading the trading-logic files end to end after T-025, found `pickupNewSignals()` (`virtualTrackingService.js`) is fully implemented, exported, and unit-tested, but has **zero live call sites** -- confirmed via grep across `backend/src/routes`, `backend/src/controllers`, `backend/src/jobs`, and `backend/server.js`. No cron job schedules it, no route triggers it. It appears to be superseded by `aiWorkerService.js`'s `runAIWorkerCycle` (which has its own signal-scanning + trade-opening logic, now risk-capped per T-025) but was never removed.
+Separately: if this function were ever wired up as-is, it would have an even larger version of the T-025 gap -- it opens one `VirtualTrade` per new signal with **no check against `MAX_OPEN_TRADES` (or any cap) at all**, processing up to 50 signals in a single call via `insertMany`. Not fixing this now: it doesn't run today, so there's no live risk, and deciding whether to remove it, wire it back up (with a T-025-style cap added first), or leave it as intentionally-reserved code is a product/architecture call, not a pure bug fix -- flagging for the owner rather than guessing.
+DATE: 2026-08-18
+COMMIT: n/a (documentation only, no code changed)
+REMAINING RISK: none today (dead code). Becomes a real risk only if someone wires this back into a job/route without also adding the missing cap -- this entry exists so that doesn't happen silently.
+
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
 - PRIORITY 4 (model artifacts) — partially answered above (delivery path gap found); full resolution still open.
