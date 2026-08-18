@@ -101,13 +101,28 @@ async function runSignalGeneration() {
   logger.info(`[SignalJob] Round complete. Generated ${generated} new signals.`);
 }
 
+// T-030 (2026-08-18, PM continuous-improvement pass): this is directly
+// registered as a cron.schedule() callback (hourly) with no try/catch of
+// its own. node-cron catches an async task's rejection internally so this
+// was never a crash risk (confirmed by reading node-cron's source during
+// T-024), but nothing here listens for node-cron's 'task-failed' event
+// either -- so if Signal.updateMany ever threw (a transient DB blip, say),
+// the error would vanish with zero log trace, same class of silent-failure
+// gap T-024 closed for notificationRetryJob.js. That earlier pass checked
+// try/catch presence per *file*, not per scheduled function, so this one
+// (in a file that already had a try/catch elsewhere, in processAsset)
+// slipped through. Wrapped to match every other scheduled job function.
 async function expireOldSignals() {
-  const result = await Signal.updateMany(
-    { status: 'active', expiresAt: { $lt: new Date() } },
-    { $set: { status: 'expired' } }
-  );
-  if (result.modifiedCount > 0) {
-    logger.info(`[SignalJob] Expired ${result.modifiedCount} old signals.`);
+  try {
+    const result = await Signal.updateMany(
+      { status: 'active', expiresAt: { $lt: new Date() } },
+      { $set: { status: 'expired' } }
+    );
+    if (result.modifiedCount > 0) {
+      logger.info(`[SignalJob] Expired ${result.modifiedCount} old signals.`);
+    }
+  } catch (err) {
+    logger.error(`[SignalJob] expireOldSignals error: ${err.stack}`);
   }
 }
 
@@ -130,4 +145,4 @@ function startSignalJob() {
   setTimeout(runSignalGeneration, 10000);
 }
 
-module.exports = { startSignalJob, runSignalGeneration };
+module.exports = { startSignalJob, runSignalGeneration, expireOldSignals };
