@@ -62,3 +62,7 @@ backend/coverage/
 
 # Ad-hoc debug/scratch dumps
 mobile/_positions_check.json
+
+# Files this session couldn't delete outright (filesystem restriction) — moved
+# here instead of deleted; safe to actually delete from disk, never commit
+_to_delete/
