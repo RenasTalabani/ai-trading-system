@@ -10,6 +10,16 @@ function _prices() {
   return _getPrices();
 }
 
+// T-029 (2026-08-18, PM continuous-improvement pass): binanceService's
+// getAllCachedPrices() returns `{ asset: { price, ts } }` (confirmed by
+// reading binanceService.js -- priceCache.set() always stores an object,
+// never a bare number), but this job was comparing that whole object
+// directly against alert.targetPrice (`currentPrice >= alert.targetPrice`
+// where currentPrice was `{price, ts}`). An object compared to a number
+// coerces to "[object Object]" -> NaN -> every comparison is false. That
+// made `triggered` always false, silently and permanently -- Price
+// Alerts (the entire point of this job) never fired for any user, ever,
+// with no error or log trace. Fixed by extracting the numeric price.
 async function checkAlerts() {
   try {
     const prices = _prices();
@@ -19,8 +29,11 @@ async function checkAlerts() {
     if (!alerts.length) return;
 
     for (const alert of alerts) {
-      const currentPrice = prices[alert.asset];
-      if (!currentPrice) continue;
+      const cached = prices[alert.asset];
+      const currentPrice = typeof cached === 'object' && cached !== null
+        ? cached.price
+        : cached;
+      if (!currentPrice || isNaN(currentPrice)) continue;
 
       const triggered =
         (alert.direction === 'above' && currentPrice >= alert.targetPrice) ||
