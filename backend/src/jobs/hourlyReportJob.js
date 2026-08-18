@@ -40,9 +40,23 @@ async function generateHourlyReport() {
       price:      s.price?.entry || 0,
     }));
 
+    // T-031 (2026-08-18, PM continuous-improvement pass): queried the
+    // wrong field name -- VirtualPortfolio's schema field is `portfolioKey`
+    // (confirmed in VirtualPortfolio.js: `portfolioKey: { type: String,
+    // default: 'global', unique: true }`), not `key`. Every other caller
+    // in the codebase (budgetController.js, aiWorkerService.js,
+    // virtualTrackingService.js) correctly queries `portfolioKey`; this
+    // was the one outlier. A query on a field that doesn't exist on any
+    // document always matches nothing, so `p` was always null here --
+    // meaning every Hourly AI Report, every hour, silently fell back to
+    // the hardcoded placeholder portfolio ($500 balance, $0 change, 0
+    // open trades) instead of the real numbers, and that fake data was
+    // baked into the stored report, the Telegram/push notification text,
+    // and (if OPENAI_KEY is set) the GPT prompt used to write the report's
+    // narrative insight.
     let portfolioSummary = { balance: 500, change: 0, changePct: 0, openTrades: 0 };
     try {
-      const p = await VirtualPortfolio.findOne({ key: 'global' }).lean();
+      const p = await VirtualPortfolio.findOne({ portfolioKey: 'global' }).lean();
       if (p) {
         const prev = p.balanceHistory?.slice(-2)[0]?.balance || p.currentBalance;
         portfolioSummary = {
