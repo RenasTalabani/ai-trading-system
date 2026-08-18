@@ -34,22 +34,17 @@ const brainRoutes      = require('./routes/brain');
 const guideRoutes      = require('./routes/guide');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
+const { buildCorsOptions } = require('./config/corsConfig');
 
 const app = express();
 
 // Security headers
 app.use(helmet());
 
-// CORS — allow all origins in production (Flutter mobile sends no Origin header)
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').filter(Boolean);
-const corsAll = allowedOrigins.includes('*');
-app.use(cors({
-  origin: (origin, cb) => {
-    if (corsAll || !origin || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error('Not allowed by CORS'));
-  },
-  credentials: !corsAll,
-}));
+// CORS — allow all origins in production (Flutter mobile sends no Origin header).
+// Origin-resolution logic lives in ./config/corsConfig.js (unit tested there
+// directly, without needing a full app boot).
+app.use(cors(buildCorsOptions(process.env.ALLOWED_ORIGINS)));
 
 // Compression
 app.use(compression());

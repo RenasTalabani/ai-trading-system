@@ -66,6 +66,16 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
+// Single access token, no refresh-token flow — a deliberate choice, not an
+// oversight. This app has no real login for most users (see auth_provider.dart:
+// a guest account is auto-created on first launch and the "login" screen is
+// only reached if a session is explicitly cleared), there is no real-money or
+// exchange-custody data behind the token, and the mobile client already
+// handles expiry gracefully (401 -> auto-logout, see api_service.dart's
+// onUnauthorized). Adding refresh-token rotation would add real complexity
+// (secure refresh-token storage, a revocation store, new endpoints) without a
+// corresponding security need for this app's threat model. Revisit if the
+// product ever adds real user accounts holding real financial data.
 userSchema.methods.generateAuthToken = function () {
   return jwt.sign({ id: this._id, role: this.role }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
