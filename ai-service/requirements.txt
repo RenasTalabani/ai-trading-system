@@ -21,6 +21,7 @@ torch>=2.2.0,<2.9.0
 nltk>=3.8.0
 vaderSentiment>=3.3.2
 transformers>=4.40.0
+sentencepiece>=0.2.0
 
 # News collection
 feedparser>=6.0.11

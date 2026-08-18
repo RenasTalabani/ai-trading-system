@@ -53,3 +53,12 @@ backend.log
 backend-err.log
 aiservice.log
 aiservice-err.log
+
+# Test coverage output
+backend/coverage/
+
+# Claude Code local session settings (machine-specific, not shared)
+.claude/settings.local.json
+
+# Ad-hoc debug/scratch dumps
+mobile/_positions_check.json
