@@ -14,7 +14,7 @@ scipy>=1.13.0
 
 # Transformer/LSTM sequence models (Phase 8) — CPU-only wheel installed
 # separately in Dockerfile via the PyTorch CPU index to keep image size down
-torch>=2.2.0,<2.9.0
+torch>=2.9.1,<2.14.0
 
 # NLP — FinBERT (finance-tuned sentiment) via transformers, falls back to
 # VADER automatically if this ever fails to load (see news_sentiment.py)
