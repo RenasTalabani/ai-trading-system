@@ -18,7 +18,12 @@ class UserPreferences extends Equatable {
   });
 
   factory UserPreferences.fromJson(Map<String, dynamic> json) => UserPreferences(
-    assets: List<String>.from(json['assets'] ?? []),
+    // Falls back to the same ['BTCUSDT', 'ETHUSDT'] default as the
+    // constructor above when `assets` is absent -- not to `[]`. A missing
+    // key means "no preferences saved yet", not "watch nothing".
+    assets: json['assets'] != null
+        ? List<String>.from(json['assets'])
+        : const ['BTCUSDT', 'ETHUSDT'],
     confidenceThreshold: json['confidenceThreshold'] ?? 70,
     notificationsEnabled: json['notificationsEnabled'] ?? true,
     fcmEnabled: json['fcmEnabled'] ?? true,
