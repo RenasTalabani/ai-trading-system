@@ -24,8 +24,24 @@ class RegimeDetector:
             ema50 = float(row.get("ema50",  price))
             ema200= float(row.get("ema200", price))
             atr   = float(row.get("atr",    price * 0.015))
+            return self.detect_from_values(price, ema50, ema200, atr)
+        except Exception as e:
+            logger.debug(f"RegimeDetector fallback: {e}")
+            return "TRENDING"
 
-            atr_pct = atr / price if price > 0 else 0.015
+    def detect_from_values(self, price: float, ema50: float,
+                           ema200: float, atr: float) -> str:
+        """
+        Same classification as detect(), but takes already-extracted scalars
+        instead of a DataFrame. Added 2026-08-18 (T-028) so callers that
+        already have a fetched price/ema50/ema200/atr on hand (e.g. from a
+        prior engine's response) can get a real regime without a second,
+        redundant raw-candle fetch. Falls back to TRENDING on bad input,
+        matching detect()'s existing fallback contract.
+        """
+        try:
+            price = float(price)
+            atr_pct = float(atr) / price if price > 0 else 0.015
 
             if atr_pct > ATR_VOLATILE_THRESHOLD:
                 return "VOLATILE"
@@ -35,9 +51,6 @@ class RegimeDetector:
 
             if price < ema50 and ema50 < ema200:
                 return "DOWNTREND"
-
-            if atr_pct < ATR_SIDEWAYS_THRESHOLD:
-                return "SIDEWAYS"
 
             return "SIDEWAYS"
 

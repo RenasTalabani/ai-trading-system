@@ -170,12 +170,31 @@ class GlobalAnalyzer:
             sent = result.get("sentiment", {})
             fs   = _action_to_score(sig["action"], sig["confidence"])
 
-            # Regime (needs raw df — fetch separately if not in result)
-            regime    = result.get("regime", "TRENDING")
             atr       = float(tech.get("atr", 0)) or (
                 float(tech.get("current_price", 0)) * 0.015
             )
             entry     = float(tech.get("current_price") or 0)
+
+            # T-028 (2026-08-18): unified_analyzer.analyze()'s response never
+            # actually contains a "regime" key (confirmed by inspection --
+            # no such field is ever set in its return dict), so
+            # `result.get("regime", "TRENDING")` was silently falling back
+            # to "TRENDING" on every single call. That meant every crypto
+            # trade -- the app's primary, most-actively-scanned asset class
+            # -- always got TRENDING's SL/TP width (1.5x/3.0x ATR) and
+            # TRENDING's score modifier (permanent +10% on BUY, -20% on
+            # SELL) regardless of real market conditions, silently
+            # defeating regime-aware risk management for crypto specifically
+            # (the non-crypto path in _score_multi_asset below was already
+            # calling the real detector correctly). Fixed by deriving a real
+            # regime from the ema50/ema200/atr this function already has on
+            # hand, via the same classification logic detect() uses.
+            ema50 = float(tech.get("ema50") or entry)
+            ema200 = float(tech.get("ema200") or entry)
+            regime = (
+                _regime_det.detect_from_values(entry, ema50, ema200, atr)
+                if entry > 0 else "TRENDING"
+            )
 
             # ATR-based SL/TP
             sl, tp, rr = _risk_mgr.compute_sl_tp(entry, atr, sig["action"], regime)
