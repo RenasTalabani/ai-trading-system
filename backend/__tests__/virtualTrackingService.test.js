@@ -318,6 +318,26 @@ describe('checkOpenTrades — TP/SL/liquidation closing logic', () => {
     await svc.checkOpenTrades({ BTCUSDT: 100 }); // no XAUUSD price in cache
     expect(UPDATE_CALLS.length).toBe(0);
   });
+
+  test('a stale cached price (regression: T-027, 2026-08-18) is treated like no price at all -- never used to close a trade', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    FAKE_OPEN_TRADES = [openTrade({ direction: 'BUY', entryPrice: 100, takeProfit: 110 })];
+    // Object shape with a timestamp from 20 minutes ago -- well past the
+    // 10-minute staleness threshold. Price itself (115) would clearly
+    // trigger the take-profit if it were trusted.
+    const staleTs = Date.now() - 20 * 60 * 1000;
+    await svc.checkOpenTrades({ BTCUSDT: { price: 115, ts: staleTs } });
+    expect(UPDATE_CALLS.length).toBe(0);
+  });
+
+  test('a fresh cached price (object shape, as production actually sends it) still closes trades normally', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    FAKE_OPEN_TRADES = [openTrade({ direction: 'BUY', entryPrice: 100, takeProfit: 110 })];
+    await svc.checkOpenTrades({ BTCUSDT: { price: 115, ts: Date.now() } });
+    const closeCall = UPDATE_CALLS.find(c => c.update.status === 'closed_profit');
+    expect(closeCall).toBeDefined();
+    expect(closeCall.update.exitPrice).toBe(110);
+  });
 });
 
 describe('closePositionNow — the Guide screen\'s "Sell Now" button', () => {

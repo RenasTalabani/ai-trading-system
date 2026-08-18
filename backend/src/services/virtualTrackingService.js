@@ -82,6 +82,23 @@ const MAX_MULTIPLIER      = 1.5;
 // suggestion: every caller of the sizing helpers below is capped through it.
 const MAX_POSITION_RISK_PCT = 10;
 
+// T-027 (2026-08-18, PM continuous-improvement pass): the live price cache
+// (binanceService's WebSocket feed) auto-reconnects on disconnect, but the
+// REST fallback poll is only ever started once, 30s after server boot, if
+// the cache was still empty then (see server.js). If the WebSocket connects
+// fine at startup and then drops for an extended period later at runtime
+// (network blip, Binance-side issue, geo-block that starts mid-session),
+// nothing restarts REST polling -- the cache just keeps returning
+// increasingly stale prices forever, and checkOpenTrades() had no way to
+// tell the difference between a fresh price and one from hours ago. A
+// stale price could silently fail to trigger a real TP/SL/liquidation, or
+// trigger one against a price that no longer reflects the market. Treating
+// a too-old cached price the same as "no price" (which the code already
+// handles safely by skipping that asset for the cycle) closes this without
+// touching the live-stream reconnect logic itself.
+const PRICE_STALENESS_MS = 10 * 60 * 1000; // 10 min -- well past one 5-min cycle, tolerant of brief blips
+
+
 function capToMaxRisk(rawAmountUsd, currentBalance, label) {
   const ceiling = currentBalance * MAX_POSITION_RISK_PCT / 100;
   if (rawAmountUsd > ceiling) {
@@ -367,6 +384,11 @@ async function checkOpenTrades(priceCache) {
       for (const trade of openTrades) {
         const cached = priceCache[trade.asset];
         if (!cached) continue;
+
+        // Object shape ({price, ts}, from binanceService.getAllCachedPrices())
+        // is what production always passes; a bare number is a test-only
+        // shorthand with no timestamp to check, so it's treated as fresh.
+        if (typeof cached === 'object' && cached.ts && (Date.now() - cached.ts) > PRICE_STALENESS_MS) continue;
 
         const currentPrice = typeof cached === 'object' ? cached.price : cached;
         if (!currentPrice || isNaN(currentPrice)) continue;
