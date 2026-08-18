@@ -217,6 +217,13 @@ DATE: 2026-08-18
 COMMIT: `5f31612`
 REMAINING RISK: low. This is a narrowly-scoped extraction fix with no change to trigger logic, DB writes, or notification content. One thing worth flagging for the owner separately (not fixed here, out of scope): `checkAlerts()` does not apply the same price-staleness guard added in T-027 for `checkOpenTrades()` -- a stale cached price could still fire (or fail to fire) an alert based on old data. Lower severity than T-027 since price alerts are informational (no money/position at stake, unlike TP/SL/liquidation), but worth a follow-up pass to reuse the same staleness pattern here for consistency.
 
+### PRIORITY 7 — env template consolidation (T-016)
+STATUS: DONE
+EVIDENCE: Ground-truthed both `backend/.env.example` and `backend/.env.railway` against `grep -rhoE "process\.env\.[A-Z_]+" backend/src backend/server.js` rather than eyeballing diffs. Kept both files (dev vs Railway-prod are genuinely different environments, not redundant) but fixed real drift: removed 4 vars from `.env.example` that backend never reads (`BINANCE_API_KEY`, `BINANCE_SECRET_KEY`, `TWITTER_BEARER_TOKEN`, `REDDIT_*`) — confirmed via `ai-service/app/config.py` that these belong to ai-service's own `Settings` class, mistakenly copy-pasted into backend's template at some point. Added 5 real, currently-undocumented backend vars to both files (`BINANCE_WS_URL`, `OPENAI_API_KEY`, `AI_MIN_FUSED_SCORE`, `AI_MIN_QUALITY_SCORE`, `AI_MAX_DAILY_LOSS_PCT`) — all optional with safe code-level fallbacks, none newly required. Corrected `.env.railway`'s AI-tuning example values (were 60/10, code's actual fallback defaults are 70/5 as of a "Phase 18" change) — documentation-only fix, zero runtime effect since `dotenv.config()` only ever loads `.env`, never these template files.
+DATE: 2026-08-18
+COMMIT: `[pending]`
+REMAINING RISK: none — purely documentation, verified `npm test` unaffected (135/135; the 2 failures observed at the same moment were from an unrelated, separate in-progress edit to `priceAlertJob.js`, confirmed via `git diff` before concluding that, not assumed).
+
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
 - PRIORITY 4 (model artifacts) — partially answered above (delivery path gap found); full resolution still open.
