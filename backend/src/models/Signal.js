@@ -62,5 +62,12 @@ const signalSchema = new mongoose.Schema(
 signalSchema.index({ asset: 1, createdAt: -1 });
 signalSchema.index({ direction: 1, confidence: -1 });
 signalSchema.index({ status: 1, expiresAt: 1 });
+// T-014 (2026-08-18): getSignals()'s default path (no status/asset query
+// param -- the common dashboard load) filters and sorts on createdAt alone,
+// which none of the three indexes above cover (none has createdAt as a
+// leading/standalone key). getLatestSignals() and getSignalStats() filter by
+// status='active' then sort/group -- also not served by {status,expiresAt}.
+signalSchema.index({ createdAt: -1 });
+signalSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Signal', signalSchema);
