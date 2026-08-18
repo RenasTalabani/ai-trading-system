@@ -118,6 +118,13 @@ DATE: 2026-08-18
 COMMIT: `[pending]` (docs only)
 REMAINING RISK: low — this is a 3.5-month-old single-session dev log, not a current production signal (production has no logs at all right now — see Priority 3). If it recurs during local dev or after a future Railway redeploy, T-021 has enough evidence to start from immediately (exact error signature, both suspect-but-cleared endpoints, dict/vars() fallback mechanism explained).
 
+### PRIORITY 6 (partial 2) — API documentation (T-007)
+STATUS: DONE
+EVIDENCE: Read all 27 `backend/src/routes/*.js` files in full (not skimmed), plus `middleware/auth.js`, `middleware/validate.js`, `middleware/errorHandler.js` to document the auth/validation/error conventions precisely rather than guessing. Wrote `backend/API.md` — every one of the ~110 endpoints across the 27 route groups has method, full path, auth requirement (🔒 JWT / 🔐 role-gate / webhook-secret / public), and request validation rules where they exist (many routes, especially `virtual.js` and `brain.js`, have explicit inline `express-validator` chains that give exact field constraints). Response body schemas are intentionally *not* fully enumerated field-by-field for every route (would require reading every controller + Mongoose model to matching depth) — documented as a known scope limit with a path to close it incrementally. Three pre-existing design overlaps surfaced during the read-through and documented rather than silently changed: (1) three separate simulation endpoints (`/virtual/*`, `/strategy/simulate`, `/simulator/run` + `/core/simulator`) that could be consolidated later; (2) `VirtualTrade` has no per-user ownership filter — confirmed intentional (single shared paper portfolio, not multi-tenant) via the model, not assumed.
+DATE: 2026-08-18
+COMMIT: `[pending]`
+REMAINING RISK: low. This is now a maintained reference, not a generated spec — the biggest risk is docs drifting from code on future route changes; `API.md`'s own header says to update it in the same commit as any route change. Full response-schema coverage remains a nice-to-have follow-up, not filed as a separate ticket since it's low-value without a concrete consumer (no public API clients besides the first-party Flutter app) — revisit if that changes.
+
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
 - PRIORITY 4 (model artifacts) — partially answered above (delivery path gap found); full resolution still open.
