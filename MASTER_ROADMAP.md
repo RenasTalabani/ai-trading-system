@@ -7,31 +7,30 @@ Scope guardrail (owner-confirmed): **paper trading / signals only**. No phase in
 ## PHASE 0 — Discovery ✅ DONE (2026-08-18)
 Full repo audit completed. See `PROJECT_AUDIT.md`. Both test suites verified green (168 tests total).
 
-## PHASE 1 — Safety Net (CI/CD) — IN PROGRESS
+## PHASE 1 — Safety Net (CI/CD) — DONE (2026-08-18)
 Goal: make it impossible for a broken commit to go unnoticed.
-- Add `.github/workflows/ci.yml`: run backend Jest + ai-service pytest on every push/PR to `master`.
-- Add dependency audit step (`npm audit --audit-level=high`, `pip-audit`) as a non-blocking warning initially.
-- Verify the workflow actually runs green on the current `master`.
+- Added `.github/workflows/ci.yml`: runs backend Jest + ai-service pytest on every push/PR to `master`.
+- Added dependency audit step (`npm audit --audit-level=high`, `pip-audit`) as a non-blocking warning.
+- Verified the workflow actually runs green on `master` — confirmed live on GitHub Actions (not just locally), 3 consecutive successful runs through commit `b201322`. See `PROJECT_STATUS.md` / `TASKS.md` T-002 for evidence.
 
-## PHASE 2 — Live Deployment Verification — BLOCKED (needs Railway token)
+## PHASE 2 — Live Deployment Verification — AUDITED, THEN POSTPONED (owner decision, 2026-08-18)
 Goal: confirm what's already built is actually online and healthy, not just configured.
-- Verify Railway services are live: hit `backend` `/api/v1/health` and `ai-service` `/health`.
-- Confirm MongoDB Atlas connectivity from both services in production.
-- Check current Railway logs for the errors implied by the local 376KB `ai-service-err.log`.
-- Confirm the mobile app's configured API base URL matches the live backend URL.
-- Document actual findings in `PROJECT_STATUS.md` and `DEPLOYMENT.md`.
+- Audit completed with real Railway CLI access (not blocked on a token as originally assumed): both backend and ai-service are **down** in production (last deploy attempts 2026-04-26 / 05-04, both `FAILED`, both health endpoints 404 at the edge). Full findings in `PROJECT_STATUS.md` Priority 3 section.
+- A real redeploy is **intentionally not being attempted** — Railway is currently unfunded by the owner. This phase stays paused (not blocked on missing access) until the owner funds/authorizes it. Do not repeatedly retry deployment in the meantime.
+- Two concrete gaps found during the audit that a future redeploy will need to resolve first: (1) trained ML model artifacts have no path into the ai-service container (not in git, Dockerfile doesn't copy them, no volume attached); (2) Telegram is not configured in Railway at all yet (no secret, no bot vars).
 
-## PHASE 3 — API Documentation
+## PHASE 3 — API Documentation — DONE (2026-08-18)
 Goal: make the ~25 route groups reviewable and maintainable.
-- Generate/write an OpenAPI spec (or a well-organized `API.md`) covering every route, auth requirement, and request/response shape.
-- This directly de-risks Phase 5 (security review) and Phase 9 (testing) below.
+- Wrote `backend/API.md` covering all 27 route groups (~110 endpoints): method, path, auth requirement, and request validation rules. See T-007.
+- Full response-schema-per-field coverage intentionally deferred as a low-value nice-to-have (no external API consumers besides the first-party Flutter app).
 
-## PHASE 4 — Security Hardening
-- Confirm `bcryptjs` salt rounds and password policy.
-- Confirm/document refresh-token flow end-to-end, or remove the unused env vars if it isn't implemented.
-- Make the `ALLOWED_ORIGINS=*` CORS decision explicit and documented (acceptable for mobile-only traffic; flag if a web client is ever added).
-- Run `npm audit` / `pip-audit`, triage findings.
-- Spot-check `express-validator` usage coverage across route handlers, prioritizing any route that writes to the DB.
+## PHASE 4 — Security Hardening — DONE (2026-08-18)
+- Confirmed `bcryptjs` — 12 salt rounds.
+- Confirmed refresh-token flow was unnecessary for this app's threat model; removed dead config, documented why.
+- CORS: owner decided against `*` in production — implemented an explicit allowlist (empty-by-default, deny-all-browsers until a real web origin exists) in the backend, and separately found + fixed an invalid `allow_origins="*"` + `allow_credentials=True` combination in the ai-service (T-022, found during PM continuous-improvement pass, unrelated to the backend decision above).
+- Ran `npm audit` / `pip-audit`; backend 26→9 vulns (all critical/high resolved), ai-service 16→0 vulns.
+- Risk-based `express-validator` audit of all 24 previously-unvalidated route files; fixed the 3 genuinely under-protected ones, confirmed the rest were already backstopped.
+- Bonus (owner-approved scope add): Telegram webhook authenticity check (`secret_token` verification) — code done, awaiting 2 manual owner steps to go live (see T-020).
 
 ## PHASE 5 — Test Coverage Expansion
 - Add real widget/unit tests to `mobile/` (currently placeholder-only).

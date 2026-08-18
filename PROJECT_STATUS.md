@@ -16,20 +16,20 @@ DEPLOYMENT: not deployed — local commits only.
 DATE: 2026-08-18
 
 **Push to GitHub**
-STATUS: BLOCKED — not a credential problem, a session network-policy block
-EVIDENCE: `git push` from the device's sandboxed shell fails (no network access at all — "403 from proxy after CONNECT"). Pushing from Claude's cloud workspace (which does have network) using the GitHub token the owner provided fails with: `access denied by the git proxy: RenasTalabani/ai-trading-system is not in this session's authorized repository set`. A follow-up read-only API check (`GET api.github.com/repos/RenasTalabani/ai-trading-system`) fails the same way: `GitHub access to this repository is not enabled for this session`. This is a deliberate allowlist on Claude's sandboxed network proxy, not fixable by supplying a different or more-privileged token.
-RESOLUTION: the owner needs to run `git push origin master` themselves from their own machine (their local git already has working push credentials — confirmed by prior successful pushes in history), OR authorize this repo for the session through whatever mechanism Anthropic's environment exposes for that (unclear if one is user-facing in Cowork). The local `master` branch is fully ready — 6 commits, fast-forward only, all tests verified green.
+STATUS: RESOLVED — pushed successfully
+EVIDENCE: This session's own sandbox still cannot push (no network / repo not authorized for this session's git proxy — confirmed, unchanged, not fixable from here). The owner pushed from their own machine as planned. `origin/master` (last confirmed via this session's local git remote-tracking ref, this session still cannot `git fetch`) is at `b201322`, matching the local repo's history exactly through that point.
+RESOLUTION: no longer blocking. Future pushes still require the owner's machine or the terminal ("Claude Code") session — this session remains push-incapable by design, not by bug.
 DATE: 2026-08-18
 
 **IMPORTANT FINDING — uncommitted work discovered during CI setup**
-STATUS: FIXED (locally; not yet pushed)
-EVIDENCE: When first wiring the CI workflow, `backend/__tests__/` and `ai-service/tests/` — the very test suites this audit verified as 63/63 and 105/105 passing — turned out to have **never been committed to git**. Neither had the `ai-service/app/services/intel/` subsystem, `translation_service.py`, the `guide` feature (backend controller/route + mobile screen/providers), or `mobile/web/`. Additionally, ~20 tracked files (job schedulers, `virtualTrackingService.js`, `aiWorkerService.js`, ai-service routes/config, mobile screens) had local uncommitted edits that the new tests depend on (`capToMaxRisk`, `getEdgeMultiplier`, `approveSuggestion` didn't exist in the last real commit — confirmed by first committing tests alone and watching 27 of them fail, then finding and committing the paired implementation, then re-verifying 63/63 green). All of this is now committed locally. **This means a meaningful amount of real feature work existed only on this one machine with no backup in git history until today.**
+STATUS: FIXED and pushed
+EVIDENCE: When first wiring the CI workflow, `backend/__tests__/` and `ai-service/tests/` — the very test suites this audit verified as 63/63 and 105/105 passing — turned out to have **never been committed to git**. Neither had the `ai-service/app/services/intel/` subsystem, `translation_service.py`, the `guide` feature (backend controller/route + mobile screen/providers), or `mobile/web/`. Additionally, ~20 tracked files (job schedulers, `virtualTrackingService.js`, `aiWorkerService.js`, ai-service routes/config, mobile screens) had local uncommitted edits that the new tests depend on (`capToMaxRisk`, `getEdgeMultiplier`, `approveSuggestion` didn't exist in the last real commit — confirmed by first committing tests alone and watching 27 of them fail, then finding and committing the paired implementation, then re-verifying 63/63 green). All of this is now committed and pushed — no longer machine-local-only.
 DATE: 2026-08-18
 
 **GitHub Actions actually running / green**
-STATUS: NOT YET POSSIBLE — depends on the push above
-EVIDENCE: n/a
-DATE: —
+STATUS: CONFIRMED LIVE AND GREEN (verified via GitHub's own Actions page, not assumed from local test runs)
+EVIDENCE: Checked GitHub Actions directly (`github.com/RenasTalabani/ai-trading-system/actions`). The CI workflow (`ci.yml`) has run automatically on every push to `master` and passed every time, including the 3 most recent runs as of this check — commits `edc6412`, `a41d3fc`, `b201322`, each conclusion "Success". Drilled into `b201322` specifically: its Backend/Jest check individually shows passed, completed in 17s. This closes T-002 (was REVIEW pending exactly this confirmation, now DONE).
+DATE: 2026-08-18
 
 **Dependency audits**
 STATUS: PASS (backend + ai-service both improved and verified)
