@@ -6,7 +6,7 @@ A task is only DONE when it has actually been verified (tests run, build passes,
 | ID | Phase | Priority | Description | Status | Dependencies | Files Affected | Verification Method | Completed |
 |----|-------|----------|-------------|--------|---------------|-----------------|----------------------|-----------|
 | T-001 | 0 | Critical | Full repo audit | DONE | — | — | Read every major dir; ran backend Jest (63/63 pass) and ai-service pytest (105/105 pass) live | 2026-08-18 |
-| T-002 | 1 | Critical | Add GitHub Actions CI (backend Jest + ai-service pytest) | IN_PROGRESS | T-001 | `.github/workflows/ci.yml` | Workflow YAML validated locally; will show green on next push | — |
+| T-002 | 1 | Critical | Add GitHub Actions CI (backend Jest + ai-service pytest) | REVIEW | T-001 | `.github/workflows/ci.yml` | YAML validated + underlying commands (npm test, pytest) verified passing locally; workflow itself not yet run on GitHub (not pushed) | — |
 | T-003 | 1 | Medium | Add `npm audit` / `pip-audit` as non-blocking CI step | TODO | T-002 | `.github/workflows/ci.yml` | CI run shows audit output | — |
 | T-004 | 2 | Critical | Verify live Railway deploy health (backend + ai-service) | BLOCKED | Railway token from owner | — | Hit `/api/v1/health` and `/health` against production URLs | — |
 | T-005 | 2 | High | Confirm MongoDB Atlas connectivity in production | BLOCKED | T-004 | — | Health endpoint reports `database: connected` | — |

@@ -6,7 +6,7 @@ Last updated: 2026-08-18, by Claude (technical lead session)
 Phase 1 — Safety Net (CI/CD)
 
 ## CURRENT TASK
-T-002: Add GitHub Actions CI running backend Jest + ai-service pytest.
+T-002 in REVIEW: `.github/workflows/ci.yml` committed locally (commit 293182b) — YAML validated, underlying test commands verified passing, but not yet confirmed green on GitHub Actions since it hasn't been pushed. Owner needs to `git push` for that final confirmation.
 
 ## COMPLETED
 - Full project audit (`PROJECT_AUDIT.md`) — architecture, stack, and status mapped across frontend/backend/ai-service/db/auth/security/testing/deploy.
@@ -17,7 +17,11 @@ T-002: Add GitHub Actions CI running backend Jest + ai-service pytest.
 - Created `MASTER_ROADMAP.md`, `TASKS.md`, `CLAUDE.md` (this file's siblings).
 
 ## IN PROGRESS
-- `.github/workflows/ci.yml` — CI workflow to keep the 168 currently-passing tests green on every push/PR.
+- Nothing else in progress right now — next task (T-007, API docs) not yet started.
+
+## AWAITING OWNER ACTION
+- `git push` commits `b9115ec` (audit/roadmap docs) and `293182b` (CI workflow) to origin so GitHub Actions can actually run.
+- Provide Railway API token to unblock T-004/T-005/T-017.
 
 ## BLOCKED
 - Live Railway deployment verification (T-004, T-005, T-017) — waiting on a Railway API token from the owner.
