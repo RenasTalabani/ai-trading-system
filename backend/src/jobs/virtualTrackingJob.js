@@ -9,7 +9,23 @@ const logger = require('../config/logger');
 // gold position could never hit TP/SL/liquidation and would stay open forever.
 const EXTENDED_PRICE_ASSETS = ['XAUUSD'];
 
+// Self-overlap guards (T-023 follow-up, 2026-08-18). The shared portfolio
+// lock added in T-023 already makes concurrent cycles *correct* (no lost
+// updates), but without these flags a cycle that runs long -- e.g. a slow
+// aiService.getPrice() round trip while ai-service is degraded -- would
+// still let cron queue up an unbounded backlog of pending cycles behind
+// the lock, each waiting its turn. Mirrors the existing pattern already
+// used in aiWorkerJob.js's `_running` guard, applied to both schedules
+// registered in this file.
+let _trackingRunning = false;
+let _fundingRunning  = false;
+
 async function runVirtualTrackingCycle() {
+  if (_trackingRunning) {
+    logger.debug('[VirtualTrackingJob] Previous tracking cycle still running — skipping.');
+    return;
+  }
+  _trackingRunning = true;
   try {
     const prices = getAllCachedPrices();
 
@@ -23,14 +39,23 @@ async function runVirtualTrackingCycle() {
     }
   } catch (err) {
     logger.error(`[VirtualTrackingJob] Cycle error: ${err.stack}`);
+  } finally {
+    _trackingRunning = false;
   }
 }
 
 async function runFundingCycle() {
+  if (_fundingRunning) {
+    logger.debug('[VirtualTrackingJob] Previous funding cycle still running — skipping.');
+    return;
+  }
+  _fundingRunning = true;
   try {
     await applyFundingPayments();
   } catch (err) {
     logger.error(`[VirtualTrackingJob] Funding cycle error: ${err.stack}`);
+  } finally {
+    _fundingRunning = false;
   }
 }
 
