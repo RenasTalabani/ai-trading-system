@@ -75,7 +75,8 @@ Note: `ai-service/.venv` in the repo is a Windows-created venv (`Lib`/`Scripts` 
 - No CI/CD yet (Phase 1, in progress).
 - No API documentation.
 - Mobile has no real test coverage.
-- Live Railway deployment status not yet re-verified this engagement (blocked on Railway token).
+- Live Railway deployment: **confirmed DOWN** (audited 2026-08-18, read-only, via Railway CLI). Backend's and ai-service's latest deployments both show `status: FAILED`, zero active instances, both health endpoints 404 at Railway's edge. Backend's last deployed commit (`fa202b5`) is 48 commits behind current `master`. See `PROJECT_STATUS.md` Priority 3 section for full evidence. Redeploying needs explicit owner sign-off (see Deployment Rules above) — not done yet.
+- ai-service model artifacts (`saved_models/`, gitignored) have no delivery path into the Docker image or a Railway volume — a fresh deploy would boot with no trained models. Needs a decision before Priority 3 can be closed.
 - `ai-service-err.log` (376KB locally) not yet triaged for recurring runtime issues.
 - `POST /telegram/webhook` authenticity check is implemented and tested (`TASKS.md` T-020) but **not yet live** — needs the owner to set `TELEGRAM_WEBHOOK_SECRET` in Railway and call Telegram's `setWebhook` with a matching `secret_token`.
 
