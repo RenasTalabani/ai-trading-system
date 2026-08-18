@@ -1,7 +1,6 @@
 const cron    = require('node-cron');
 const PriceAlert = require('../models/PriceAlert');
-const User       = require('../models/User');
-const { sendPushNotification } = require('../services/notificationService');
+const { sendPushToUser } = require('../services/notificationService');
 const logger  = require('../config/logger');
 
 let _getPrices = null;
@@ -47,17 +46,27 @@ async function checkAlerts() {
         triggeredAt: new Date(),
       });
 
-      // Look up FCM token
-      const user = await User.findById(alert.userId).select('fcmToken').lean();
-      if (user?.fcmToken) {
-        const dirLabel = alert.direction === 'above' ? 'risen above' : 'dropped below';
-        const name     = alert.displayName || alert.asset;
-        await sendPushNotification(user.fcmToken, {
-          title: `🔔 Price Alert: ${name}`,
-          body:  `${name} has ${dirLabel} $${alert.targetPrice.toLocaleString()}. Now at $${currentPrice.toLocaleString()}.`,
-          data:  { type: 'price_alert', asset: alert.asset },
-        }).catch(() => {});
-      }
+      // T-029 follow-up (2026-08-18): this called `sendPushNotification`,
+      // a function that does not exist anywhere in notificationService.js
+      // (grepped the whole backend to confirm -- zero definitions, only
+      // this one call site). Destructuring a nonexistent export silently
+      // yields `undefined`, so every triggered alert would throw
+      // "sendPushNotification is not a function" the instant it tried to
+      // notify -- caught by the outer try/catch, but only *after* the
+      // alert had already been marked inactive above, so the user would
+      // never get the notification and the alert would never fire again
+      // either. Fixed by using the real `sendPushToUser(userId, title,
+      // body, data)` export instead, which also looks up the user's FCM
+      // token itself (removing the need for the separate User.findById
+      // this file used to do) and purges the token if it's since gone invalid.
+      const dirLabel = alert.direction === 'above' ? 'risen above' : 'dropped below';
+      const name     = alert.displayName || alert.asset;
+      await sendPushToUser(
+        alert.userId,
+        `🔔 Price Alert: ${name}`,
+        `${name} has ${dirLabel} $${alert.targetPrice.toLocaleString()}. Now at $${currentPrice.toLocaleString()}.`,
+        { type: 'price_alert', asset: alert.asset },
+      ).catch(() => {});
 
       logger.info(`[PriceAlert] fired: ${alert.asset} ${alert.direction} ${alert.targetPrice} (now ${currentPrice})`);
     }
