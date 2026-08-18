@@ -17,7 +17,7 @@ Deploy target: Railway (Dockerfile + `railway.json` per service) + MongoDB Atlas
 ```bash
 # Backend
 cd backend && npm install && npm run dev      # local dev
-cd backend && npm test                        # Jest — 63 tests as of 2026-08-18
+cd backend && npm test                        # Jest — 84 tests as of 2026-08-18
 
 # AI service
 cd ai-service && python3 -m venv .venv && source .venv/bin/activate
@@ -38,7 +38,7 @@ Note: `ai-service/.venv` in the repo is a Windows-created venv (`Lib`/`Scripts` 
 - Never mark a task DONE without actually running the relevant verification (tests, build, or manual confirmation).
 
 ## Testing Rules
-- Backend: `npm test` (Jest) must stay green — 63/63 as of last verified run.
+- Backend: `npm test` (Jest) must stay green — 84/84 as of last verified run.
 - AI service: `python -m pytest -q` must stay green — 105/105 as of last verified run.
 - Mobile: no real test coverage yet (Phase 5 in the roadmap) — be extra careful with manual verification of UI changes until this exists.
 - CI (once T-002 lands): every push/PR should run both suites automatically — treat a red CI run as a hard blocker, not a suggestion.
@@ -54,8 +54,10 @@ Note: `ai-service/.venv` in the repo is a Windows-created venv (`Lib`/`Scripts` 
 - Required ai-service vars: `MONGODB_URI`, plus the same optional collector keys.
 
 ## Security Rules
-- `ALLOWED_ORIGINS=*` in production is intentional (mobile app sends no Origin header) — do not silently "fix" this without confirming it doesn't break anything; document any change in `DEPLOYMENT.md`.
-- JWT auth via `backend/src/middleware/auth.js`; role-based `authorize()` exists — use it for any new privileged route.
+- `ALLOWED_ORIGINS=*` in production is intentional (mobile app sends no Origin header, Bearer-token auth not cookies) — do not silently "fix" this without confirming it doesn't break anything; document any change in `DEPLOYMENT.md`. Enforcement logic lives in `backend/src/config/corsConfig.js` (tested — see `backend/__tests__/cors.test.js`); the wildcard-vs-allowlist *choice* is still an open owner decision, not yet locked in either way.
+- JWT auth via `backend/src/middleware/auth.js`; role-based `authorize()` exists — use it for any new privileged route. No refresh-token flow, and that's deliberate — see the comment above `generateAuthToken()` in `User.js` before "fixing" this.
+- Input validation: `auth.js`, `notifications.js`, `virtual.js`, `priceAlerts.js`, `brain.js`, `guide.js` use `express-validator` + the shared `validate` middleware (`backend/src/middleware/validate.js`) — follow that pattern for new routes that write data, accept financial parameters, or take user-controlled IDs. Not every route needs it: several controllers (`advisor`, `budget`, `global`, `orderBlocks`, `reports`, `simulator`, `strategy`, `tracker`, `unified`) already validate inline, and `users.js` preferences relies on `User.js` schema `min`/`max`/enum constraints plus `runValidators: true` — check before assuming a gap.
+- The global `errorHandler.js` already translates Mongoose `ValidationError` → 400 (per-field messages) and `CastError` (bad ObjectId) → 400 — routes that skip route-level validation and instead let Mongoose reject bad data get a reasonable backstop automatically, as long as the controller calls `next(err)` rather than swallowing the error into a generic 500.
 - Run `npm audit` / `pip-audit` before adding new dependencies where reasonably practical.
 
 ## Coding Conventions
@@ -74,6 +76,7 @@ Note: `ai-service/.venv` in the repo is a Windows-created venv (`Lib`/`Scripts` 
 - Mobile has no real test coverage.
 - Live Railway deployment status not yet re-verified this engagement (blocked on Railway token).
 - `ai-service-err.log` (376KB locally) not yet triaged for recurring runtime issues.
+- `POST /telegram/webhook` has no authenticity check against Telegram (no secret-token verification) — tracked as `TASKS.md` T-020, needs an owner decision since it touches external bot configuration.
 
 ## Current Project Status
 See `PROJECT_STATUS.md` for the live snapshot — update that file, not this section, as work progresses.
