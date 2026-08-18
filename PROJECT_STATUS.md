@@ -134,11 +134,19 @@ DATE: 2026-08-18
 COMMIT: `[pending]`
 REMAINING RISK: medium-low. Coverage is real but partial — 3 of ~10 model files, 0 of ~28 providers, 0 widget tests. `mobile` is still the least-tested part of the stack relative to backend (101 tests) and ai-service (105 tests). Continuing this incrementally rather than in one giant pass, per the owner's "no need to rush, quality over speed" instruction — next slice would be the remaining models, then the highest-value providers (likely `virtual_portfolio_provider.dart`, `signals_provider.dart`), then a small number of widget tests for the dashboard/signals screens.
 
+### PRIORITY 1 (continuous) — ai-service CORS misconfiguration (T-022)
+STATUS: DONE
+EVIDENCE: Found during a PM-directed continuous-improvement pass (security is priority #1 per owner's standing instruction). `ai-service/app/main.py`'s `CORSMiddleware` was configured with `allow_origins=["*"]` and `allow_credentials=True` simultaneously — the same anti-pattern the backend's `ALLOWED_ORIGINS` hardening addressed earlier (2026-08-18): wildcard + credentials either gets rejected outright by browsers or gets silently made spec-compliant by echoing back the request `Origin` instead of a literal `*`, which is more permissive than the config reads at a glance. Confirmed via `grep` that this service has zero cookie-based auth anywhere — it's called exclusively server-to-server by the backend (`aiService.js`, `aiWorkerService.js`, `socialService.js`) — so `allow_credentials=True` was dead, incorrect config, not a deliberate choice (unlike the backend's original wildcard, which had a documented rationale). Fixed to `allow_credentials=False`. Added `ai-service/tests/test_cors_config.py` (3 tests: middleware is registered, the dangerous combination is never present, and the fixed state is pinned against regression). Verified in a clean cloud venv (torch 2.13.0, fastapi 0.141.1): full ai-service suite **108/108 passing** (105 prior + 3 new).
+Also attempted a live reproduction of the T-021 `jsonable_encoder` crash via `social_analyzer.refresh()` directly in the same venv — did not reproduce, though inconclusively (no real collector credentials available, FinBERT unreachable so VADER fallback engaged). Added as supplementary evidence to T-021's TASKS.md entry; T-021 itself stays TODO, not resolved by this note.
+DATE: 2026-08-18
+COMMIT: `25d25e3`
+REMAINING RISK: none identified for this fix. General note: ai-service's CORS posture (origin still `*`, just no longer credentialed) has not been hardened to an explicit allowlist the way the backend's was — deliberately left as-is since ai-service has no browser clients at all (internal service only) and no owner decision has been requested for this scope; revisit only if that assumption changes (e.g. a future direct-browser integration).
+
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
 - PRIORITY 4 (model artifacts) — partially answered above (delivery path gap found); full resolution still open.
-- PRIORITY 5 (mobile inspection) — not yet started.
-- PRIORITY 6 (API docs, `ai-service-err.log` triage) — not yet started.
+- PRIORITY 5 (mobile inspection) — started (T-012, see above), partial coverage.
+- PRIORITY 6 (API docs, `ai-service-err.log` triage) — done (T-006, T-007, see above).
 - PRIORITY 7/8 (monitoring, rollback) — not yet started.
 - T-020 (Telegram webhook authenticity check) — code complete and tested; confirmed **not configured at all** in Railway (no `TELEGRAM_WEBHOOK_SECRET` var exists yet), on top of not being live. Needs the owner to set it in Railway and call Telegram's `setWebhook` with a matching `secret_token` (see the dedicated entry above for exact commands) — and this should happen in the same window as a redeploy, not before or after, per the fail-closed design.
 
