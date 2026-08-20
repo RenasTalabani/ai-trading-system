@@ -107,13 +107,20 @@ unified_analyzer = UnifiedAnalyzer(
     news_analyzer    = news_analyzer,
     social_analyzer  = social_analyzer,
 )
+multi_tf_analyzer = MultiTimeframeAnalyzer()
+# T-034 (2026-08-20): built before GlobalAnalyzer now, and passed into it --
+# GlobalAnalyzer needs real macro data (Fear & Greed / market-cap-change /
+# funding-rate derived bullish-bearish classification) for its Phase 18
+# "macro contradiction block" and macro-weighted scoring, which was
+# previously (incorrectly) reading news headline sentiment instead. See
+# GlobalAnalyzer._get_macro_sentiment()'s docstring for the full story.
+macro_service     = MacroDataService()
 global_analyzer = GlobalAnalyzer(
     unified_analyzer = unified_analyzer,
     news_analyzer    = news_analyzer,
     social_analyzer  = social_analyzer,
+    macro_service    = macro_service,
 )
-multi_tf_analyzer = MultiTimeframeAnalyzer()
-macro_service     = MacroDataService()
 
 
 # ─── Request schemas ───────────────────────────────────────────────────────────

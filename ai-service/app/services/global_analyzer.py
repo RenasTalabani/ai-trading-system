@@ -24,6 +24,7 @@ from app.services.rl_weight_engine      import RLWeightEngine
 from app.services.trade_quality_scorer  import (
     compute_quality_score, build_quality_inputs, passes_quality_gate,
 )
+from app.services.macro_data_service    import MacroDataService
 
 logger = logging.getLogger("ai-service.global_analyzer")
 
@@ -74,10 +75,16 @@ _rl_engine  = RLWeightEngine()
 
 class GlobalAnalyzer:
     def __init__(self, unified_analyzer: UnifiedAnalyzer,
-                 news_analyzer, social_analyzer):
+                 news_analyzer, social_analyzer, macro_service=None):
         self._unified = unified_analyzer
         self._news    = news_analyzer
         self._social  = social_analyzer
+        # T-034 (2026-08-20): defaults to its own MacroDataService if the
+        # caller doesn't pass one (keeps existing GlobalAnalyzer(a, b, c)
+        # call sites, including this module's own tests, working
+        # unchanged) -- see _get_macro_sentiment() below for why this is
+        # needed at all.
+        self._macro   = macro_service or MacroDataService()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -376,17 +383,53 @@ class GlobalAnalyzer:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     async def _get_macro_sentiment(self) -> str:
+        """
+        T-034 (2026-08-20): this used to call `self._news.refresh()` (the
+        NewsAnalyzer -- headline sentiment) and read a "overall_sentiment"
+        key. Two independent bugs stacked here:
+          1. NewsAnalyzer.refresh() never actually returns a key called
+             "overall_sentiment" inside "global" -- it's named "sentiment"
+             (confirmed in news_analyzer.py: `"sentiment": analysis["overall_sentiment"]`
+             renames it on the way out). So `.get("overall_sentiment", "neutral")`
+             silently fell back to "neutral" on every single call, exactly
+             like T-031's `key` vs `portfolioKey` bug.
+          2. Even with the key fixed, the *value* vocabulary would still
+             never match: NewsAnalyzer's "sentiment" field is one of
+             "positive" / "negative" / "neutral" (headline polarity via
+             news_sentiment.py's analyze()), never "bullish" / "bearish" /
+             "strong_bull" / "strong_bear" -- the vocabulary this class's
+             own `_STRONG_BEAR_BLOCKS_BUY` / `_STRONG_BULL_BLOCKS_SELL`
+             sets and `macro_sc` checks below require. This was the wrong
+             SERVICE, not just the wrong key: `macro_data_service.py`'s
+             `_macro_bias()` is what actually produces that exact 5-state
+             vocabulary (strong_bull/mild_bull/neutral/mild_bear/strong_bear),
+             derived from Fear & Greed + 24h market-cap change + funding
+             rates -- real macro backdrop, not news headline tone. It's
+             also the vocabulary `trade_quality_scorer.py`'s
+             `build_quality_inputs()` docstring documents expecting.
+        Net effect before this fix: the Phase 18 "macro contradiction
+        block" this module's own docstring advertises never fired (macro
+        state was always "neutral"), and every macro_sc computation in
+        _score_crypto/_score_multi_asset was always exactly 50 regardless
+        of real bullish/bearish conditions -- a whole scoring dimension
+        silently flattened on every /global/scan call.
+        """
         try:
-            result = await asyncio.wait_for(self._news.refresh(), timeout=10)
-            return result.get("global", {}).get("overall_sentiment", "neutral")
+            result = await asyncio.wait_for(self._macro.get_macro_snapshot(), timeout=10)
+            return result.get("macro_bias", "neutral")
         except Exception:
             return "neutral"
 
     async def _macro_news_score(self, keyword: str) -> float:
+        """Per-asset headline sentiment (legitimately NewsAnalyzer's job,
+        unlike _get_macro_sentiment above) -- fixed key name (was
+        "overall_sentiment", the real field is "sentiment") and fixed
+        vocabulary (NewsAnalyzer's sentiment is positive/negative/neutral,
+        never bullish/bearish -- see _get_macro_sentiment's docstring)."""
         try:
             result = await asyncio.wait_for(self._news.refresh(), timeout=10)
-            sentiment = result.get("global", {}).get("overall_sentiment", "neutral")
-            base      = {"bullish": 62.0, "bearish": 38.0}.get(sentiment, 50.0)
+            sentiment = result.get("global", {}).get("sentiment", "neutral")
+            base      = {"positive": 62.0, "negative": 38.0}.get(sentiment, 50.0)
             headlines = [h.lower() for h in result.get("top_headlines", [])]
             hits      = sum(1 for h in headlines if keyword in h)
             return min(80.0, base + hits * 3.0)
