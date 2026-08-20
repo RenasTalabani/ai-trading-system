@@ -56,9 +56,14 @@ class StrategyEngine:
         ema200 = float(_ema(close, 200).iloc[-1]) if len(close) >= 200 else ema50
         rsi    = _rsi(close)
 
-        # Expected move: use stddev of recent returns (annualised to timeframe)
+        # Expected move: stddev of recent per-candle returns, scaled to the
+        # requested timeframe via sqrt-of-time (`limit` here is the number of
+        # `interval`-candles that make up one full period of this timeframe --
+        # e.g. 24 hourly candles = 1 day -- straight from _TIMEFRAME_MAP, not
+        # to be confused with len(df), which is a larger, timeframe-independent
+        # padding fetched purely for a statistically stable std() estimate).
         returns = close.pct_change().dropna()
-        volatility_pct = float(returns.std() * 100 * (len(df) ** 0.5))
+        volatility_pct = float(returns.std() * 100 * (limit ** 0.5))
         expected_move  = round(min(volatility_pct, 50.0), 2)
 
         # Trend detection
