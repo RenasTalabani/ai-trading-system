@@ -48,6 +48,9 @@ class RedditPost:
     shares: int = 0      # crosspost count
     replies: int = 0     # comment count
     upvote_ratio: float = 0.5
+    is_mock: bool = False  # True when this post is fabricated placeholder
+                            # content, not a real fetch from Reddit — see
+                            # collect_reddit_posts()
 
     def __post_init__(self):
         if self.published_at is None:
@@ -129,19 +132,35 @@ async def collect_reddit_posts() -> List[RedditPost]:
                         seen_content.add(key)
                         posts.append(p)
 
-    logger.info(f"Reddit: collected {len(posts)} unique posts from {len(SUBREDDITS)} subreddits")
-    return posts if posts else _get_mock_posts()
+    if posts:
+        logger.info(f"Reddit: collected {len(posts)} unique posts from {len(SUBREDDITS)} subreddits")
+        return posts
+
+    # Every subreddit fetch failed or returned nothing usable (network down,
+    # rate-limited across the board, Reddit blocking this IP, etc). Falling
+    # back to fabricated placeholder content keeps the sentiment pipeline
+    # from crashing, but it means downstream signal fusion (see
+    # order_block_engine._fuse, social_analyzer.refresh) would otherwise
+    # silently blend in fake, fixed, mostly-bullish-skewed posts as if they
+    # were real market chatter with zero way to tell from the logs alone —
+    # this WARNING (not the previous silent fallback) is what makes that
+    # visible; see is_mock on RedditPost for how a caller can filter it out.
+    logger.warning(
+        f"Reddit: 0 real posts collected from {len(SUBREDDITS)} subreddits — "
+        f"falling back to mock placeholder posts. Reddit sentiment is NOT live right now."
+    )
+    return _get_mock_posts()
 
 
 def _get_mock_posts() -> List[RedditPost]:
-    """Fallback mock posts for development."""
+    """Fallback mock posts for development / when live Reddit collection fails."""
     now = datetime.now(timezone.utc)
     return [
-        RedditPost(content="BTC just bounced perfectly off the 200-day MA. Classic bull market signal. Accumulate.", channel="r/Bitcoin", likes=4200, replies=312, published_at=now),
-        RedditPost(content="ETH/BTC ratio hitting 6-month low. Seems oversold. Could be good entry for ETH.", channel="r/ethereum", likes=1800, replies=156, published_at=now),
-        RedditPost(content="WARNING: Multiple analysts pointing to potential head and shoulders on BTC 4H. Be careful.", channel="r/CryptoMarkets", likes=920, replies=234, published_at=now),
-        RedditPost(content="SOL just did 20% in a week. Ecosystem growing insanely fast. Still undervalued imo.", channel="r/CryptoCurrency", likes=3100, replies=445, published_at=now),
-        RedditPost(content="Fed pivot imminent according to latest data. Risk assets including crypto should benefit.", channel="r/investing", likes=5600, replies=890, published_at=now),
-        RedditPost(content="XRP legal situation finally resolved. Major bullish catalyst unlocked. Target $1.5", channel="r/CryptoMarkets", likes=2300, replies=367, published_at=now),
-        RedditPost(content="Market manipulation is insane rn. Same pattern every weekend — dump then pump Monday.", channel="r/SatoshiStreetBets", likes=780, replies=123, published_at=now),
+        RedditPost(content="BTC just bounced perfectly off the 200-day MA. Classic bull market signal. Accumulate.", channel="r/Bitcoin", likes=4200, replies=312, published_at=now, is_mock=True),
+        RedditPost(content="ETH/BTC ratio hitting 6-month low. Seems oversold. Could be good entry for ETH.", channel="r/ethereum", likes=1800, replies=156, published_at=now, is_mock=True),
+        RedditPost(content="WARNING: Multiple analysts pointing to potential head and shoulders on BTC 4H. Be careful.", channel="r/CryptoMarkets", likes=920, replies=234, published_at=now, is_mock=True),
+        RedditPost(content="SOL just did 20% in a week. Ecosystem growing insanely fast. Still undervalued imo.", channel="r/CryptoCurrency", likes=3100, replies=445, published_at=now, is_mock=True),
+        RedditPost(content="Fed pivot imminent according to latest data. Risk assets including crypto should benefit.", channel="r/investing", likes=5600, replies=890, published_at=now, is_mock=True),
+        RedditPost(content="XRP legal situation finally resolved. Major bullish catalyst unlocked. Target $1.5", channel="r/CryptoMarkets", likes=2300, replies=367, published_at=now, is_mock=True),
+        RedditPost(content="Market manipulation is insane rn. Same pattern every weekend — dump then pump Monday.", channel="r/SatoshiStreetBets", likes=780, replies=123, published_at=now, is_mock=True),
     ]

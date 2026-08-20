@@ -42,6 +42,9 @@ class Tweet:
     shares: int = 0
     replies: int = 0
     impressions: int = 0
+    is_mock: bool = False  # True when this tweet is fabricated placeholder
+                            # content, not a real fetch from X — see
+                            # collect_tweets()
 
     def __post_init__(self):
         if self.published_at is None:
@@ -108,7 +111,8 @@ async def collect_tweets() -> List[Tweet]:
     """Collect recent tweets across all configured queries."""
     token = settings.twitter_bearer_token
     if not token or token == "your_twitter_bearer_token":
-        logger.info("Twitter: No Bearer Token configured — using mock data.")
+        logger.warning("Twitter: No Bearer Token configured — using mock data. "
+                        "Twitter sentiment is NOT live.")
         return _get_mock_tweets()
 
     tweets: List[Tweet] = []
@@ -123,20 +127,35 @@ async def collect_tweets() -> List[Tweet]:
                         seen.add(t.content)
                         tweets.append(t)
 
-    logger.info(f"Twitter: collected {len(tweets)} unique tweets")
-    return tweets if tweets else _get_mock_tweets()
+    if tweets:
+        logger.info(f"Twitter: collected {len(tweets)} unique tweets")
+        return tweets
+
+    # A Bearer Token IS configured, but every query still came back empty
+    # (rate-limited across the board, API outage, token revoked mid-run,
+    # etc). Falling back to fabricated tweets keeps the sentiment pipeline
+    # from crashing, but — same risk as reddit_collector.py's equivalent
+    # fallback — it would otherwise silently blend fake, fixed,
+    # mostly-bullish-skewed content into real signal fusion with nothing in
+    # the logs to say so. This WARNING (distinct from the no-token case
+    # above) makes that visible; is_mock lets a caller filter it out.
+    logger.warning(
+        "Twitter: Bearer Token configured but 0 tweets collected across all queries — "
+        "falling back to mock placeholder tweets. Twitter sentiment is NOT live right now."
+    )
+    return _get_mock_tweets()
 
 
 def _get_mock_tweets() -> List[Tweet]:
-    """Realistic mock tweets for development."""
+    """Realistic mock tweets for development / when live Twitter collection fails."""
     now = datetime.now(timezone.utc)
     return [
-        Tweet(content="$BTC holding strong above 60k. Bulls are in control. #Bitcoin #Crypto", likes=1200, shares=340, published_at=now),
-        Tweet(content="$ETH gas fees dropping. Layer 2 adoption accelerating. Very bullish for the ecosystem.", likes=890, shares=210, published_at=now),
-        Tweet(content="Crypto market dump incoming? Fed minutes were hawkish. Risk-off mode activated.", likes=2100, shares=670, published_at=now),
-        Tweet(content="JUST IN: BlackRock BTC ETF sees record $500M inflow today. Institutional demand is real.", likes=5600, shares=1800, published_at=now),
-        Tweet(content="$SOL network upgrade successful. Transaction speed increased 3x. Bullish for $SOL.", likes=430, shares=120, published_at=now),
-        Tweet(content="Warning: Whale just moved 10,000 BTC to exchange. Potential sell pressure. #Bitcoin", likes=3200, shares=900, published_at=now),
-        Tweet(content="Altseason incoming? BTC dominance dropping fast. Watch for $ETH and $SOL breakouts.", likes=780, shares=230, published_at=now),
-        Tweet(content="CPI data lower than expected! Risk assets pumping. Crypto to benefit. #Fed #Inflation", likes=4500, shares=1200, published_at=now),
+        Tweet(content="$BTC holding strong above 60k. Bulls are in control. #Bitcoin #Crypto", likes=1200, shares=340, published_at=now, is_mock=True),
+        Tweet(content="$ETH gas fees dropping. Layer 2 adoption accelerating. Very bullish for the ecosystem.", likes=890, shares=210, published_at=now, is_mock=True),
+        Tweet(content="Crypto market dump incoming? Fed minutes were hawkish. Risk-off mode activated.", likes=2100, shares=670, published_at=now, is_mock=True),
+        Tweet(content="JUST IN: BlackRock BTC ETF sees record $500M inflow today. Institutional demand is real.", likes=5600, shares=1800, published_at=now, is_mock=True),
+        Tweet(content="$SOL network upgrade successful. Transaction speed increased 3x. Bullish for $SOL.", likes=430, shares=120, published_at=now, is_mock=True),
+        Tweet(content="Warning: Whale just moved 10,000 BTC to exchange. Potential sell pressure. #Bitcoin", likes=3200, shares=900, published_at=now, is_mock=True),
+        Tweet(content="Altseason incoming? BTC dominance dropping fast. Watch for $ETH and $SOL breakouts.", likes=780, shares=230, published_at=now, is_mock=True),
+        Tweet(content="CPI data lower than expected! Risk assets pumping. Crypto to benefit. #Fed #Inflation", likes=4500, shares=1200, published_at=now, is_mock=True),
     ]

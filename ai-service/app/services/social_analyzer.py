@@ -23,6 +23,13 @@ def _to_post_dict(post) -> dict:
         "replies":          getattr(post, "replies", 0),
         "author_followers": getattr(post, "authorFollowers", 0),
         "published_at":     getattr(post, "published_at", None),
+        # Only reddit_collector.py / twitter_collector.py set this — it's
+        # False by default (via getattr) for telegram posts, which have no
+        # mock-fallback path at all. See collect_reddit_posts()/
+        # collect_tweets() for why this exists: without it, a fabricated
+        # placeholder post is indistinguishable from real market chatter
+        # once it's in this dict.
+        "is_mock":          getattr(post, "is_mock", False),
     }
 
 
@@ -72,6 +79,15 @@ class SocialAnalyzer:
         if not all_posts:
             logger.warning("No social posts collected from any platform.")
             return self._empty_result()
+
+        mock_count = sum(1 for p in all_posts if p.get("is_mock"))
+        if mock_count:
+            mock_platforms = sorted({p["platform"] for p in all_posts if p.get("is_mock")})
+            logger.warning(
+                f"Social: {mock_count}/{len(all_posts)} posts are fabricated mock "
+                f"placeholders (platforms: {', '.join(mock_platforms)}), not live "
+                f"data — sentiment scores below are partially or fully synthetic."
+            )
 
         logger.info(f"Social: {len(all_posts)} total posts collected "
                     f"(Telegram={sum(1 for p in all_posts if p['platform']=='telegram')}, "
