@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from app.models.news_sentiment import NewsSentimentModel, ASSET_KEYWORDS
 from app.services.collectors.news_collector import collect_all_news, NewsArticle
-from app.services.news_quality_layer import NewsQualityLayer
+from app.services.news_quality_layer import NewsQualityLayer, DEFAULT_TRUST
 
 logger = logging.getLogger("ai-service.news_analyzer")
 
@@ -55,6 +55,48 @@ class NewsAnalyzer:
         loop = asyncio.get_event_loop()
         analysis = await loop.run_in_executor(None, self.model.analyze, headlines)
 
+        # T-035 (2026-08-20): NewsQualityLayer builds a per-source trust
+        # registry (Reuters/Bloomberg 1.00 down to Google News/Unknown
+        # 0.40-0.55) and its class docstring documents that this trust score
+        # is meant to weight the fused sentiment ("Source trust (40%)" of
+        # the quality formula) -- but `weighted_sentiment_score()`, the
+        # method that actually does that weighting, was never called
+        # anywhere (confirmed by grep across the whole app/ tree). Past the
+        # binary MIN_QUALITY_SCORE pass/fail cutoff, every source that
+        # passed quality filtering was averaged into `global.sentiment` /
+        # `global.market_score` with EQUAL weight regardless of trust --
+        # a CryptoPanic or Google News headline (trust 0.55-0.60) moved the
+        # score exactly as much as a Reuters or Bloomberg headline (trust
+        # 1.00). This directly affects trade-signal quality: `global` is
+        # what GlobalAnalyzer._macro_news_score() (see T-034) reads for
+        # per-asset headline sentiment. Fixed by trust-weighting the global
+        # score when quality-scored articles are available -- `filtered`
+        # and `analysis["results"]` share the same order (both built from
+        # `headlines = [a["title"] for a in filtered]`), so each per-headline
+        # result can be paired with its article's trust_score. Falls back to
+        # the original unweighted analysis when quality filtering rejected
+        # every article (the `articles[:20]` fallback path has no trust
+        # scores attached), preserving prior behavior there exactly.
+        global_sentiment  = analysis["overall_sentiment"]
+        global_market_sc  = analysis["market_score"]
+        global_score      = analysis["score"]
+        if filtered and analysis.get("results"):
+            scored_for_weighting = [
+                {**r, "trust_score": filtered[i].get("trust_score", DEFAULT_TRUST)}
+                for i, r in enumerate(analysis["results"])
+                if i < len(filtered)
+            ]
+            weighted = self.quality.weighted_sentiment_score(
+                scored_for_weighting, sentiment_key="compound",
+            )
+            global_score     = round(weighted, 4)
+            global_market_sc = round((weighted + 1) / 2 * 100, 1)
+            global_sentiment = (
+                "positive" if weighted >= 0.05 else
+                "negative" if weighted <= -0.05 else
+                "neutral"
+            )
+
         # Per-asset breakdown
         asset_scores = {}
         for asset in ASSET_KEYWORDS:
@@ -80,8 +122,8 @@ class NewsAnalyzer:
 
         result = {
             "global": {
-                "sentiment": analysis["overall_sentiment"],
-                "market_score": analysis["market_score"],
+                "sentiment": global_sentiment,
+                "market_score": global_market_sc,
                 "impact": analysis["impact"],
                 "total_articles": len(articles),
                 "breakdown": analysis["breakdown"],
@@ -97,7 +139,7 @@ class NewsAnalyzer:
         logger.info(
             f"News analysis complete — {len(articles)} articles | "
             f"global sentiment: {result['global']['sentiment']} | "
-            f"score: {analysis['score']:.3f}"
+            f"score: {global_score:.3f}"
         )
         return result
 
