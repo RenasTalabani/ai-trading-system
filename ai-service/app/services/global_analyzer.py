@@ -100,7 +100,7 @@ class GlobalAnalyzer:
         tasks = (
             [self._score_crypto(a, timeframe, capital, macro_sentiment)
              for a in crypto_assets] +
-            [self._score_multi_asset(sym, macro_sentiment)
+            [self._score_multi_asset(sym, capital, macro_sentiment)
              for sym in multi_assets]
         )
 
@@ -268,7 +268,7 @@ class GlobalAnalyzer:
 
     # ── Non-crypto scorer ─────────────────────────────────────────────────────
 
-    async def _score_multi_asset(self, symbol: str,
+    async def _score_multi_asset(self, symbol: str, capital: float,
                                  macro_sentiment: str) -> dict[str, Any]:
         symbol = symbol.upper()
 
@@ -337,7 +337,7 @@ class GlobalAnalyzer:
         sl, tp, rr = _risk_mgr.compute_sl_tp(current_price, atr_val, action, regime)
 
         # Position size
-        pos_size = _risk_mgr.compute_position_size(500, atr_val, current_price)
+        pos_size = _risk_mgr.compute_position_size(capital, atr_val, current_price)
 
         # Trade quality
         quality_inputs = build_quality_inputs(
