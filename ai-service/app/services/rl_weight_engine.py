@@ -24,8 +24,36 @@ DEFAULT_WEIGHTS = {
 }
 
 LEARNING_RATE   = 0.02    # how much to shift on each update
-MIN_WEIGHT      = 0.05    # floor
-MAX_WEIGHT      = 0.70    # ceiling
+
+# T-041 (2026-08-22) NOTE ON ACTUAL BEHAVIOR:
+# MIN_WEIGHT/MAX_WEIGHT are applied to each weight's *pre-normalisation*
+# raw value inside record_outcome(), before _normalise() rescales the
+# whole dict to sum to 1.0. That rescale step is not itself bounded, so
+# the *effective* weight actually returned by get_weights() (and used
+# directly in every live rl_score fusion formula, e.g.
+# GlobalAnalyzer._score_crypto()'s
+# `rl_score = fs*weights["technical"] + news_sc*weights["news"] + ...`)
+# can end up outside [MIN_WEIGHT, MAX_WEIGHT] despite the names "floor"
+# and "ceiling" implying an absolute bound on that effective weight.
+# Confirmed by simulation: sustained, realistic feedback where the same
+# signal source keeps winning while the other three keep losing (exactly
+# the steady-state this module exists to reach) converges "technical" to
+# an effective weight of ~0.7277 -- above the documented 0.70 ceiling --
+# while the other three settle above the 0.05 floor. The magnitude is
+# modest (roughly +4% over the stated ceiling in the worst realistic case
+# found), and it only manifests after many (~hundreds of) consistent
+# updates, not on any single call.
+# A "fix" that enforces both constraints at once (weights sum to 1.0 AND
+# every individual weight in [MIN_WEIGHT, MAX_WEIGHT]) requires an actual
+# algorithm choice (e.g. iterative water-filling redistribution of the
+# clamped excess/deficit across the unclamped weights) rather than a
+# single unambiguous one-line change, and changes live signal-fusion
+# weights -- so, per the standing instruction not to invent fixes without
+# one evidence-backed correct answer, this pass documents and tests the
+# actual behavior rather than changing it. See TASKS.md/PROJECT_STATUS.md
+# T-041 for the corresponding OWNER DECISION flag.
+MIN_WEIGHT      = 0.05    # floor on each weight's raw pre-normalisation value
+MAX_WEIGHT      = 0.70    # ceiling on each weight's raw pre-normalisation value
 MIN_UPDATES_LOG = 5       # only log drift after N updates
 
 
