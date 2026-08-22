@@ -62,6 +62,28 @@ class RiskManager:
         """
         Kelly-lite: size = balance × (risk_pct / atr_normalized).
         Capped at max_cap of account.
+
+        T-038 (2026-08-22) NOTE ON ACTUAL BEHAVIOR: with the current
+        defaults (risk_pct=2%, max_cap=10%), the raw formula only produces
+        a value BELOW the cap when atr_normalized (ATR as a fraction of
+        entry_price) exceeds risk_pct / max_cap = 20%. That is a far more
+        extreme ATR/price ratio than any tracked asset class realistically
+        sustains (crypto typically runs well under 5%, even during sharp
+        moves) -- confirmed by computing the formula across atr_normalized
+        = 0.1% .. 19%: every value returns exactly `account_balance *
+        max_cap`, identical regardless of how volatile the asset actually
+        is. In practice this function is currently a flat `max_cap` of
+        account balance, not an ATR-scaled size -- both call sites
+        (global_analyzer.py's `_score_crypto`/`_score_multi_asset`, which
+        feed the `position_size` field shown for every scan result) use
+        the defaults, so every single recommended position size is
+        `capital * 0.10` regardless of the asset's real volatility. This
+        is left unchanged pending an explicit owner decision on the
+        intended risk_pct/max_cap relationship (see PROJECT_STATUS.md
+        T-038) -- changing either constant is a real risk-policy choice,
+        not a bug fix with one obviously correct answer, so this pass only
+        documents and tests the actual behavior rather than picking new
+        values unilaterally.
         """
         if entry_price <= 0 or atr <= 0:
             return round(account_balance * risk_pct, 2)
