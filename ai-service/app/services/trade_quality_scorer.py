@@ -32,6 +32,11 @@ def compute_quality_score(
     return round(min(100.0, max(0.0, score)), 1)
 
 
+def _clamp_0_100(value: float) -> float:
+    """Clamp a value into the [0, 100] range this module's inputs promise."""
+    return min(100.0, max(0.0, value))
+
+
 def build_quality_inputs(opp: dict, macro_sentiment: str) -> dict:
     """
     Derive quality inputs from a scored opportunity dict.
@@ -41,7 +46,38 @@ def build_quality_inputs(opp: dict, macro_sentiment: str) -> dict:
     action = opp.get("action", "HOLD")
 
     # 1. Technical strength — from fused_score (already 0–100)
-    technical = float(opp.get("fused_score", 50))
+    #
+    # T-040 (2026-08-22): this module's own docstring promises "All inputs
+    # are 0-100 scores", and compute_quality_score()'s final *output* is
+    # clamped to [0, 100] -- but this individual input was not, and the
+    # value that actually reaches it here can genuinely exceed 100 in
+    # production. Traced the real call chain in
+    # GlobalAnalyzer._score_crypto()/._score_multi_asset(): `fused_score`
+    # passed in here is `adj_score = round(fs * modifier, 1)`, where
+    # `fs = _action_to_score(action, confidence)` and `modifier` comes from
+    # `RegimeDetector.regime_score_modifier()`. `_score_to_action()` in
+    # unified_analyzer.py caps `confidence` at `min(95, int(score))`, so for
+    # a BUY, `fs` (== confidence) tops out at 95 -- but
+    # `regime_score_modifier()` returns 1.10 for a TRENDING-regime BUY,
+    # so any BUY with confidence in (~91, 95] produces
+    # `adj_score` up to 95 * 1.10 = 104.5, well above the documented 0-100
+    # bound, on a routine (not exotic) combination of inputs.
+    # Because this per-component overflow happens *before*
+    # compute_quality_score()'s final clamp, it is not reliably masked: the
+    # weighted sum (`technical_strength * 0.40 + ...`) can land under 100
+    # even while `technical_strength` itself is over 100 (e.g. technical=
+    # 104.5, sentiment=macro=volume=50 -> weighted score 71.8 instead of
+    # the correct 70.0) -- a real, silent inflation of quality_score that
+    # is large enough to flip trades across the QUALITY_THRESHOLD=75 gate
+    # right at the boundary. Fixed by clamping technical_strength (the
+    # proven overflow source) and, defensively and for the same documented
+    # contract, sentiment_alignment (built from the same kind of
+    # externally-sourced, not-independently-bounded `news_score` input) to
+    # [0, 100] before they enter the weighted sum. macro_alignment is
+    # already inherently bounded by the fixed macro_map table and
+    # volume_confirmation was already clamped, so this closes the gap for
+    # every component without changing any already-in-bounds value.
+    technical = _clamp_0_100(float(opp.get("fused_score", 50)))
 
     # 2. Sentiment alignment — news_score aligned with action direction
     news_score = float(opp.get("news_score", 50))
@@ -51,6 +87,7 @@ def build_quality_inputs(opp: dict, macro_sentiment: str) -> dict:
         sentiment = 100 - news_score      # low news_score = bearish = good for SELL
     else:
         sentiment = 50
+    sentiment = _clamp_0_100(sentiment)
 
     # 3. Macro alignment
     macro_map = {
