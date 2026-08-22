@@ -335,7 +335,7 @@ STATUS: DONE
 EVIDENCE: Continuing the core-trading-module audit (post-T-038). Zero prior test coverage existed on `multi_timeframe_analyzer.py`. `_score_timeframe()` computed `prev = df.dropna().iloc[-2] if len(df.dropna()) > 1 else row` but never referenced `prev` anywhere else -- the smoking gun that the MACD reason logic (`if abs(macd_h) > 0: ... "crossover"`) was checking the wrong thing: a continuous MACD histogram value is essentially never exactly 0.0, so this fired on nearly every scored asset/timeframe regardless of whether an actual sign-change crossover from the previous candle had just happened -- it was really just restating the current MACD sign, not reporting an event. Confirmed via `git log --follow` this has been present since the file's original creation, not a regression. This `reason` field is returned directly by the live `/advisor/analyze` endpoint, read by the mobile Advisor screen. Score/action/confidence were unaffected (they read `macd_h`'s sign directly) -- only the human-readable explanation was misleading.
 Fixed by using the previously-unused `prev` row's `macd_hist` to detect an actual sign change, labeling it "crossover" only then and "momentum" for ongoing same-sign direction. 9 new tests covering both crossover directions, both same-sign (non-crossover) cases, the single-row edge case, and the zero-histogram no-reason case, plus 3 `_risk_level()` boundary tests.
 DATE: 2026-08-22
-COMMIT: (pending next commit on this pass)
+COMMIT: `b89f787`
 REMAINING RISK: none. Text-only change to an explanation field -- no effect on action/confidence/score/SL/TP. Verified: full ai-service suite 183/183 green (174 prior + 9 new), zero regressions.
 
 ### Not yet started (blocked or queued)
