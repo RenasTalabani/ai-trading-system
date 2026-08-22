@@ -91,6 +91,7 @@ def _score_timeframe(df: pd.DataFrame, atr_mult: float) -> dict:
     bb_pct  = float(row.get("bb_pct", 0.5))
     vol     = float(row["volume"])
     vol_ma  = float(row.get("vol_ma", vol))
+    prev_macd_h = float(prev.get("macd_hist", macd_h))
 
     score  = 0.0  # -100 bearish → +100 bullish
 
@@ -176,8 +177,30 @@ def _score_timeframe(df: pd.DataFrame, atr_mult: float) -> dict:
         reasons.append(f"RSI oversold ({rsi:.0f})")
     elif rsi > 65:
         reasons.append(f"RSI overbought ({rsi:.0f})")
-    if abs(macd_h) > 0:
-        reasons.append("MACD " + ("bullish" if macd_h > 0 else "bearish") + " crossover")
+    # T-039 (2026-08-22): `prev` (the prior candle's row) was computed above
+    # but never actually used anywhere -- this MACD reason unconditionally
+    # fired "MACD bullish/bearish crossover" whenever `macd_h` was merely
+    # nonzero (true on almost every real candle, since a continuous
+    # histogram value is essentially never exactly 0.0), regardless of
+    # whether a crossover (a sign change from the previous candle) had
+    # actually just happened. That made the "crossover" claim in this
+    # api-exposed `reason` string (`/advisor/analyze`, read by the mobile
+    # Advisor screen) misleading on nearly every scored asset/timeframe --
+    # it wasn't reporting an event, it was just restating the MACD sign.
+    # Fixed by using the previously-unused `prev_macd_h` to detect an
+    # actual sign change and only call it a "crossover" then; ongoing
+    # (non-crossover) MACD direction is now labeled "momentum" instead,
+    # which is what it actually is.
+    macd_crossed_bullish = prev_macd_h <= 0 and macd_h > 0
+    macd_crossed_bearish = prev_macd_h >= 0 and macd_h < 0
+    if macd_crossed_bullish:
+        reasons.append("MACD bullish crossover")
+    elif macd_crossed_bearish:
+        reasons.append("MACD bearish crossover")
+    elif macd_h > 0:
+        reasons.append("MACD bullish momentum")
+    elif macd_h < 0:
+        reasons.append("MACD bearish momentum")
     if not reasons:
         reasons.append("Consolidation — no clear trend")
 
