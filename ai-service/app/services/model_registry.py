@@ -82,7 +82,26 @@ class ModelRegistry:
         if len(versions) > MAX_VERSIONS:
             old = versions.pop(0)
             old_file = os.path.join(self.model_path, old["file"])
-            if os.path.exists(old_file):
+            # T-044 (2026-08-24): every real caller of register() in this
+            # codebase (routes.py's transformer training, main.py's
+            # auto-train-on-startup, feedback_loop.py's fusion retrain) always
+            # saves a given model_name to the SAME fixed on-disk filename
+            # (e.g. "transformer.pt", "fusion_model.joblib") -- retraining
+            # overwrites that file in place rather than writing a distinct
+            # per-version file. That means `old["file"]` is, in every real
+            # case, the exact same filename the current *active* entry (and
+            # every other still-tracked entry) also points to. Blindly
+            # shutil.move()-ing it to ".bak" here archived the just-trained,
+            # currently-active model file out from under itself -- the next
+            # process restart's load-on-init (e.g. TransformerModel._try_load,
+            # FusionModel's constructor) would then find the model file
+            # missing at its expected path and silently come back untrained.
+            # Only archive when no other still-tracked version references the
+            # same filename, so this stays a safe no-op for this codebase's
+            # actual fixed-filename models while still archiving correctly if
+            # a future model genuinely writes distinct per-version files.
+            still_referenced = any(v["file"] == old["file"] for v in versions)
+            if not still_referenced and os.path.exists(old_file):
                 try:
                     # Archive instead of delete
                     arch = old_file + ".bak"
