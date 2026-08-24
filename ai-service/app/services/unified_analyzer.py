@@ -123,9 +123,29 @@ class UnifiedAnalyzer:
         risk_reward = ob_signal.get('risk_reward')
 
         current_price = ob_tech.get('current_price', 0.0) or 0.0
-        if stop_loss is None and current_price > 0:
-            stop_loss   = round(current_price * 0.98, 6)
-            take_profit = round(current_price * 1.04, 6)
+        # T-043 (2026-08-24): this used to unconditionally do
+        #   stop_loss   = round(current_price * 0.98, 6)
+        #   take_profit = round(current_price * 1.04, 6)
+        # regardless of `fused_action` -- a long-only SL/TP shape (stop below
+        # entry, target above). When OB itself held (no ob_signal SL/TP) but
+        # strategy+news+social pushed the *fused* signal to SELL, this handed
+        # out a stop_loss BELOW price and take_profit ABOVE price for a short
+        # -- backwards protection that offers no real stop-out on a short and
+        # a target on the wrong side. It also fired for a fused HOLD, so a
+        # non-actionable signal could still be shown with live-looking trade
+        # levels (mobile's signal card renders Stop Loss/Take Profit tiles
+        # whenever they're non-null, with no gate on `action`). Fixed to
+        # mirror OrderBlockEngine's own SELL convention (stop above entry,
+        # target below) and to only synthesize levels for an actionable
+        # (BUY/SELL) fused signal, matching how HOLD signals carry no SL/TP
+        # everywhere else in this codebase (e.g. OrderBlockEngine._hold_signal).
+        if stop_loss is None and current_price > 0 and fused_action != 'HOLD':
+            if fused_action == 'BUY':
+                stop_loss   = round(current_price * 0.98, 6)
+                take_profit = round(current_price * 1.04, 6)
+            else:  # SELL
+                stop_loss   = round(current_price * 1.02, 6)
+                take_profit = round(current_price * 0.96, 6)
             risk_reward = '1:2'
 
         # ── Allocation ───────────────────────────────────────────────────────
