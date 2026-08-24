@@ -304,7 +304,14 @@ class OrderBlockEngine:
             mid    = (z_low + z_high) / 2
             dist   = abs(price - mid) / (price + 1e-9)
 
-            ob["_dist"] = dist
+            # T-042 (2026-08-24): this used to write `ob["_dist"] = dist` here,
+            # mutating the same dict objects that `analyze()` returns (as
+            # `order_blocks[:10]`) straight into the live `/order-blocks/analyze`
+            # API response -- the leading underscore signals "internal", but
+            # nothing ever stripped it back out, and the route has no
+            # response_model to filter it. `dist` is only ever needed as a
+            # local value for the threshold checks below, so it no longer
+            # touches the dict at all.
 
             if ob["type"] == "bullish" and ob["strength"] >= 60 and dist < 0.05:
                 if best_buy is None or ob["strength"] > best_buy["strength"]:
