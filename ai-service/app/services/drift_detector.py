@@ -108,11 +108,11 @@ class DriftDetector:
         return {
             "drift_level":        self.drift_level,
             "retrain_needed":     self.retrain_needed,
-            "rolling_win_rate":   round(win_rate, 4) if win_rate else None,
+            "rolling_win_rate":   round(win_rate, 4) if win_rate is not None else None,
             "rolling_window":     n,
-            "avg_confidence":     round(avg_conf * 100, 1) if avg_conf else None,
-            "avg_entropy":        round(avg_ent, 4) if avg_ent else None,
-            "baseline_entropy":   round(self._baseline_entropy, 4) if self._baseline_entropy else None,
+            "avg_confidence":     round(avg_conf * 100, 1) if avg_conf is not None else None,
+            "avg_entropy":        round(avg_ent, 4) if avg_ent is not None else None,
+            "baseline_entropy":   round(self._baseline_entropy, 4) if self._baseline_entropy is not None else None,
             "warn_threshold":     WARN_THRESHOLD,
             "critical_threshold": CRIT_THRESHOLD,
         }
