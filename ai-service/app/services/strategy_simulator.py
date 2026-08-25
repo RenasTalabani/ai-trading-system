@@ -27,7 +27,8 @@ def _ema(series: pd.Series, span: int) -> pd.Series:
 def _simulate_asset(df: pd.DataFrame, capital: float, signal_window: int) -> dict:
     """Run a simple EMA/RSI trend-following simulation on the given candles."""
     if len(df) < signal_window + 10:
-        return {"profit": 0.0, "loss": 0.0, "wins": 0, "losses": 0, "trades": 0}
+        return {"profit": 0.0, "loss": 0.0, "wins": 0, "losses": 0, "trades": 0,
+                "final_balance": round(capital, 2)}
 
     close    = df["close"].reset_index(drop=True)
     ema50    = _ema(close, min(50, len(close)//2))
@@ -139,7 +140,8 @@ class StrategySimulator:
                 "wins":            sim["wins"],
                 "losses":          sim["losses"],
                 "trades":          sim["trades"],
-                "return_pct":      round((sim["final_balance"] - per_asset_capital) / per_asset_capital * 100, 2),
+                "return_pct":      round((sim["final_balance"] - per_asset_capital) / per_asset_capital * 100, 2)
+                                   if per_asset_capital > 0 else 0.0,
             })
 
         win_rate = round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0.0
