@@ -41,7 +41,7 @@ class MacroDataService:
 
     async def get_fear_greed(self) -> dict:
         key = "fear_greed"
-        if hit := _cached(key):
+        if (hit := _cached(key)) is not None:
             return hit
         try:
             r = await self._client.get(
@@ -61,7 +61,7 @@ class MacroDataService:
 
     async def get_global_crypto(self) -> dict:
         key = "global_crypto"
-        if hit := _cached(key):
+        if (hit := _cached(key)) is not None:
             return hit
         try:
             r = await self._client.get("https://api.coingecko.com/api/v3/global")
@@ -84,7 +84,7 @@ class MacroDataService:
         """CoinGecko's free trending endpoint -- covers 'trending cryptocurrencies'
         without needing a CoinMarketCap key at all."""
         key = "trending_coins"
-        if hit := _cached(key):
+        if (hit := _cached(key)) is not None:
             return hit
         try:
             r = await self._client.get("https://api.coingecko.com/api/v3/search/trending")
@@ -116,7 +116,7 @@ class MacroDataService:
         if not settings.fred_api_key:
             return {}
         key = f"fred_{series_id}"
-        if hit := _cached(key):
+        if (hit := _cached(key)) is not None:
             return hit
         try:
             r = await self._client.get(
@@ -155,7 +155,7 @@ class MacroDataService:
     async def get_funding_rates(self) -> dict:
         """Fetch Binance perpetual funding rates for BTC and ETH."""
         key = "funding_rates"
-        if hit := _cached(key):
+        if (hit := _cached(key)) is not None:
             return hit
         try:
             r = await self._client.get(
