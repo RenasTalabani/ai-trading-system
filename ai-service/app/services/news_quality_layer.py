@@ -160,13 +160,20 @@ class NewsQualityLayer:
         cq, cq_issues = self.content_quality_score(title, summary)
         warnings.extend(cq_issues)
 
+        # clickbait_penalty already IS the 10%-weight deduction (the module's
+        # docstring: "Spam/clickbait penalty (10%)") -- it must be subtracted
+        # directly. T-051 (2026-08-26): this used to be multiplied by another
+        # 0.10 here, diluting a detected clickbait title's penalty from 0.10
+        # to 0.01 (10x too weak) and letting some articles that should have
+        # been rejected by MIN_QUALITY_SCORE pass through to the AI sentiment
+        # pipeline instead. See PROJECT_STATUS.md T-051 for the full evidence.
         clickbait_penalty = 0.10 if click else 0.0
 
         quality = (
             trust  * 0.40 +
             cq     * 0.30 +
             rec    * 0.20 -
-            clickbait_penalty * 0.10
+            clickbait_penalty
         )
         quality = round(max(0.0, min(1.0, quality)), 3)
 
