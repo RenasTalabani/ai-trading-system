@@ -432,7 +432,7 @@ Per the standing instruction not to invent a fix without one evidence-backed cor
   OPTION C — Accept the current behavior for now: the RL weight engine still moves (mostly via `_normalise()`'s rescale) and win-rate/calibration-based retraining triggers are unaffected: this only degrades the internal reward-attribution semantics documented as "reward winning signal combinations, punish losing ones", not simple win/loss detection. Zero code change.
 Added 19 new tests: 15 covering `SignalOutcomeEvaluator`'s general mechanics for the first time (record_signal field storage, the 500-entry sequence-cache eviction, BUY/SELL/HOLD correctness thresholds, per-signal exception isolation within a batch, retrain-flag combination from win-rate and drift-detector, get_stats() shape) plus 2 direct T-047 regression guards proving the two consequences above against the real `RLWeightEngine`, and 2 more general-coverage tests folded into the retrain-flag class.
 DATE: 2026-08-25
-COMMIT: (pending next commit on this pass)
+COMMIT: fd2cb03
 REMAINING RISK: none from this pass itself — no source logic was changed, only test coverage was added. The underlying gap remains open pending an owner decision among the three options above. Verified: full ai-service suite 327/327 green (308 prior + 19 new), zero regressions.
 
 
