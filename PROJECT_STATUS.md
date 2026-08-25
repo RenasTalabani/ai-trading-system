@@ -443,7 +443,7 @@ EVIDENCE: Continuing the overnight autonomous audit into core paper-trading corr
 2) Found while writing regression coverage for (1): the per-asset `return_pct` calculation divides by `per_asset_capital` with no zero-guard, while the AGGREGATE `return_pct` two lines below it already has one (`... if capital > 0 else 0.0`). `SimulateRequest`'s `capital` field has no validation constraint (no `gt=0`), so a caller passing `capital=0` via `/strategy/simulate` hit an unhandled `ZeroDivisionError` — reproduced directly. Fixed by adding the same guard already used for the aggregate figure one line below.
 Verified both fixes with direct before/after reproductions (a short-history asset no longer raises `KeyError`; `capital=0` no longer raises `ZeroDivisionError`) before writing the permanent regression tests. Added 14 new tests: the two direct T-048 regression guards (KeyError fix, ZeroDivisionError fix) plus first-ever general coverage of `_simulate_asset()`'s P&L math (win/loss reconciliation with trade count, final_balance never negative, boundary-length behavior), the `_ema()` helper, and `StrategySimulator.simulate()`'s aggregation (failed-fetch fallback, capital split evenly across assets, unknown-timeframe fallback to 7d config, win_rate matching aggregated wins/trades).
 DATE: 2026-08-25
-COMMIT: (pending next commit on this pass)
+COMMIT: e120898
 REMAINING RISK: none — both fixes only add a missing dict key / a zero-guard matching an existing pattern one line away; no simulation logic, P&L math, or EMA/RSI signal logic was touched. Verified: full ai-service suite 341/341 green (327 prior + 14 new), zero regressions.
 
 
