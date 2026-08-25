@@ -52,12 +52,22 @@ def _simulate_asset(df: pd.DataFrame, capital: float, risk_pct: float) -> dict:
             hit_tp = (direction == "BUY" and close >= tp) or (direction == "SELL" and close <= tp)
             hit_sl = (direction == "BUY" and close <= sl) or (direction == "SELL" and close >= sl)
             if hit_tp or hit_sl:
+                # hit_tp/hit_sl above are already direction-aware (TP is defined
+                # as the favorable exit level and SL as the unfavorable one for
+                # BOTH directions -- see the entry-signal block below, where
+                # sl/tp are placed on the correct side of entry per direction).
+                # So the sign here is already correct for both BUY and SELL
+                # without any direction-based flip: hitting TP is always a
+                # gain, hitting SL is always a loss. T-049 (2026-08-25/26):
+                # a `if direction == "SELL": pnl_pct = -pnl_pct` flip used to
+                # sit here and inverted the sign for every SELL trade --
+                # winning shorts (hit_tp) recorded negative pnl and losing
+                # shorts (hit_sl) recorded positive pnl. Removed; see
+                # PROJECT_STATUS.md T-049 for the full evidence.
                 if hit_tp:
                     pnl_pct = abs(tp - entry) / entry
                 else:
                     pnl_pct = -abs(sl - entry) / entry
-                if direction == "SELL":
-                    pnl_pct = -pnl_pct
                 size     = balance * risk_pct / 100
                 pnl      = size * pnl_pct
                 balance += pnl
