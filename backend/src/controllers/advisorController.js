@@ -16,7 +16,28 @@ const EXPIRY_HOURS = { '1h': 1, '4h': 4, '1d': 24, '7d': 168, '30d': 720 };
 
 async function _autoTrack(asset, timeframeRecs) {
   try {
-    const docs = timeframeRecs.map(tf => {
+    // T-054 (2026-08-26): this insertMany() bypasses store()'s
+    // express-validator entirely (that validator only runs on the
+    // POST /tracker/store HTTP path, not on a direct model write here) --
+    // so `tf.current_price || 0` used to silently create a permanently
+    // untrackable record whenever ai-service omitted/zeroed a timeframe's
+    // current_price. Such a record can never be meaningfully evaluated
+    // (there's no real reference price to compute a return against), and
+    // once created it stays status:'pending' forever -- both evaluate()
+    // implementations (trackerController.js and trackerEvalJob.js) just
+    // skip it on every cron cycle indefinitely, permanently occupying a
+    // slot in their pending-query limit. Skip auto-tracking a timeframe
+    // rec outright when it has no valid positive price, instead of
+    // inserting a doc that can never leave 'pending'. See
+    // PROJECT_STATUS.md T-054.
+    const trackable = timeframeRecs.filter(tf => tf.current_price > 0);
+    const skipped    = timeframeRecs.length - trackable.length;
+    if (skipped > 0) {
+      logger.warn(`[Advisor] Skipped auto-tracking ${skipped}/${timeframeRecs.length} recommendation(s) for ${asset} -- no valid current_price.`);
+    }
+    if (trackable.length === 0) return;
+
+    const docs = trackable.map(tf => {
       const hours     = EXPIRY_HOURS[tf.timeframe] || 24;
       const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
       return {
@@ -24,7 +45,7 @@ async function _autoTrack(asset, timeframeRecs) {
         action:                tf.action,
         confidence:            tf.confidence,
         timeframe:             tf.timeframe,
-        priceAtRecommendation: tf.current_price || 0,
+        priceAtRecommendation: tf.current_price,
         expectedReturnPct:     tf.expected_return_pct || '0%',
         reason:                tf.reason || '',
         source:                'advisor',

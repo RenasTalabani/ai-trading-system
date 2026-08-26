@@ -29,7 +29,17 @@ async function evaluatePending() {
 
   for (const rec of pending) {
     const currentPrice = prices[rec.asset];
-    if (!currentPrice || !rec.priceAtRecommendation) continue;
+    // T-054 (2026-08-26) defense-in-depth: `!rec.priceAtRecommendation`
+    // caught exactly 0 (falsy) but NOT a negative price -- a negative
+    // priceAtRecommendation isn't reachable through any current write path
+    // (store()'s validator rejects it, advisorController._autoTrack() only
+    // ever writes 0 or a real positive price), but this cron job is the
+    // one that actually runs automatically in production every 2 hours
+    // (trackerController.js's evaluate() is only reached via an admin-only
+    // manual HTTP call), so it gets the same strict `> 0` guard as
+    // trackerController.js's T-052 fix in case a bad record ever reaches
+    // this collection some other way. See PROJECT_STATUS.md T-054.
+    if (!currentPrice || !(rec.priceAtRecommendation > 0)) continue;
 
     const actualReturn = (currentPrice - rec.priceAtRecommendation) / rec.priceAtRecommendation * 100;
     const signedReturn = rec.action === 'SELL' ? -actualReturn : actualReturn;
