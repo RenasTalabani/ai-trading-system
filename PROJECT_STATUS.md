@@ -525,7 +525,7 @@ Per the standing instruction not to change access-control policy blindly without
   OPTION D (specific to this finding, not available for T-053) — Leave `set-capital` as any-user-reachable (it only overwrites two config fields, no deletion) but require `authorize('admin')` specifically on `/reset` given it is the one endpoint that permanently destroys data. A narrower middle ground than Option A if the owner is comfortable with users adjusting the shared risk settings but not wiping trade history.
 This pass adds first-ever route-level test coverage for `virtual.js`'s `/reset` and `/set-capital` endpoints (5 new tests, `backend/__tests__/virtualResetRoute.test.js`) without changing any source file: three explicit T-056 regression guards proving a non-admin (`role: 'user'`) caller can currently reach both endpoints and that they reach the underlying service calls exactly as described (including the no-body-supplied default-to-$500/5% case), plus two tests confirming each endpoint's own field-level validation (`isFloat({min,max})`) still correctly rejects out-of-range values regardless of the access-control gap.
 DATE: 2026-08-26
-COMMIT: (pending next commit on this pass)
+COMMIT: 196a3c1
 REMAINING RISK: none from this pass itself — no source logic was changed for this finding, only test coverage was added. The underlying access-control gap remains open pending an owner decision among the options above, and is more urgent than T-053's given it involves permanent data deletion rather than a reversible overwrite. Verified: full backend jest suite 192/192 green across 19 test suites (187 prior + 5 new), zero regressions, run directly on the device against the real installed node_modules.
 
 
