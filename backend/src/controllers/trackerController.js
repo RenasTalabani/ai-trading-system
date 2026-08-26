@@ -12,7 +12,14 @@ exports.store = [
   body('action').isIn(['BUY', 'SELL', 'HOLD']),
   body('confidence').isFloat({ min: 0, max: 100 }),
   body('timeframe').isString(),
-  body('priceAtRecommendation').isFloat({ min: 0 }),
+  // T-052 (2026-08-26): must be strictly > 0 -- `min: 0` let a
+  // priceAtRecommendation of exactly 0 through, which evaluate() below then
+  // divides by, producing Infinity/NaN that corrupts the shared accuracy
+  // stats (avgProfitPerTrade) for every user until the bad record is
+  // manually cleaned up. This endpoint only requires `protect` (any
+  // authenticated user), not `authorize('admin')`, so it was reachable by
+  // any logged-in user, not just an admin. See PROJECT_STATUS.md T-052.
+  body('priceAtRecommendation').isFloat({ gt: 0 }),
   body('expectedReturnPct').optional().isString(),
   body('reason').optional().isString(),
   body('source').optional().isIn(['advisor', 'signal', 'brain']),
@@ -138,6 +145,17 @@ exports.evaluate = async (req, res) => {
     let evaluated = 0;
     for (const rec of pending) {
       try {
+        // T-052 defense-in-depth: store()'s validation now rejects
+        // priceAtRecommendation <= 0 at write time, but guard the division
+        // here too in case a bad record exists from before that fix (or
+        // reaches this collection some other way) -- dividing by a
+        // non-positive price produces Infinity/NaN that would corrupt the
+        // shared accuracy stats for every user. See PROJECT_STATUS.md T-052.
+        if (!(rec.priceAtRecommendation > 0)) {
+          logger.warn(`[Tracker] skipping evaluate for ${rec.asset} (${rec._id}): invalid priceAtRecommendation=${rec.priceAtRecommendation}`);
+          continue;
+        }
+
         const priceResp = await axios.get(`${AI_URL}/api/prices/${rec.asset}`, { timeout: 5_000 });
         const currentPrice = priceResp.data?.price;
         if (!currentPrice) continue;
