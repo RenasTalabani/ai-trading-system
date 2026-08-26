@@ -336,9 +336,15 @@ async function sendTradeClosedNotification(trade, portfolio) {
       balance:    String(balance),
     };
 
-    // Push to all active users with FCM
+    // Push to all active users with FCM who haven't opted out of push
+    // (T-055: this used to push regardless of preferences.fcmEnabled, unlike
+    // every other broadcast-push path — sendSignalNotification, dailyReportJob,
+    // weeklyReportJob, globalScanJob — which all honor that preference.)
     const allUsers = await User.find({ isActive: true, fcmToken: { $exists: true, $ne: '' } }).lean();
-    const tokens   = allUsers.map(u => u.fcmToken).filter(Boolean);
+    const tokens   = allUsers
+      .filter(u => u.preferences?.fcmEnabled !== false)
+      .map(u => u.fcmToken)
+      .filter(Boolean);
 
     if (tokens.length) {
       const { sendMulticast } = require('./firebaseService');
