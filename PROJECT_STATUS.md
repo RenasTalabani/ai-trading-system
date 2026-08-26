@@ -581,7 +581,7 @@ EVIDENCE: Continuous-improvement pass (autonomous overnight loop, self-scheduled
 Fixed the comment to match `corsConfig.js`'s actual, documented policy. No behavior change, so no new tests needed; re-ran `cors.test.js` (14 tests, still exercises `corsConfig.js` directly) plus a smoke-check that `app.js` still requires cleanly, both green.
 Also investigated and ruled out a second, plausible-sounding suspect while in this area: winston's `File` transport writing to `logs/error.log`/`logs/combined.log`, and `logs/` being gitignored (confirmed via `git ls-files logs/` returning nothing) — a fresh clone/deploy has no `logs/` directory on disk. Rather than assume this breaks logging on a fresh Railway deploy, tested it empirically with a live Node script pointing winston at a genuinely nonexistent directory: this project's winston version (^3.13.0) auto-creates the missing directory on first write, no error event fired. Confirmed not a bug — noted here so it isn't re-investigated from scratch later.
 DATE: 2026-08-26
-COMMIT: (pending next commit on this pass)
+COMMIT: ff994ab
 REMAINING RISK: none. Comment-only change to a security-relevant but already-correct control; verified no behavior changed (cors.test.js green, app.js still boots).
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
