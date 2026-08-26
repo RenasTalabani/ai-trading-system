@@ -10,12 +10,15 @@
  *     matched anything, even after fix #1.
  * All Mongoose models and axios are faked in-memory; no live services touched.
  */
+jest.mock('../src/jobs/globalScanJob', () => ({ getCache: jest.fn(() => null) }));
+
 const BudgetSession       = require('../src/models/BudgetSession');
 const VirtualTrade        = require('../src/models/VirtualTrade');
 const VirtualPortfolio    = require('../src/models/VirtualPortfolio');
 const AIDecision          = require('../src/models/AIDecision');
 const MarketRegimeHistory = require('../src/models/MarketRegimeHistory');
 const axios                = require('axios');
+const { getCache }         = require('../src/jobs/globalScanJob');
 
 let FAKE_PORTFOLIO, FAKE_AGGREGATE_RESULT, CREATED_TRADES, SCAN_RESPONSE;
 
@@ -34,7 +37,8 @@ beforeEach(() => {
   AIDecision.create = async (doc) => ({ ...doc, _id: 'decision_fake' });
   AIDecision.updateOne = async () => {};
   MarketRegimeHistory.create = async () => ({});
-  axios.post = async () => ({ data: SCAN_RESPONSE });
+  axios.post = jest.fn(async () => ({ data: SCAN_RESPONSE }));
+  getCache.mockReturnValue(null); // default: no cache -> falls back to a direct scan call
 
   process.env.AI_CONFIDENCE_THRESHOLD = '0';
   process.env.AI_MIN_FUSED_SCORE = '0';
@@ -129,4 +133,66 @@ test('MAX_NEW_PER_CYCLE still caps a cycle when there is plenty of room under MA
 
   const result = await runAIWorkerCycle();
   expect(result.tradesCreated).toBe(3);
+});
+
+/**
+ * Regression suite for T-060 (2026-08-26, product-to-code audit follow-up).
+ *
+ * Bug: this worker made its own independent /api/global/scan call every 5
+ * minutes, separate from globalScanJob's own 30-minute cycle. Since that
+ * endpoint isn't deterministic/cached server-side, the two pipelines could
+ * (and did) return different results for the same asset within minutes of
+ * each other, each persisting its own AIDecision -- confirmed as the root
+ * cause of the "multiple jobs disagreeing" finding in the product-to-code
+ * audit.
+ *
+ * Fix: reuse globalScanJob's cached scan when it's fresh enough (<= 35 min
+ * old); fall back to a direct call only when the cache is empty or stale.
+ */
+describe('runAIWorkerCycle — reuses globalScanJob\'s cache instead of always re-scanning (T-060)', () => {
+  const cachedOpportunity = {
+    asset: 'CACHEDUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+    current_price: 50, stop_loss: 45, take_profit: 60,
+  };
+
+  test('uses the cached scan and does NOT call axios.post when the cache is fresh', async () => {
+    getCache.mockReturnValue({
+      result:    { success: true, scanned: 1, top_opportunities: [cachedOpportunity] },
+      scannedAt: new Date(Date.now() - 5 * 60 * 1000), // 5 min old — well within the 35-min ceiling
+    });
+
+    const result = await runAIWorkerCycle();
+
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(result.tradesCreated).toBe(1);
+    expect(CREATED_TRADES[0].asset).toBe('CACHEDUSDT');
+  });
+
+  test('falls back to a direct scan call when the cache is stale (older than 35 min), ignoring the stale opportunity', async () => {
+    getCache.mockReturnValue({
+      result:    { success: true, scanned: 1, top_opportunities: [cachedOpportunity] },
+      scannedAt: new Date(Date.now() - 40 * 60 * 1000), // 40 min old — past the ceiling
+    });
+    SCAN_RESPONSE = { success: true, scanned: 1, top_opportunities: [] }; // fresh direct call finds nothing
+
+    const result = await runAIWorkerCycle();
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(result.skipped).toBe('no_opportunities'); // proves the stale CACHEDUSDT opportunity was NOT used
+    expect(CREATED_TRADES).toHaveLength(0);
+  });
+
+  test('falls back to a direct scan call when there is no cache at all', async () => {
+    getCache.mockReturnValue(null);
+    SCAN_RESPONSE = {
+      success: true, scanned: 1,
+      top_opportunities: [{ asset: 'DIRECTUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99, current_price: 10, stop_loss: 9, take_profit: 12 }],
+    };
+
+    const result = await runAIWorkerCycle();
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(result.tradesCreated).toBe(1);
+    expect(CREATED_TRADES[0].asset).toBe('DIRECTUSDT');
+  });
 });

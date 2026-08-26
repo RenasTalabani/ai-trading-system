@@ -11,6 +11,19 @@ const BudgetSession  = require('../models/BudgetSession');
 const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger         = require('../config/logger');
 const { capToMaxRisk } = require('./virtualTrackingService');
+const { getCache: getGlobalScanCache } = require('../jobs/globalScanJob');
+
+// T-060 (2026-08-26, product-to-code audit follow-up): this worker used to
+// make its own independent /api/global/scan call every 5 minutes, separate
+// from globalScanJob's own 30-minute cycle -- since that endpoint isn't
+// deterministic/cached server-side (live prices, live RL weights, live
+// macro), the two pipelines could and did return different results for the
+// same asset within minutes of each other, each persisting its own
+// AIDecision. Reusing globalScanJob's cached scan when it's fresh enough
+// removes that duplicate-decision-generation root cause; falling back to a
+// direct call when the cache is empty/stale keeps this worker functional on
+// its own (e.g. at boot, or if globalScanJob's own cycle failed).
+const MAX_CACHE_AGE_MS = 35 * 60 * 1000; // globalScanJob refreshes every 30 min; small slack
 
 const CONFIDENCE_THRESHOLD  = parseInt(process.env.AI_CONFIDENCE_THRESHOLD)  || 70;  // Phase 18: raised to 70
 const MIN_FUSED_SCORE       = parseInt(process.env.AI_MIN_FUSED_SCORE)       || 65;  // Phase 18
@@ -57,19 +70,27 @@ async function runAIWorkerCycle() {
     return { skipped: 'daily_loss_limit', dailyLoss };
   }
 
-  // 4. Call Python global scan
-  const aiUrl = (process.env.AI_SERVICE_URL || 'http://localhost:8000').replace(/\/$/, '');
+  // 4. Reuse globalScanJob's cached scan when fresh enough (T-060); only
+  // fall back to an independent call when there's no usable cache.
   let scanResult;
-  try {
-    const { data } = await axios.post(`${aiUrl}/api/global/scan`, {
-      capital:   portfolio.currentBalance,
-      timeframe: '1h',
-      top_n:     5,
-    }, { timeout: 90_000 });
-    scanResult = data;
-  } catch (err) {
-    logger.warn('[AIWorker] AI service unreachable:', err.message);
-    return { skipped: 'ai_service_error', error: err.message };
+  const cached   = getGlobalScanCache();
+  const cacheAge = cached?.scannedAt ? Date.now() - new Date(cached.scannedAt).getTime() : Infinity;
+
+  if (cached?.result?.success && cacheAge <= MAX_CACHE_AGE_MS) {
+    scanResult = cached.result;
+  } else {
+    const aiUrl = (process.env.AI_SERVICE_URL || 'http://localhost:8000').replace(/\/$/, '');
+    try {
+      const { data } = await axios.post(`${aiUrl}/api/global/scan`, {
+        capital:   portfolio.currentBalance,
+        timeframe: '1h',
+        top_n:     5,
+      }, { timeout: 90_000 });
+      scanResult = data;
+    } catch (err) {
+      logger.warn('[AIWorker] AI service unreachable:', err.message);
+      return { skipped: 'ai_service_error', error: err.message };
+    }
   }
 
   if (!scanResult?.success || !scanResult.top_opportunities?.length) {

@@ -10,6 +10,27 @@ const logger            = require('../config/logger');
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
 
+// T-059 (2026-08-26, product-to-code audit follow-up): this job used to push
+// a "BRAIN_REPORT" notification to every eligible user every single hour
+// whenever any signal existed in the trailing hour, with no comparison to
+// what was reported the previous hour -- so a user got a fresh push every
+// hour even if the AI's actual recommendation hadn't changed at all. The
+// AIReport document is still created every hour (it's a real historical
+// record), but the notification now only fires when the reported
+// asset/action/mood actually changed meaningfully since the last time a
+// notification was sent, mirroring globalScanJob's existing _lastBest gate.
+const NOTIFY_CONFIDENCE_DELTA_THRESHOLD = 5; // percentage points
+let _lastNotified = null; // { asset, action, mood, confidence }
+
+function _hourlyReportChanged(current) {
+  if (!_lastNotified) return true;
+  if (current.asset  !== _lastNotified.asset)  return true;
+  if (current.action !== _lastNotified.action) return true;
+  if (current.mood   !== _lastNotified.mood)   return true;
+  if (Math.abs((current.confidence ?? 0) - (_lastNotified.confidence ?? 0)) >= NOTIFY_CONFIDENCE_DELTA_THRESHOLD) return true;
+  return false;
+}
+
 async function generateHourlyReport() {
   try {
     const now   = new Date();
@@ -109,36 +130,50 @@ async function generateHourlyReport() {
     const retPart    = expectedRet && expectedRet !== 'N/A' ? ` · +${expectedRet}% est.` : '';
     const notifBody  = `${primaryConf}% confidence${retPart} · Market: ${marketMood}`;
 
-    const users = await User.find({ isActive: true }).lean();
-    for (const user of users) {
-      try {
-        if (user.preferences?.fcmEnabled !== false && user.fcmToken) {
-          await sendPushToUser(user._id, notifTitle, notifBody, {
-            type:       'BRAIN_REPORT',
-            reportId:   report._id.toString(),
-            mood:       marketMood,
-            topAsset:   primaryAsset,
-            topAction:  primaryAction,
-            confidence: String(primaryConf),
-          }).catch(() => {});
-        }
-        if (user.preferences?.telegramEnabled && user.telegramChatId) {
-          await sendTelegramMessage(user.telegramChatId, _buildTgMessage(report)).catch(() => {});
-        }
-      } catch (_) {}
+    const notifState  = { asset: primaryAsset, action: primaryAction, confidence: primaryConf, mood: marketMood };
+    const shouldNotify = _hourlyReportChanged(notifState);
+
+    let notifiedCount = 0;
+    if (shouldNotify) {
+      const users = await User.find({ isActive: true }).lean();
+      for (const user of users) {
+        try {
+          if (user.preferences?.fcmEnabled !== false && user.fcmToken) {
+            await sendPushToUser(user._id, notifTitle, notifBody, {
+              type:       'BRAIN_REPORT',
+              reportId:   report._id.toString(),
+              mood:       marketMood,
+              topAsset:   primaryAsset,
+              topAction:  primaryAction,
+              confidence: String(primaryConf),
+            }).catch(() => {});
+          }
+          if (user.preferences?.telegramEnabled && user.telegramChatId) {
+            await sendTelegramMessage(user.telegramChatId, _buildTgMessage(report)).catch(() => {});
+          }
+          notifiedCount++;
+        } catch (_) {}
+      }
+
+      // Admin channel
+      const adminChannel = process.env.TELEGRAM_CHANNEL_ID;
+      if (adminChannel) {
+        await sendTelegramMessage(adminChannel, _buildTgMessage(report)).catch(() => {});
+      }
+
+      await AIReport.updateOne({ _id: report._id }, {
+        $set: { 'notificationSent.fcm': true, 'notificationSent.telegram': !!adminChannel },
+      });
+
+      _lastNotified = notifState;
+      logger.info(`[HourlyReport] ✓ ${marketMood} | ${best.asset} ${best.direction} ${best.confidence}% | notified ${notifiedCount} users`);
+    } else {
+      await AIReport.updateOne({ _id: report._id }, {
+        $set: { 'notificationSent.fcm': false, 'notificationSent.telegram': false },
+      });
+      logger.info(`[HourlyReport] ✓ ${marketMood} | ${best.asset} ${best.direction} ${best.confidence}% | no meaningful change — notification skipped`);
     }
 
-    // Admin channel
-    const adminChannel = process.env.TELEGRAM_CHANNEL_ID;
-    if (adminChannel) {
-      await sendTelegramMessage(adminChannel, _buildTgMessage(report)).catch(() => {});
-    }
-
-    await AIReport.updateOne({ _id: report._id }, {
-      $set: { 'notificationSent.fcm': true, 'notificationSent.telegram': !!adminChannel },
-    });
-
-    logger.info(`[HourlyReport] ✓ ${marketMood} | ${best.asset} ${best.direction} ${best.confidence}% | notified ${users.length} users`);
     return report;
   } catch (err) {
     logger.error(`[HourlyReport] failed: ${err.stack}`);
@@ -202,4 +237,8 @@ function startHourlyReportJob() {
   logger.info('[HourlyReport] Job scheduled — every hour at :00');
 }
 
-module.exports = { startHourlyReportJob, generateHourlyReport };
+// Test-only: reset the in-memory "last notified" state between test cases
+// (mirrors the module-level _lastBest pattern in globalScanJob.js).
+function _resetNotifyStateForTests() { _lastNotified = null; }
+
+module.exports = { startHourlyReportJob, generateHourlyReport, _resetNotifyStateForTests };

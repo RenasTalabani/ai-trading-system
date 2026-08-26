@@ -7,6 +7,21 @@ const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 const TIMEFRAME_HOURS = { '1h': 1, '4h': 4, '1d': 24, '7d': 168, '30d': 720 };
 
+// T-058 (2026-08-26, product-to-code audit follow-up): storeGlobalDecision()
+// used to skip only if the *identical* asset+action pair had already been
+// written in the last 15 minutes. globalScanJob (every 30 min) plus
+// aiDecisionJob (which just re-triggers the same scan, offset at :15/:45)
+// together produce an effective scan roughly every 15 minutes -- so that
+// window barely outlasted the job's own cadence, and a near-duplicate
+// AIDecision row got written on almost every cycle even when nothing about
+// the market actually changed. Replaced with real state-change detection:
+// skip only when the action, confidence, and price all match the most
+// recent decision for this asset within these tolerances, AND that decision
+// isn't stale enough to warrant a fresh read anyway.
+const CONFIDENCE_DELTA_THRESHOLD = 5;              // percentage points
+const PRICE_DELTA_PCT_THRESHOLD  = 1.5;            // percent
+const MAX_STALENESS_MS           = 6 * 60 * 60 * 1000; // re-affirm at least every 6h
+
 async function evaluateOpenDecisions() {
   const now     = new Date();
   const expired = await AIDecision.find({
@@ -65,14 +80,26 @@ async function storeGlobalDecision(best, scannedAt) {
   const hours     = TIMEFRAME_HOURS[best.timeframe || '1h'] || 1;
   const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
 
-  // Avoid duplicate: skip if same asset+action within last 15 min
-  const recent = await AIDecision.findOne({
-    asset:     best.asset,
-    action:    best.action,
-    createdAt: { $gte: new Date(Date.now() - 15 * 60 * 1000) },
-  }).lean();
+  // State-change detection (T-058) — see comment above for why this
+  // replaced the old fixed 15-minute same-label window.
+  const last = await AIDecision.findOne({ asset: best.asset })
+    .sort({ createdAt: -1 })
+    .lean();
 
-  if (recent) return;
+  if (last) {
+    const age                = Date.now() - new Date(last.createdAt).getTime();
+    const actionChanged      = last.action !== best.action;
+    const confidenceChanged  = Math.abs((last.confidence ?? 0) - (best.confidence ?? 0)) >= CONFIDENCE_DELTA_THRESHOLD;
+    const priceChangedPct    = last.entryPrice
+      ? Math.abs(best.current_price - last.entryPrice) / last.entryPrice * 100
+      : Infinity;
+    const priceChanged       = priceChangedPct >= PRICE_DELTA_PCT_THRESHOLD;
+    const stale               = age >= MAX_STALENESS_MS;
+
+    if (!actionChanged && !confidenceChanged && !priceChanged && !stale) {
+      return; // nothing meaningful changed since the last decision for this asset
+    }
+  }
 
   await AIDecision.create({
     asset:             best.asset,
