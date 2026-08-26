@@ -529,6 +529,14 @@ COMMIT: 196a3c1
 REMAINING RISK: none from this pass itself — no source logic was changed for this finding, only test coverage was added. The underlying access-control gap remains open pending an owner decision among the options above, and is more urgent than T-053's given it involves permanent data deletion rather than a reversible overwrite. Verified: full backend jest suite 192/192 green across 19 test suites (187 prior + 5 new), zero regressions, run directly on the device against the real installed node_modules.
 
 
+#### PRIORITY 3 — Ask-the-Brain asset news lookup used a field name that doesn't exist on the schema (T-057)
+STATUS: DONE
+EVIDENCE: Continuing the overnight autonomous audit into `brainController.js` after the route-level auth-gating sweep (T-053/T-056). `_buildAnswer()`'s asset-question handler queried `NewsData.find({ relevantAssets: symbol })` — but `NewsData.js`'s actual schema field is `relatedAssets`, confirmed by reading the schema directly and cross-checking every other query site in the codebase (`newsService.js`, `newsController.js`), all of which correctly use `relatedAssets`. A query on a field that exists on no document matches nothing (no error, no warning) — so every "Ask the AI Brain" question about a specific asset (e.g. "what's happening with BTC") silently returned zero matching news articles, regardless of how much real news had actually been collected for that asset, since the launch of this feature.
+Fixed the field name (one-line change, no other logic touched). 4 new tests, first-ever coverage for this controller: the T-057 regression guard proving the query now filters on `relatedAssets` not `relevantAssets`; a real matching-articles fixture now correctly flows through into the built answer (previously always empty under the bug); confirms non-asset questions (e.g. performance/portfolio questions) never touch `NewsData` at all, so the fix doesn't introduce an unnecessary query on unrelated intents; confirms a missing `question` request body still returns 400 without touching any model.
+DATE: 2026-08-26
+COMMIT: `eb4415a`
+REMAINING RISK: none identified. Single-field, single-query-site fix; no other behavior in the controller changed. Verified: full backend suite 196/196 green across 20 test suites (192 prior + 4 new), zero regressions.
+
 ### Not yet started (blocked or queued)
 - PRIORITY 3 continuation — awaiting owner decision on (a) whether/when to trigger a redeploy of backend + ai-service, and (b) how trained models reach the ai-service container (see above). Once redeployed: repeat health/DB/model/cron verification against a live instance, since none of that could be observed this pass.
 - PRIORITY 4 (model artifacts) — partially answered above (delivery path gap found); full resolution still open.
