@@ -41,9 +41,12 @@ const app = express();
 // Security headers
 app.use(helmet());
 
-// CORS — allow all origins in production (Flutter mobile sends no Origin header).
-// Origin-resolution logic lives in ./config/corsConfig.js (unit tested there
-// directly, without needing a full app boot).
+// CORS — explicit allowlist in production (owner decision, T-010): unset/
+// empty ALLOWED_ORIGINS denies all browser-based cross-origin requests by
+// default. Flutter mobile is unaffected either way since it sends no Origin
+// header. Origin-resolution logic lives in ./config/corsConfig.js (unit
+// tested there directly, without needing a full app boot) — see that
+// file's docstring for the full behavior/rationale.
 app.use(cors(buildCorsOptions(process.env.ALLOWED_ORIGINS)));
 
 // Compression
