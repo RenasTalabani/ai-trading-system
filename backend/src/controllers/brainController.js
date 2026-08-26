@@ -504,7 +504,10 @@ async function _buildAnswer(intent, q) {
     let brainSignal = null;
     if (cached?.result?.best?.asset === symbol) brainSignal = cached.result.best;
     if (!brainSignal) brainSignal = (cached?.result?.top_opportunities || []).find(o => o.asset === symbol);
-    const news = await NewsData.find({ relevantAssets: symbol }).sort({ publishedAt: -1 }).limit(3).lean();
+    // T-057: was `relevantAssets` — not a field on the NewsData schema (the
+    // real field, used everywhere else in the codebase, is `relatedAssets`)
+    // — so this always matched zero documents.
+    const news = await NewsData.find({ relatedAssets: symbol }).sort({ publishedAt: -1 }).limit(3).lean();
     const name = (brainSignal?.display_name || recent[0]?.displayName || symbol).replace('USDT','');
     const sigText = brainSignal ? 'Current signal: **' + brainSignal.action + '** at ' + brainSignal.confidence + '% confidence.' : 'No active brain signal for this asset.';
     const perfText = wr !== null ? ' Win rate: **' + wr + '%** over ' + closed.length + ' trades.' : '';
