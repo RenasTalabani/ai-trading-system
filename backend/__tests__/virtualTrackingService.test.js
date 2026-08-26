@@ -181,6 +181,23 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
     expect(trade.sizeUsd).toBe(50); // 5% of $1000
   });
 
+  test('persists the caller-supplied signalId/aiDecisionId onto the trade (regression: T-061, previously always dropped for source:"guide")', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({
+      asset: 'X', direction: 'BUY', entryPrice: 100,
+      signalId: 'sig123', aiDecisionId: null,
+    });
+    expect(trade.signalId).toBe('sig123');
+    expect(trade.aiDecisionId).toBeNull();
+  });
+
+  test('defaults signalId/aiDecisionId to null when the caller passes neither (backward compatible)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    expect(trade.signalId).toBeNull();
+    expect(trade.aiDecisionId).toBeNull();
+  });
+
   test('worst-case config (50% risk + max edge multiplier) is still capped, same as every other path', async () => {
     FAKE_HISTORY = [
       ...Array.from({ length: 25 }, () => historyDoc('MAXRISK', 'win', 20)),

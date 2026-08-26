@@ -221,7 +221,7 @@ async function pickupNewSignals() {
 // opens a spot position, so a manually-approved trade can never risk more
 // than an automatically-picked-up one would.
 
-async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit }) {
+async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit, signalId = null, aiDecisionId = null }) {
   if (!asset || !entryPrice) {
     throw new Error('Missing asset or entry price.');
   }
@@ -237,6 +237,9 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
   const portfolio = await getPortfolio();
   const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(asset, portfolio, `${asset} guide approval`);
 
+  // T-061: persist the AI-sourced signalId/aiDecisionId the caller resolved
+  // this suggestion from, so this trade stays traceable back to what
+  // justified it (previously neither was ever set for source:'guide').
   const trade = await VirtualTrade.create({
     source:     'guide',
     asset,
@@ -247,6 +250,8 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
     sizeUsd,
     sizeMultiplier: edgeMultiplier,
     trailingStopDistance: trailingDistanceFor(entryPrice, stopLoss),
+    signalId,
+    aiDecisionId,
     openedAt:   new Date(),
   });
 

@@ -16,6 +16,7 @@
  */
 const { getCache: getGlobalCache } = require('../jobs/globalScanJob');
 const Signal = require('../models/Signal');
+const AIDecision = require('../models/AIDecision');
 const VirtualTrade = require('../models/VirtualTrade');
 const { getAllCachedPrices } = require('../services/binanceService');
 const aiService = require('../services/aiService');
@@ -114,6 +115,7 @@ async function resolveSuggestion() {
       confidence:  best.confidence ?? 0,
       why:         plainWhyFromGlobalBest(best),
       generatedAt: cached.scannedAt,
+      signalId:    null, // sourced from the global-scan cache, not a persisted Signal — see approve() (T-061)
     };
   }
 
@@ -135,6 +137,7 @@ async function resolveSuggestion() {
       confidence:  sig.confidence ?? 0,
       why:         plainWhyFromSignal(sig),
       generatedAt: sig.createdAt,
+      signalId:    sig._id, // T-061: threaded through to approve() so the resulting trade is traceable
     };
   }
 
@@ -332,12 +335,35 @@ exports.approve = async (req, res) => {
       return res.status(409).json({ success: false, message: 'No suggestion available right now — try again shortly.' });
     }
 
+    // T-061 (2026-08-26, product-to-code audit follow-up): the audit found
+    // that approveSuggestion() persisted neither signalId nor aiDecisionId
+    // on the resulting VirtualTrade, so a Guide-approved trade could not be
+    // traced back to the specific AI-sourced pick that justified it, even
+    // though resolveSuggestion() above always sources it from an AI signal
+    // or the global-scan cache (never from client input). Thread that link
+    // through now. For a Signal-sourced suggestion this is exact
+    // (suggestion.signalId). For a global-scan-sourced suggestion there's no
+    // persisted id at resolve time (decisionTrackingJob writes it
+    // fire-and-forget, and T-058's state-change gate means it may not write
+    // a fresh one at all) -- so this does a best-effort lookup of the most
+    // recent matching AIDecision and leaves it null on a miss, rather than
+    // ever blocking approval or guessing wrong.
+    let aiDecisionId = null;
+    if (!suggestion.signalId) {
+      const recentDecision = await AIDecision.findOne({
+        asset: suggestion.asset, action: suggestion.action,
+      }).sort({ createdAt: -1 }).lean();
+      if (recentDecision) aiDecisionId = recentDecision._id;
+    }
+
     const trade = await approveSuggestion({
       asset:      suggestion.asset,
       direction:  suggestion.action,
       entryPrice: suggestion.entryPrice,
       stopLoss:   suggestion.stopLoss,
       takeProfit: suggestion.takeProfit,
+      signalId:   suggestion.signalId || null,
+      aiDecisionId,
     });
 
     const verb = trade.direction === 'BUY' ? 'Bought' : 'Sold';
