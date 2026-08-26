@@ -508,7 +508,7 @@ EVIDENCE: Continuing the overnight autonomous audit, pivoted from backend/src/co
 Fixed by filtering the `allUsers` list on `preferences?.fcmEnabled !== false` before mapping to FCM tokens — the exact one-line pattern already used at the four sibling call sites, so this restores the codebase's own established convention rather than introducing a new one. No other logic in the function (Telegram admin-channel broadcast, per-trade P&L formatting, delivery persistence) was touched.
 Added `backend/__tests__/notificationService.test.js` (4 new tests, first-ever coverage for this file): the T-055 regression guard (an opted-out user's token is excluded from the `sendMulticast` call while an opted-in and a default-preference user's tokens are included), an all-opted-out case (confirms `sendMulticast` isn't called at all when nobody is eligible, avoiding an empty-array FCM call), a default-preferences case (confirms a user with no `fcmEnabled` key set at all — i.e. the schema default — still receives the push, proving the fix didn't accidentally flip the default to opt-out), and a no-fcmToken-field case.
 DATE: 2026-08-26
-COMMIT: (pending next commit on this pass)
+COMMIT: 1acb6f3
 REMAINING RISK: none — the fix only narrows the FCM recipient list to match an existing, already-tested codebase convention; no P&L math, trade-closing logic, Telegram delivery, or notification persistence was altered. Verified: full backend jest suite 187/187 green across 18 test suites (183 prior + 4 new), zero regressions, run directly on the device against the real installed node_modules.
 
 
