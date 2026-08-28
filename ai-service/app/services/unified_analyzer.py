@@ -5,6 +5,8 @@ Fusion weights: OB 40% · Strategy 35% · News 15% · Social 10%
 import asyncio
 import logging
 
+from app.services.signal_engine import _decision_label
+
 logger = logging.getLogger("ai-service.unified_analyzer")
 
 _TF_MAP = {'15m': '1d', '1h': '7d', '4h': '7d', '1d': '30d'}
@@ -94,6 +96,12 @@ class UnifiedAnalyzer:
         impact       = 0.0
         top_events   = []
         article_count = 0
+        # T-066: real data already fetched by self._social.refresh() above --
+        # SocialAnalyzer computes manipulation_detected/pump_detected per
+        # asset (same source signal_engine.py's decision label already uses),
+        # but this function used to discard it after reading only
+        # market_score. Surfacing it costs zero new I/O.
+        manipulation_detected = False
 
         if isinstance(news_result, dict):
             nd = news_result.get('by_asset', {}).get(base, {})
@@ -106,6 +114,9 @@ class UnifiedAnalyzer:
         if isinstance(social_result, dict):
             sd = social_result.get('by_asset', {}).get(base, {})
             social_score = float(sd.get('market_score', 50))
+            manipulation_detected = bool(
+                sd.get('manipulation_detected', False) or sd.get('pump_detected', False)
+            )
 
         # ── Fusion: OB 40% + Strategy 35% + News 15% + Social 10% ───────────
         fused_score = (
@@ -115,6 +126,24 @@ class UnifiedAnalyzer:
             social_score * 0.10
         )
         fused_action, fused_conf = _score_to_action(fused_score)
+
+        # T-066: derived WAIT/AVOID label, same convention as SignalEngine's
+        # _decision_label() (T-065) -- reused rather than reimplemented, so
+        # both AI pipelines agree on what "AVOID" means. mtf_fights and
+        # funding_against aren't available in this pipeline (no
+        # MultiTimeframeAnalyzer/funding-rate call here -- adding either
+        # would be new I/O per asset per scan, a real architectural
+        # addition, not just wiring existing data through -- left as a
+        # documented follow-up rather than guessed at). manipulation_detected
+        # is real, already-fetched data (see above), so it's the one risk
+        # flag this pipeline can honestly surface today. This does NOT
+        # change fused_action/fused_conf or anything else -- purely additive.
+        decision_label = _decision_label(
+            fused_action,
+            manip_detected=manipulation_detected,
+            mtf_fights=False,
+            funding_against=False,
+        )
 
         # Prefer OB entry/SL/TP when available, else derive from price
         entry_zone  = ob_signal.get('entry_zone')
@@ -177,6 +206,7 @@ class UnifiedAnalyzer:
             'signal': {
                 'action':      fused_action,
                 'confidence':  fused_conf,
+                'decision':    decision_label,
                 'entry_zone':  entry_zone,
                 'stop_loss':   stop_loss,
                 'take_profit': take_profit,
@@ -207,6 +237,7 @@ class UnifiedAnalyzer:
                 'impact':        round(impact, 3),
                 'top_events':    top_events,
                 'article_count': article_count,
+                'manipulation_detected': manipulation_detected,
             },
 
             'allocation': {

@@ -54,6 +54,11 @@ async function processAsset(asset) {
       asset: prediction.asset,
       direction,
       confidence,
+      // T-066: ai-service's /predict already returns `decision` (T-065) --
+      // was being discarded here. Falls back to `direction` if an older
+      // ai-service build doesn't send it yet, so this never persists
+      // undefined for a field that has an enum constraint.
+      decision: prediction.decision || direction,
       price: {
         entry: prediction.entry_price,
         stopLoss: prediction.stop_loss,

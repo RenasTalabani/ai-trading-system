@@ -108,7 +108,15 @@ class _SuggestionCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final actionColor = suggestion.action == 'BUY' ? AppColors.buy : AppColors.sell;
+    // T-066: `decision` is the AI's WAIT/AVOID-aware label (matches the
+    // /predict pipeline, T-065) -- `action` (BUY/SELL) is what still drives
+    // approve()'s actual trade direction, completely unchanged. AVOID means
+    // the models found a BUY/SELL lean but flagged a real risk (e.g. social
+    // manipulation) -- shown distinctly, not hidden or silently blocked.
+    final isAvoid = suggestion.decision == 'AVOID';
+    final actionColor = isAvoid
+        ? AppColors.warning
+        : (suggestion.action == 'BUY' ? AppColors.buy : AppColors.sell);
     final actionWord   = suggestion.action == 'BUY' ? 'Buy' : 'Sell';
     final riskColor    = _riskColor(suggestion.riskLevel);
 
@@ -132,8 +140,10 @@ class _SuggestionCard extends ConsumerWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(color: actionColor, borderRadius: BorderRadius.circular(8)),
-                child: Text(actionWord.toUpperCase(),
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+                child: Text(
+                  isAvoid ? '${actionWord.toUpperCase()} · FLAGGED' : actionWord.toUpperCase(),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
+                ),
               ),
               const SizedBox(width: 10),
               Text('\$${suggestion.amountUsd.toStringAsFixed(0)}',
@@ -143,6 +153,22 @@ class _SuggestionCard extends ConsumerWidget {
           const SizedBox(height: 4),
           Text(suggestion.displayName,
               style: const TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w700)),
+
+          if (isAvoid) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+              ),
+              child: const Text(
+                '⚠️ The AI found a lean here, but flagged a real risk (e.g. unusual social activity) — read carefully before acting.',
+                style: TextStyle(color: AppColors.warning, fontSize: 13, fontWeight: FontWeight.w600, height: 1.4),
+              ),
+            ),
+          ],
 
           const SizedBox(height: 20),
           const Text('Why', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
@@ -187,13 +213,14 @@ class _SuggestionCard extends ConsumerWidget {
                 ref.read(guideProvider.notifier).approve();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
+                backgroundColor: isAvoid ? AppColors.warning : AppColors.primary,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               child: approving
                   ? const SizedBox(width: 22, height: 22,
                       child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
-                  : const Text('Yes, do it', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  : Text(isAvoid ? 'Do it anyway' : 'Yes, do it',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             ),
           ),
           const SizedBox(height: 10),

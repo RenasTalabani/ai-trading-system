@@ -14,6 +14,7 @@ from typing import Any
 from app.services.unified_analyzer import (
     UnifiedAnalyzer, _action_to_score, _score_to_action,
 )
+from app.services.signal_engine import _decision_label
 from app.services.collectors.multi_asset_collector import (
     fetch_asset_data, ALL_MULTI_ASSETS,
 )
@@ -242,6 +243,11 @@ class GlobalAnalyzer:
                 "asset_class":    "crypto",
                 "action":         sig["action"],
                 "confidence":     sig["confidence"],
+                # T-066: passthrough from UnifiedAnalyzer.analyze()'s own
+                # signal.decision (computed there, not here -- see that
+                # module for the WAIT/AVOID derivation). action/confidence
+                # above are completely unchanged by this.
+                "decision":       sig.get("decision", sig["action"]),
                 "fused_score":    adj_score,
                 "rl_score":       rl_score,
                 "quality_score":  quality_score,
@@ -329,6 +335,18 @@ class GlobalAnalyzer:
 
         action, confidence = _score_to_action(fused)
 
+        # T-066: same WAIT/AVOID convention as _score_crypto/SignalEngine
+        # (see unified_analyzer.py's docstring note for why this reuses
+        # _decision_label() rather than a second implementation). This
+        # scorer has no social/manipulation source at all (no
+        # SocialAnalyzer call anywhere in this method) and no
+        # MultiTimeframeAnalyzer/funding-rate call either -- so for
+        # gold/oil/forex, decision can only ever equal `action` (HOLD ->
+        # WAIT) or unchanged BUY/SELL, never AVOID. That's an honest
+        # reflection of what this asset class's pipeline actually knows,
+        # not a gap to paper over with an invented signal.
+        decision = _decision_label(action, manip_detected=False, mtf_fights=False, funding_against=False)
+
         # Regime modifier
         modifier = _regime_det.regime_score_modifier(regime, action)
         adj_fused = round(fused * modifier, 1)
@@ -353,6 +371,7 @@ class GlobalAnalyzer:
             "asset_class":    ASSET_CLASS_MAP.get(symbol, "other"),
             "action":         action,
             "confidence":     confidence,
+            "decision":       decision,
             "fused_score":    adj_fused,
             "rl_score":       fused,
             "quality_score":  quality_score,

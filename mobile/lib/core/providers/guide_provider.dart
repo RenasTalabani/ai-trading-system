@@ -7,7 +7,12 @@ import '../constants/api_constants.dart';
 class GuideSuggestion {
   final String asset;
   final String displayName;
-  final String action; // BUY or SELL
+  final String action; // BUY or SELL -- unchanged, still drives approve()
+  // T-066: derived WAIT/AVOID label from the AI pipeline (matches the
+  // /predict pipeline's decision label, T-065). Purely additive -- falls
+  // back to [action] below if the backend response omits it (older
+  // backend build), so this is never null in practice.
+  final String decision;
   final double amountUsd;
   final List<String> why;
   final String riskLevel; // Low / Medium / High
@@ -19,6 +24,7 @@ class GuideSuggestion {
     required this.asset,
     required this.displayName,
     required this.action,
+    required this.decision,
     required this.amountUsd,
     required this.why,
     required this.riskLevel,
@@ -31,6 +37,7 @@ class GuideSuggestion {
     asset:           json['asset'] as String,
     displayName:     json['displayName'] as String? ?? json['asset'] as String,
     action:          json['action'] as String,
+    decision:        json['decision'] as String? ?? json['action'] as String,
     amountUsd:       (json['amountUsd'] as num).toDouble(),
     why:             (json['why'] as List).map((e) => e.toString()).toList(),
     riskLevel:       json['riskLevel'] as String,

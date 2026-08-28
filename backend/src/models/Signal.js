@@ -13,6 +13,17 @@ const signalSchema = new mongoose.Schema(
       enum: ['BUY', 'SELL', 'HOLD'],
       required: true,
     },
+    // T-066: derived, display-only label from the ai-service pipeline's
+    // decision_label (T-065) -- e.g. BUY with a manipulation/risk flag
+    // present becomes 'AVOID'. Purely additive: `direction` above stays
+    // exactly what it always was and is what every existing trading/
+    // notification code path in this app still reads. Not required/no
+    // default, so pre-existing Signal documents (created before this
+    // field existed) are unaffected and simply have it undefined.
+    decision: {
+      type: String,
+      enum: ['BUY', 'SELL', 'WAIT', 'AVOID'],
+    },
     confidence: {
       type: Number,
       required: true,

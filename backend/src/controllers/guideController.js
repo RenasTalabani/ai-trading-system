@@ -109,6 +109,12 @@ async function resolveSuggestion() {
       asset:       best.asset,
       displayName: best.display_name || best.asset,
       action:      best.action,
+      // T-066: ai-service's global-scan `best` already carries `decision`
+      // (WAIT/AVOID label, T-066) end to end from UnifiedAnalyzer/
+      // GlobalAnalyzer — falls back to `action` so an older ai-service
+      // response shape (missing the key) still resolves to something
+      // sane instead of undefined.
+      decision:    best.decision || best.action,
       entryPrice:  best.current_price,
       stopLoss:    best.stop_loss   || null,
       takeProfit:  best.take_profit || null,
@@ -131,6 +137,10 @@ async function resolveSuggestion() {
       asset:       sig.asset,
       displayName: sig.asset,
       action:      sig.direction,
+      // T-066: mirrors the global-scan branch above — falls back to
+      // `direction` for Signal documents created before this field
+      // existed (schema has no default, so it's simply undefined on those).
+      decision:    sig.decision || sig.direction,
       entryPrice:  sig.price.entry,
       stopLoss:    sig.price.stopLoss   || null,
       takeProfit:  sig.price.takeProfit || null,
@@ -223,6 +233,7 @@ async function getLivePrice(asset) {
 exports.buildPositionGuidance = buildPositionGuidance;
 exports.maxLossFor = maxLossFor;
 exports.maxGainFor = maxGainFor;
+exports.resolveSuggestion = resolveSuggestion;
 
 exports.getPositions = async (req, res) => {
   try {
@@ -311,6 +322,9 @@ exports.getSuggestion = async (req, res) => {
       asset: suggestion.asset,
       displayName: suggestion.displayName,
       action: suggestion.action,
+      // T-066: WAIT/AVOID label, purely additive -- `action` above is
+      // unchanged and still drives approve()'s actual trade direction.
+      decision: suggestion.decision,
       entryPrice: suggestion.entryPrice,
       stopLoss: suggestion.stopLoss,
       takeProfit: suggestion.takeProfit,
