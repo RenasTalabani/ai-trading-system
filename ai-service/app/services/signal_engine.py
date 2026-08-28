@@ -60,6 +60,46 @@ BULLISH_OVERRIDES = {"etf", "rally", "halving", "partnership"}
 FUNDING_EXTREME_THRESHOLD = 0.05
 
 
+def _decision_label(final_dir: str, manip_detected: bool,
+                     mtf_fights: bool, funding_against: bool) -> str:
+    """T-065 (2026-08-28 owner decision): a derived, display-only label
+    layered on top of the trained models' real BUY/SELL/HOLD output.
+
+    This does NOT retrain or change what the RF/Transformer/Fusion models
+    predict, does NOT change `direction`/`confidence` (both stay exactly
+    as computed), and does NOT change trading eligibility, notification
+    triggers, or any other logic keyed off `direction` elsewhere in this
+    codebase (backend paper-trading, quality filters, etc. all continue
+    reading `direction` unchanged). It exists purely so the product can
+    show WAIT vs AVOID instead of collapsing every non-actionable case
+    into the single overloaded word "HOLD":
+
+      - HOLD + no risk flag        -> WAIT   (genuinely mixed/insufficient
+                                               evidence -- nothing wrong,
+                                               just not enough edge yet)
+      - HOLD + manipulation flag   -> AVOID  (social pump/manipulation
+                                               detected for this asset --
+                                               a concrete reason, not silence)
+      - BUY/SELL + no risk flag    -> BUY/SELL (unchanged, actionable)
+      - BUY/SELL + a risk flag     -> AVOID  (the models found a lean, but
+                                               a named risk factor --
+                                               manipulation, the higher
+                                               timeframe actively fighting
+                                               it, or a crowded-position
+                                               funding-rate conflict --
+                                               argues against acting on it)
+
+    `mtf_fights`/`funding_against` can only be True when final_dir was
+    already BUY/SELL (see the guards around their computation above --
+    both checks are skipped entirely when final_dir == "HOLD"), so the
+    HOLD branch below only ever needs to consider `manip_detected`.
+    """
+    risk_flag = manip_detected or mtf_fights or funding_against
+    if final_dir == "HOLD":
+        return "AVOID" if manip_detected else "WAIT"
+    return "AVOID" if risk_flag else final_dir
+
+
 class SignalEngine:
     def __init__(self, market_model, news_model, social_model,
                  lstm_model=None, fusion_model=None, calibrator=None,
@@ -268,6 +308,7 @@ class SignalEngine:
 
         # ── 6c. Multi-timeframe confirmation ────────────────────────────────────
         trend_alignment = "neutral"
+        mtf_fights = False  # T-065: surfaced to _decision_label() below (WAIT/AVOID)
         if final_dir != "HOLD":
             try:
                 mtf = await _mtf_analyzer.analyze(asset, ["4h", "1d"])
@@ -278,6 +319,7 @@ class SignalEngine:
                           (trend_alignment == "bearish" and final_dir == "BUY"))
                 if agrees: raw_conf = round(min(100, raw_conf + 5), 1)
                 if fights: raw_conf = round(max(0, raw_conf - 8), 1)
+                mtf_fights = fights
             except Exception as e:
                 logger.debug(f"Multi-timeframe confirmation skipped for {asset}: {e}")
 
@@ -286,6 +328,7 @@ class SignalEngine:
         # and overleveraged — a real, known pattern that often precedes reversals.
         # Only real data available is BTCUSDT/ETHUSDT (ai-service's own fetch).
         funding_rate = None
+        funding_against = False  # T-065: surfaced to _decision_label() below (WAIT/AVOID)
         if final_dir != "HOLD" and asset in ("BTCUSDT", "ETHUSDT"):
             try:
                 from app.services.macro_data_service import MacroDataService
@@ -298,10 +341,12 @@ class SignalEngine:
                         raw_conf = round(min(100, raw_conf + 6), 1)  # contrarian agrees
                     elif extreme_positive and final_dir == "BUY":
                         raw_conf = round(max(0, raw_conf - 8), 1)    # buying into crowded longs
+                        funding_against = True
                     elif extreme_negative and final_dir == "BUY":
                         raw_conf = round(min(100, raw_conf + 6), 1)
                     elif extreme_negative and final_dir == "SELL":
                         raw_conf = round(max(0, raw_conf - 8), 1)
+                        funding_against = True
             except Exception as e:
                 logger.debug(f"Funding-rate contrarian check skipped for {asset}: {e}")
 
@@ -314,9 +359,21 @@ class SignalEngine:
         reason = self._build_reason(asset, rf_result, transformer_result,
                                     news_result, social_result, all_events)
 
+        # T-065: derived WAIT/AVOID label -- see _decision_label()'s docstring.
+        # `direction` below is left completely untouched for every existing
+        # consumer (backend trading/notification logic, this payload's own
+        # SL/TP synthesis above); `decision` is purely additive.
+        decision_label = _decision_label(
+            final_dir,
+            manip_detected=social_result.get("manipulation_detected", False),
+            mtf_fights=mtf_fights,
+            funding_against=funding_against,
+        )
+
         signal_payload = {
             "asset":            asset,
             "direction":        final_dir,
+            "decision":         decision_label,
             "confidence":       final_conf,
             "raw_confidence":   raw_conf,
             "entry_price":      entry_price,
