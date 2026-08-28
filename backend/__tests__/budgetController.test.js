@@ -1,71 +1,53 @@
 /**
  * Regression suite for T-053 (2026-08-26, overnight continuous-improvement
- * pass). Zero prior test coverage existed for budgetController.js.
+ * pass; admin-gated 2026-08-28 per owner decision).
  *
- * FINDING (owner decision, no source change made this pass): `BudgetSession`
- * (`sessionKey: 'global'`) and `VirtualPortfolio` (`portfolioKey: 'global'`)
- * are both app-wide singletons — there is exactly one AI paper-trading
- * "budget manager" shared by every user of the app, not one per user. Its
- * routes (`backend/src/routes/budget.js`) gate every endpoint with `protect`
- * only:
+ * ORIGINAL FINDING: `BudgetSession` (`sessionKey: 'global'`) and
+ * `VirtualPortfolio` (`portfolioKey: 'global'`) are both app-wide
+ * singletons — there is exactly one AI paper-trading "budget manager"
+ * shared by every user of the app, not one per user. `POST /budget/start`
+ * and `POST /budget/stop` were gated with `protect` only (no role check),
+ * and self-registration always creates `role: 'user'` — so any
+ * authenticated user could wipe the shared VirtualPortfolio's entire
+ * performance history and force-close every open virtual trade
+ * system-wide.
  *
- *   router.post('/start', protect, ...ctrl.start);
- *   router.post('/stop',  protect, ctrl.stop);
+ * OWNER DECISION (2026-08-28): admin-gate both endpoints, matching this
+ * project's sibling pattern (`routes/signals.js`'s `/scan`,
+ * `routes/tracker.js`'s `/evaluate`, both `authorize('admin')`).
+ * `budget.js` now reads:
  *
- * `protect` only requires a valid JWT — it does NOT check `role`. Self-
- * registration (`POST /api/v1/auth/register`, `routes/auth.js`) is open to
- * anyone and always creates `role: 'user'` (`models/User.js`), never
- * 'admin'. So today, ANY authenticated user of the app — not just an admin —
- * can:
+ *   router.post('/start', protect, authorize('admin'), ...ctrl.start);
+ *   router.post('/stop',  protect, authorize('admin'), ctrl.stop);
  *
- *   - POST /budget/start with any budget $1..$1,000,000: this WIPES the
- *     single shared VirtualPortfolio (totalProfit, totalLoss, winCount,
- *     lossCount, peakBalance, maxDrawdown, bestTrade, worstTrade,
- *     balanceHistory — the whole performance history shown to every user)
- *     and resets it to their chosen starting budget, AND force-closes every
- *     currently open virtual trade system-wide
- *     (`VirtualTrade.updateMany({status:'open'}, {$set:{status:'expired',
- *     exitReason:'session_reset'}})` — not scoped to the caller, ALL open
- *     trades for ALL users/sources).
- *   - POST /budget/stop: pauses the shared AI budget manager for everyone.
+ * This suite now locks in the FIXED behavior: a non-admin caller is
+ * rejected with 403 before ever reaching validation or the controller, and
+ * an admin caller behaves exactly as any caller did before the fix. See
+ * PROJECT_STATUS.md T-053 for the full history.
  *
- * This is the same class of gap as T-052 (a state-mutating endpoint
- * reachable by a caller with less privilege than the mutation warrants), but
- * unlike T-052 there is no single unambiguous fix here: this project's own
- * sibling endpoints show BOTH patterns already in use for endpoints that
- * mutate this same kind of global state --
- *   `routes/signals.js`:  `router.post('/scan', authorize('admin'), ...)`
- *   `routes/tracker.js`:  `router.post('/evaluate', authorize('admin'), ...)`
- * -- which argues start/stop should be admin-gated too. But the Flutter
- * mobile app's Start/Stop budget-manager controls
- * (`mobile/lib/core/providers/budget_provider.dart`) are wired for ANY
- * signed-in user with no role check on the client side either, and there is
- * no web/admin dashboard in this repo — meaning the feature was built
- * end-to-end (backend route + mobile UI) as available to any account.
- * Whether that's an intentional "this app is for a small set of trusted
- * accounts, all users are treated as trusted" design, or an oversight that
- * missed the `authorize('admin')` pattern used elsewhere, is a product/
- * access-control decision, not a code-correctness bug — and naively adding
- * `authorize('admin')` risks locking the owner's own mobile app out of its
- * core interactive feature if the owner's own account isn't flagged admin.
- * See PROJECT_STATUS.md T-053 for the full options writeup.
- *
- * This pass adds first-ever test coverage for budgetController.js and locks
- * in CURRENT behavior (non-admin start/stop succeeds) as an explicit
- * regression guard, without changing any authorization or trading logic.
+ * IMPORTANT OPERATIONAL NOTE left for the owner: this gate only protects
+ * the app if the owner's own account actually has role:'admin' in the
+ * database — self-registration never assigns it. If the owner's account is
+ * still role:'user', this change will lock them out of Start/Stop in the
+ * mobile app until their account is promoted (see PROJECT_STATUS.md).
  */
 const express = require('express');
 const request = require('supertest');
 
-jest.mock('../src/middleware/auth', () => ({
-  protect: (req, res, next) => {
-    // Deliberately role:'user' (NOT admin) -- this is the exact caller
-    // shape T-053 documents as currently able to reach these routes.
-    req.user = { _id: 'user1', id: 'user1', role: 'user' };
-    next();
-  },
-  authorize: () => (req, res, next) => next(),
-}));
+// Mock `protect` only (auth-by-header for test control); use the REAL
+// `authorize` implementation so this suite actually exercises the fix
+// rather than continuing to bypass it like the pre-fix version did.
+jest.mock('../src/middleware/auth', () => {
+  const actual = jest.requireActual('../src/middleware/auth');
+  return {
+    ...actual,
+    protect: (req, res, next) => {
+      const role = req.headers['x-test-role'] || 'user';
+      req.user = { _id: 'user1', id: 'user1', role };
+      next();
+    },
+  };
+});
 
 // budgetController destructures `{ getSummary }` out of this module at
 // require-time, so the test must mutate the SAME jest.fn() instance via
@@ -100,38 +82,64 @@ function fakeReqRes(body = {}, query = {}) {
   return { req: { body, query }, res };
 }
 
-describe('T-053 regression guard: budget/start and budget/stop are reachable by a non-admin user', () => {
-  test('a role:"user" (non-admin) caller can start the shared budget session and it wipes/resets global state', async () => {
+describe('T-053 fix: budget/start and budget/stop are admin-only', () => {
+  test('a role:"user" (non-admin) caller is rejected with 403 and never reaches the global-state mutation', async () => {
     BudgetSession.findOne = jest.fn(async () => ({
       sessionKey: 'global', status: 'paused', save: jest.fn(async function () { return this; }),
     }));
     VirtualPortfolio.findOneAndUpdate = jest.fn(async () => ({}));
     VirtualTrade.updateMany = jest.fn(async () => ({ modifiedCount: 3 }));
 
-    const res = await request(app).post('/budget/start').send({ budget: 1000 });
+    const res = await request(app)
+      .post('/budget/start')
+      .set('x-test-role', 'user')
+      .send({ budget: 1000 });
+
+    expect(res.status).toBe(403);
+    expect(VirtualPortfolio.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(VirtualTrade.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('a role:"user" (non-admin) caller cannot pause the shared budget session either', async () => {
+    const save = jest.fn(async function () { return this; });
+    BudgetSession.findOne = jest.fn(async () => ({ sessionKey: 'global', status: 'active', save }));
+
+    const res = await request(app).post('/budget/stop').set('x-test-role', 'user').send({});
+
+    expect(res.status).toBe(403);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test('an admin caller can still start the shared budget session (same behavior as before the fix)', async () => {
+    BudgetSession.findOne = jest.fn(async () => ({
+      sessionKey: 'global', status: 'paused', save: jest.fn(async function () { return this; }),
+    }));
+    VirtualPortfolio.findOneAndUpdate = jest.fn(async () => ({}));
+    VirtualTrade.updateMany = jest.fn(async () => ({ modifiedCount: 3 }));
+
+    const res = await request(app)
+      .post('/budget/start')
+      .set('x-test-role', 'admin')
+      .send({ budget: 1000 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    // Confirms the non-admin caller's request really did reach and mutate
-    // the GLOBAL singleton, not something scoped to them.
     expect(VirtualPortfolio.findOneAndUpdate).toHaveBeenCalledWith(
       { portfolioKey: 'global' },
       expect.objectContaining({ startingBalance: 1000, currentBalance: 1000 }),
       expect.objectContaining({ upsert: true }),
     );
-    // Confirms it force-closes ALL open trades system-wide, not just the
-    // caller's own.
     expect(VirtualTrade.updateMany).toHaveBeenCalledWith(
       { status: 'open' },
       { $set: { status: 'expired', exitReason: 'session_reset' } },
     );
   });
 
-  test('a role:"user" (non-admin) caller can pause the shared budget session', async () => {
+  test('an admin caller can still pause the shared budget session', async () => {
     const save = jest.fn(async function () { return this; });
     BudgetSession.findOne = jest.fn(async () => ({ sessionKey: 'global', status: 'active', save }));
 
-    const res = await request(app).post('/budget/stop').send({});
+    const res = await request(app).post('/budget/stop').set('x-test-role', 'admin').send({});
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -139,19 +147,19 @@ describe('T-053 regression guard: budget/start and budget/stop are reachable by 
   });
 });
 
-describe('budgetController.start validation (general coverage)', () => {
+describe('budgetController.start validation (general coverage, admin caller)', () => {
   test('rejects a budget below the $1 minimum', async () => {
-    const res = await request(app).post('/budget/start').send({ budget: 0 });
+    const res = await request(app).post('/budget/start').set('x-test-role', 'admin').send({ budget: 0 });
     expect(res.status).toBe(400);
   });
 
   test('rejects a budget above the $1,000,000 maximum', async () => {
-    const res = await request(app).post('/budget/start').send({ budget: 1_000_001 });
+    const res = await request(app).post('/budget/start').set('x-test-role', 'admin').send({ budget: 1_000_001 });
     expect(res.status).toBe(400);
   });
 
   test('rejects an invalid riskLevel', async () => {
-    const res = await request(app).post('/budget/start').send({ budget: 500, riskLevel: 'extreme' });
+    const res = await request(app).post('/budget/start').set('x-test-role', 'admin').send({ budget: 500, riskLevel: 'extreme' });
     expect(res.status).toBe(400);
   });
 
@@ -162,7 +170,7 @@ describe('budgetController.start validation (general coverage)', () => {
     VirtualPortfolio.findOneAndUpdate = jest.fn(async () => ({}));
     VirtualTrade.updateMany = jest.fn(async () => ({}));
 
-    const res = await request(app).post('/budget/start').send({ budget: 750 });
+    const res = await request(app).post('/budget/start').set('x-test-role', 'admin').send({ budget: 750 });
 
     expect(res.status).toBe(200);
     expect(res.body.session.riskLevel).toBe('medium');

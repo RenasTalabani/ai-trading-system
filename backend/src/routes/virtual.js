@@ -1,6 +1,6 @@
 const express  = require('express');
 const { body, query, param, validationResult } = require('express-validator');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 const VirtualTrade = require('../models/VirtualTrade');
 const {
   getPerformance, getSummary, resetPortfolio, setCapital, openFuturesTrade,
@@ -140,7 +140,7 @@ router.get('/trades/history', [
 });
 
 // ─── POST /api/v1/virtual/reset ───────────────────────────────────────────────
-router.post('/reset', [
+router.post('/reset', authorize('admin'), [
   body('startingBalance').optional().isFloat({ min: 10, max: 1_000_000 }),
   body('riskPerTradePct').optional().isFloat({ min: 1, max: 50 }),
 ], async (req, res) => {
@@ -158,7 +158,7 @@ router.post('/reset', [
 });
 
 // ─── POST /api/v1/virtual/set-capital ────────────────────────────────────────
-router.post('/set-capital', [
+router.post('/set-capital', authorize('admin'), [
   body('startingBalance').optional().isFloat({ min: 10, max: 1_000_000 }),
   body('riskPerTradePct').optional().isFloat({ min: 1, max: 50 }),
 ], async (req, res) => {

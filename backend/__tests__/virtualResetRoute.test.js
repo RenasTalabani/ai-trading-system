@@ -1,60 +1,49 @@
 /**
  * Regression suite for T-056 (2026-08-26, overnight continuous-improvement
- * pass). Zero prior route-level test coverage existed for
- * `backend/src/routes/virtual.js`'s `/reset` and `/set-capital` endpoints.
+ * pass; admin-gated 2026-08-28 per owner decision).
  *
- * FINDING (owner decision, no source change made this pass): exactly like
- * T-053's `budget/start` and `budget/stop`, `POST /virtual/reset` and
- * `POST /virtual/set-capital` are gated with `protect` only:
+ * ORIGINAL FINDING: exactly like T-053's `budget/start`/`budget/stop`,
+ * `POST /virtual/reset` and `POST /virtual/set-capital` were gated with
+ * `protect` only (no role check). `VirtualPortfolio` (`portfolioKey:
+ * 'global'`) and every `VirtualTrade` document are shared, app-wide
+ * singletons with no per-user ownership field — so any authenticated user
+ * could permanently delete every user's trade history
+ * (`VirtualTrade.deleteMany({})`) via `/reset`, or silently overwrite the
+ * shared portfolio's capital settings via `/set-capital`. This was flagged
+ * as HIGHER urgency than T-053 since `/reset` is data deletion, not a
+ * reversible overwrite.
  *
- *   router.use(protect);
- *   router.post('/reset', [...validators...], async (req, res) => { ... });
- *   router.post('/set-capital', [...validators...], async (req, res) => { ... });
+ * OWNER DECISION (2026-08-28): admin-gate both endpoints, matching
+ * T-053's resolution and this project's sibling pattern (`authorize
+ * ('admin')`). `virtual.js` now reads:
  *
- * `protect` only requires a valid JWT — it does not check `role`, and
- * self-registration always creates `role: 'user'` (see T-053's writeup in
- * `budgetController.test.js` and `PROJECT_STATUS.md`). `VirtualPortfolio`
- * (`portfolioKey: 'global'`) and every `VirtualTrade` document are shared,
- * app-wide singletons with no per-user ownership field at all — so this is
- * the SAME global state T-053 already documented, reached through a
- * different, even more severe endpoint:
+ *   router.post('/reset',       authorize('admin'), [...validators...], ...);
+ *   router.post('/set-capital', authorize('admin'), [...validators...], ...);
  *
- *   - POST /virtual/reset calls virtualTrackingService.resetPortfolio(),
- *     which does `VirtualTrade.deleteMany({})` (permanently deletes EVERY
- *     trade record for EVERY user of the app, not just the caller's own)
- *     followed by `VirtualPortfolio.deleteMany({})` and a fresh
- *     VirtualPortfolio.create() at the caller's chosen starting balance.
- *     This is data destruction, not just a state overwrite like T-053's
- *     budget/start.
- *   - POST /virtual/set-capital calls setCapital(), which overwrites the
- *     shared portfolio's startingBalance/riskPerTradePct for everyone.
+ * This suite now locks in the FIXED behavior: a non-admin caller is
+ * rejected with 403 before validation or the service call ever runs, and
+ * an admin caller behaves exactly as any caller did before the fix. See
+ * PROJECT_STATUS.md T-056 for the full history.
  *
- * Confirmed via `mobile/lib/core/providers/virtual_portfolio_provider.dart`
- * that both are called by the Flutter app for any signed-in user with no
- * client-side role check (`ApiService.dio.post('virtual/reset', ...)` /
- * `('virtual/set-capital', ...)`), the same "built end-to-end as available
- * to any account, no separate admin surface exists in this repo" situation
- * T-053 already found for budget/start+stop — so this is not a single
- * unambiguous fix either; see PROJECT_STATUS.md T-056 for the full options
- * writeup, following T-053's precedent.
- *
- * This pass adds first-ever route-level test coverage for these two
- * endpoints and locks in CURRENT behavior (non-admin reset/set-capital
- * succeeds and reaches the underlying service call) as an explicit
- * regression guard, without changing any authorization logic.
+ * IMPORTANT OPERATIONAL NOTE: same caveat as T-053 — this only protects
+ * the app if the owner's own account has role:'admin' in the database.
  */
 const express = require('express');
 const request = require('supertest');
 
-jest.mock('../src/middleware/auth', () => ({
-  protect: (req, res, next) => {
-    // Deliberately role:'user' (NOT admin) -- this is the exact caller
-    // shape T-056 documents as currently able to reach these routes.
-    req.user = { _id: 'user1', id: 'user1', role: 'user' };
-    next();
-  },
-  authorize: () => (req, res, next) => next(),
-}));
+// Mock `protect` only (auth-by-header for test control); use the REAL
+// `authorize` implementation so this suite actually exercises the fix.
+jest.mock('../src/middleware/auth', () => {
+  const actual = jest.requireActual('../src/middleware/auth');
+  return {
+    ...actual,
+    protect: (req, res, next) => {
+      const role = req.headers['x-test-role'] || 'user';
+      req.user = { _id: 'user1', id: 'user1', role };
+      next();
+    },
+  };
+});
 
 // virtual.js destructures `{ resetPortfolio, setCapital, ... }` out of
 // virtualTrackingService at require-time, so the test must mutate the SAME
@@ -87,7 +76,7 @@ function appFor() {
   return app;
 }
 
-describe('virtual.js — /reset and /set-capital route auth-gating (T-056)', () => {
+describe('virtual.js — /reset and /set-capital are admin-only (T-056)', () => {
   let app;
 
   beforeEach(() => {
@@ -96,9 +85,30 @@ describe('virtual.js — /reset and /set-capital route auth-gating (T-056)', () 
     virtualTrackingService.setCapital.mockReset().mockResolvedValue(undefined);
   });
 
-  test('regression: a non-admin user can reset the shared portfolio (wipes all trades for everyone)', async () => {
+  test('a non-admin user is rejected with 403 and the shared portfolio/trades are never touched', async () => {
     const res = await request(app)
       .post('/api/v1/virtual/reset')
+      .set('x-test-role', 'user')
+      .send({ startingBalance: 1000, riskPerTradePct: 10 });
+
+    expect(res.status).toBe(403);
+    expect(virtualTrackingService.resetPortfolio).not.toHaveBeenCalled();
+  });
+
+  test('a non-admin user cannot overwrite the shared portfolio capital settings either', async () => {
+    const res = await request(app)
+      .post('/api/v1/virtual/set-capital')
+      .set('x-test-role', 'user')
+      .send({ startingBalance: 2000, riskPerTradePct: 20 });
+
+    expect(res.status).toBe(403);
+    expect(virtualTrackingService.setCapital).not.toHaveBeenCalled();
+  });
+
+  test('an admin can reset the shared portfolio (same behavior as before the fix)', async () => {
+    const res = await request(app)
+      .post('/api/v1/virtual/reset')
+      .set('x-test-role', 'admin')
       .send({ startingBalance: 1000, riskPerTradePct: 10 });
 
     expect(res.status).toBe(200);
@@ -107,16 +117,17 @@ describe('virtual.js — /reset and /set-capital route auth-gating (T-056)', () 
     expect(virtualTrackingService.resetPortfolio).toHaveBeenCalledWith(1000, 10);
   });
 
-  test('regression: reset with no body still succeeds, defaulting to $500 / 5% (no admin check blocks it)', async () => {
-    const res = await request(app).post('/api/v1/virtual/reset').send({});
+  test('an admin resetting with no body still defaults to $500 / 5%', async () => {
+    const res = await request(app).post('/api/v1/virtual/reset').set('x-test-role', 'admin').send({});
 
     expect(res.status).toBe(200);
     expect(virtualTrackingService.resetPortfolio).toHaveBeenCalledWith(500, 5);
   });
 
-  test('regression: a non-admin user can overwrite the shared portfolio capital settings', async () => {
+  test('an admin can overwrite the shared portfolio capital settings', async () => {
     const res = await request(app)
       .post('/api/v1/virtual/set-capital')
+      .set('x-test-role', 'admin')
       .send({ startingBalance: 2000, riskPerTradePct: 20 });
 
     expect(res.status).toBe(200);
@@ -125,18 +136,20 @@ describe('virtual.js — /reset and /set-capital route auth-gating (T-056)', () 
     expect(virtualTrackingService.setCapital).toHaveBeenCalledWith(2000, 20);
   });
 
-  test('reset still validates its own field bounds (out-of-range startingBalance is rejected)', async () => {
+  test('reset still validates its own field bounds for an admin caller (out-of-range startingBalance is rejected)', async () => {
     const res = await request(app)
       .post('/api/v1/virtual/reset')
+      .set('x-test-role', 'admin')
       .send({ startingBalance: 5 }); // below the isFloat({min:10}) bound
 
     expect(res.status).toBe(400);
     expect(virtualTrackingService.resetPortfolio).not.toHaveBeenCalled();
   });
 
-  test('set-capital still validates its own field bounds (riskPerTradePct above 50 is rejected)', async () => {
+  test('set-capital still validates its own field bounds for an admin caller (riskPerTradePct above 50 is rejected)', async () => {
     const res = await request(app)
       .post('/api/v1/virtual/set-capital')
+      .set('x-test-role', 'admin')
       .send({ riskPerTradePct: 90 });
 
     expect(res.status).toBe(400);
