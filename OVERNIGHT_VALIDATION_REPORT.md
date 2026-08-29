@@ -5,6 +5,29 @@
 
 ---
 
+## 0. INDEPENDENT VERIFICATION OF CLAUDE CODE'S FIX PASS (added 2026-08-29, ~18:30 UTC)
+
+Claude Code (separate terminal session) reported all 8 tasks from `claude-code-task.json` done on branch `fix/overnight-validation-bugs` (unmerged, unpushed). I independently re-verified this myself against the real branch, the real running app, and by re-running tests — not by trusting the self-report. Summary: **the work is real and mostly holds up, with one important caveat found below that the self-report did not surface.**
+
+| Task | My independent verification | Verdict |
+|---|---|---|
+| Branch/commits exist | `git log`/`git diff master...fix/overnight-validation-bugs` — 24 files, +2074/-47, 5 real commits | **Confirmed real** |
+| BUG-001 (5-min hang) | Code review: lock + double-checked cache + `asyncio.gather` replacing the sequential for-loop — correct pattern, preserves output shape. Live: fired 7 concurrent `/predict` calls myself just now — all 200 OK in 0.6–2.3s | **Confirmed working in this test** (cache was likely warm; a from-cold-cache hang can't be 100% ruled out without a longer test) |
+| BUG-002 (false "insufficient data") | Code review: shared session + 3-attempt retry/backoff, correct. Live: same 7 concurrent calls, previously all failed — now all succeeded | **Confirmed fixed** |
+| BUG-002 side-effect check (my own task spec required this) | Re-ran `POST /api/global/scan` live just now: **still `scanned:13, passed_filter:0, blocked:13, best:null`** — 4th time observed (05:00, 07:20, 16:30, 18:33 UTC) | **Not resolved by the fix** — the 0/13 filter result was never actually caused by BUG-002. Claude Code's report doesn't mention re-checking this specifically; I did, and it's still 0/13. Root cause is still open. |
+| BUG-003 (MATICUSDT frozen) | Queried the live trade record myself: `exitReason:"HALTED"`, `status:"closed_profit"`, `pnl:0`, closed at `entryPrice===exitPrice===0.3794` | **Confirmed closed, live, real** — minor honest flag: because pnl=0 is treated as a "win" by existing code convention, this nudged the all-time win count from 41→42 and total from 147→148 (27.9%→28.4%), which is a labeling artifact, not real trading improvement |
+| BUG-004 (in-app notifications) | Code confirmed wired in (`sendTradeOpenedNotification` called from `virtualTrackingService.js`), fans out to all active users at time of event. Ran the actual test file myself: `notificationServiceTradeEvents.test.js` — **passed**. Could not personally see the 5 notification records — my fresh disposable test account only receives notifications created after its own registration, and I didn't have an older account's login to check | **Code + tests confirmed; DB records not personally observed (real limitation, not a red flag)** |
+| DATA-001 (147 vs 162) | Read the actual diff: documented as cancelled trades being included/excluded per endpoint, with the exact math (106+41=147, +15 cancelled=162) — matches current live numbers (148/163, same 15 gap) | **Confirmed accurate, documented not code-changed, as claimed** |
+| DATA-002 (macro_sentiment) | Read the actual diff: two genuinely different fields/formulas sharing a key name — documented in code comments | **Confirmed accurate, as claimed** |
+| WINRATE-DIAGNOSIS | Read `WINRATE_DIAGNOSIS.md` in full. Cross-checked its headline "unique-trades win rate 14.3%" against a completely independent live source — the ai-service's own `/api/health` `phase8.online_learning.win_rate` field, which reads **0.1429 right now** | **Strongly corroborated by an independent live number I pulled myself — this finding looks solid** |
+| TEST-001 (concurrent load test) | Couldn't run the Python test file directly (this bridge's Linux environment can't execute the Windows-built ai-service `.venv`, and has no network to install a fresh one) — a real tooling limitation on my end, not a finding about the code. Ran the equivalent live: 7 concurrent `/predict` calls, all succeeded | **Behavior verified live; the specific pytest file itself not run by me** |
+
+Also ran the actual backend Jest suite myself (not trusted from the report): all 4 new/modified test files — **50/50 tests passed**, output captured directly from `jest`, not copied from Claude Code's summary.
+
+**Bottom line: yes, he did real, verifiable work — this was not a fabricated report.** The one thing to correct before treating this as fully closed: the `/api/global/scan` 0/13 result, which the overnight report suspected was caused by BUG-002, is **still happening after the fix**, so that root cause is still unknown and needs its own investigation — it should not be assumed solved.
+
+---
+
 ## 1. Executive Summary
 
 | Component | Status |

@@ -68,6 +68,39 @@ MIN_FUSED_SCORE = 65
 _STRONG_BEAR_BLOCKS_BUY  = {"strong_bear", "bearish"}
 _STRONG_BULL_BLOCKS_SELL = {"strong_bull", "bullish"}
 
+# T-068 (2026-08-29, root-caused after the overnight validation task list's
+# BUG-002 fix was independently re-verified and /global/scan was found to
+# still return 0/13 passing assets -- not resolved by that fix, as
+# suspected). The 5-state vocabulary MacroDataService._macro_bias() (see
+# macro_data_service.py) actually produces is strong_bull/mild_bull/
+# neutral/mild_bear/strong_bear -- it never returns "bullish"/"bearish" at
+# all. The macro_sc calculation below only ever matched "bullish"/
+# "strong_bull" (bull) and "bearish"/"strong_bear" (bear), so "mild_bull"
+# and "mild_bear" -- 2 of the 5 real states -- always fell through to the
+# neutral default (50), regardless of which way the macro backdrop
+# actually leaned. Combined with the RL-adaptive macro weight currently
+# having drifted to ~72% of the fused-score formula (a separate, already-
+# documented, deliberately-not-fixed issue -- see T-041's floor/ceiling
+# gap), this made it mathematically impossible for ANY asset to reach
+# MIN_FUSED_SCORE (65): with macro_sc pinned at 50 and only ~28% of the
+# weight left for technical+news+social, the maximum achievable fused
+# score even with every other signal at its ceiling (100) was ~28.3 (the
+# non-macro weight sum) + 35.85 (0.5 * the macro weight) = ~64.15 --
+# short by the threshold even in the best case. This function widens the
+# match to the real 5-state vocabulary the code already receives, using
+# the existing two extreme anchor values (70/30) with a graduated
+# midpoint for the "mild" states. This does not touch the RL weight drift
+# itself (T-041 remains an explicit owner decision, not silently
+# resolved here) -- it removes one of two compounding causes, not both.
+def _macro_sc_from_bias(macro_sentiment: str) -> float:
+    return {
+        "strong_bull": 70, "bullish":  70,
+        "mild_bull":   60,
+        "neutral":     50,
+        "mild_bear":   40,
+        "strong_bear": 30, "bearish":  30,
+    }.get(macro_sentiment, 50)
+
 # Singleton services (shared across calls)
 _risk_mgr   = RiskManager()
 _regime_det = RegimeDetector()
@@ -227,8 +260,7 @@ class GlobalAnalyzer:
             weights   = _rl_engine.get_weights()
             news_sc   = sent.get("news_score", 50)
             social_sc = sent.get("social_score", 50)
-            macro_sc  = 70 if macro_sentiment in ("bullish","strong_bull") else \
-                        30 if macro_sentiment in ("bearish","strong_bear") else 50
+            macro_sc  = _macro_sc_from_bias(macro_sentiment)
             rl_score  = round(
                 fs         * weights["technical"] +
                 news_sc    * weights["news"] +
@@ -324,8 +356,7 @@ class GlobalAnalyzer:
 
         # RL-weighted fusion
         weights    = _rl_engine.get_weights()
-        macro_sc   = 70 if macro_sentiment in ("bullish","strong_bull") else \
-                     30 if macro_sentiment in ("bearish","strong_bear") else 50
+        macro_sc   = _macro_sc_from_bias(macro_sentiment)
         fused = (
             tech_score            * (weights["technical"] + weights["social"]) +
             float(news_score)     * weights["news"] +
