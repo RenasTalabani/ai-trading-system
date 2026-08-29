@@ -1,25 +1,30 @@
 """
-Tests for RLWeightEngine (T-041, 2026-08-22 continuous-improvement pass).
+Tests for RLWeightEngine.
 
-Investigated: MIN_WEIGHT=0.05 ("floor") and MAX_WEIGHT=0.70 ("ceiling")
-are applied to each weight's raw value *before* _normalise() rescales the
-whole dict to sum to 1.0. Confirmed by simulation that under sustained,
-realistic feedback (the same signal source consistently winning while the
-other three consistently lose -- exactly the steady state this module is
-designed to reach) the *effective* weight actually returned by
-get_weights() can settle above the documented 0.70 ceiling (~0.7277 in
-the scenario simulated below), because the post-clamp renormalisation
-step is unbounded. This is a genuine, evidence-backed gap between the
-documented "floor"/"ceiling" contract and actual behavior, but -- like
-T-038's RiskManager finding -- fixing it correctly requires enforcing two
-constraints at once (sum=1.0 AND each weight in [MIN_WEIGHT, MAX_WEIGHT]),
-which needs an actual algorithm choice (e.g. iterative water-filling
-redistribution), not a single unambiguous one-line change, and it would
-alter live signal-fusion weights. Per the standing instruction not to
-invent problems/features without an evidence-backed single correct fix,
-this pass documents and LOCKS IN the current actual behavior with
-regression tests (so a future intentional fix has a clear "before" to
-diff against) rather than silently changing weighting.
+Originally written for T-041 (2026-08-22): MIN_WEIGHT=0.05 ("floor") and
+MAX_WEIGHT=0.70 ("ceiling") are applied to each weight's raw value
+*before* _normalise() rescales the whole dict to sum to 1.0. Simulation
+confirmed that under sustained, realistic feedback (the same signal
+source consistently winning while the other three consistently lose),
+the *effective* weight actually returned by get_weights() could settle
+above the documented 0.70 ceiling (~0.7277 in the scenario simulated
+below), because the post-clamp renormalisation step was unbounded. At
+the time this was left as a documented, owner-decision gap rather than
+fixed, since a correct fix needs an algorithm choice, not a one-line
+change, and would alter live signal-fusion weights.
+
+**T-069 (2026-08-29): the owner has since authorized fixing this**, after
+its real consequence was observed live -- the "macro" component drifting
+to ~72% of the fused score, which independently combined with a separate
+vocabulary bug (T-068) to make /global/scan's pass threshold
+mathematically unreachable regardless of real market conditions.
+_normalise() now runs its naive rescale through a new
+_clamp_to_effective_bounds() pass (iterative clamp-and-redistribute) so
+the *returned* weight always stays within [MIN_EFFECTIVE_WEIGHT,
+MAX_EFFECTIVE_WEIGHT] = [10%, 45%]. The tests below that used to LOCK IN
+the old gap as expected behavior now assert the fix actually holds,
+using the exact same steady-state scenario that used to demonstrate the
+bug -- see TestEffectiveWeightBoundsEnforcedUnderSustainedFeedback.
 
 Also investigated: MIN_UPDATES_LOG=5 is defined but never referenced
 anywhere in this module. Confirmed via grep this is the only occurrence.
@@ -42,6 +47,9 @@ from app.services.rl_weight_engine import (
     MIN_WEIGHT,
     MAX_WEIGHT,
     LEARNING_RATE,
+    MIN_EFFECTIVE_WEIGHT,
+    MAX_EFFECTIVE_WEIGHT,
+    _clamp_to_effective_bounds,
 )
 
 
@@ -64,9 +72,15 @@ class TestBasicWeightUpdateBehavior:
         assert abs(sum(w.values()) - 1.0) < 1e-3
 
     def test_win_increases_contributing_signal_relative_weight(self, engine):
-        before = engine.get_weights()["technical"]
-        w = engine.record_outcome("WIN", {"technical": 1.0, "news": 0.0, "social": 0.0, "macro": 0.0})
-        assert w["technical"] > before
+        # T-069: uses "news" (default 0.20) rather than "technical" here --
+        # "technical"'s default (0.45) sits exactly at the new
+        # MAX_EFFECTIVE_WEIGHT ceiling, so a WIN update to it would
+        # correctly get clamped right back to 0.45 (no observable
+        # increase), which is the new bound working as intended, not a
+        # broken test. "news" has headroom below the ceiling instead.
+        before = engine.get_weights()["news"]
+        w = engine.record_outcome("WIN", {"technical": 0.0, "news": 1.0, "social": 0.0, "macro": 0.0})
+        assert w["news"] > before
 
     def test_loss_decreases_contributing_signal_relative_weight(self, engine):
         before = engine.get_weights()["technical"]
@@ -127,19 +141,19 @@ class TestPersistence:
         assert e.get_weights() == DEFAULT_WEIGHTS
 
 
-class TestDocumentedCeilingViolationUnderSustainedFeedback:
+class TestEffectiveWeightBoundsEnforcedUnderSustainedFeedback:
     """
-    T-041 regression guard: LOCKS IN the actual (documented-as-a-gap)
-    behavior so any future intentional fix has a clear, tested "before".
-    Not asserting this is *desired* behavior -- asserting it is the
-    *current, actual* behavior, per the OWNER DECISION flagged in
-    TASKS.md/PROJECT_STATUS.md.
+    T-069 (2026-08-29, owner-authorized fix): this class used to LOCK IN
+    the T-041 gap (the effective weight could drift past the documented
+    ceiling) as a documented-but-unfixed behavior. The owner has since
+    authorized fixing it directly -- these tests now assert the bug is
+    actually gone, using the exact steady-state scenario that used to
+    demonstrate it (500 rounds of "technical" always winning, the other
+    three always losing -- the realistic steady state a persistently
+    outperforming signal source would drive the RL loop toward).
     """
 
-    def test_sustained_one_sided_feedback_can_push_effective_weight_past_documented_ceiling(self, engine):
-        # "technical" always wins; the other three always lose -- a
-        # realistic (not exotic) steady-state the RL loop is designed to
-        # converge toward given a persistently outperforming signal.
+    def test_sustained_one_sided_feedback_no_longer_breaches_the_effective_ceiling(self, engine):
         for _ in range(500):
             engine.record_outcome("WIN",  {"technical": 1.0, "news": 0.0, "social": 0.0, "macro": 0.0})
             engine.record_outcome("LOSS", {"technical": 0.0, "news": 1.0, "social": 0.0, "macro": 0.0})
@@ -147,24 +161,92 @@ class TestDocumentedCeilingViolationUnderSustainedFeedback:
             engine.record_outcome("LOSS", {"technical": 0.0, "news": 0.0, "social": 0.0, "macro": 1.0})
 
         w = engine.get_weights()
-        # This is the documented gap: the *effective* (post-normalisation)
-        # weight exceeds MAX_WEIGHT, even though MAX_WEIGHT is applied
-        # every single call.
-        assert w["technical"] > MAX_WEIGHT
-        # Weights still always sum to ~1.0 -- the normalisation contract
-        # itself is intact; only the per-key box constraint is not.
+        # Regression: before T-069, this same scenario pushed "technical"
+        # to ~0.7277, past the documented 0.70 ceiling. It must now never
+        # exceed the new, actually-enforced MAX_EFFECTIVE_WEIGHT.
+        assert w["technical"] <= MAX_EFFECTIVE_WEIGHT + 1e-6
+        # And the three losing signals must never be squeezed below the floor.
+        assert w["news"]   >= MIN_EFFECTIVE_WEIGHT - 1e-6
+        assert w["social"] >= MIN_EFFECTIVE_WEIGHT - 1e-6
+        assert w["macro"]  >= MIN_EFFECTIVE_WEIGHT - 1e-6
+        # Weights still always sum to 1.0 -- the normalisation contract
+        # itself is intact, and now so is the per-key box constraint.
         assert abs(sum(w.values()) - 1.0) < 1e-2
 
-    def test_weights_still_sum_to_one_at_every_intermediate_step(self, engine):
-        for i in range(50):
+    def test_weights_stay_within_effective_bounds_at_every_intermediate_step(self, engine):
+        # T-069's own required verification: the getter's output must
+        # stay within the configured bounds regardless of RL engine
+        # state, checked after every single update, not just at the end.
+        for _ in range(50):
             engine.record_outcome("WIN", {"technical": 1.0, "news": 0.0, "social": 0.0, "macro": 0.0})
-            assert abs(sum(engine.get_weights().values()) - 1.0) < 1e-2
+            w = engine.get_weights()
+            assert abs(sum(w.values()) - 1.0) < 1e-2
+            for v in w.values():
+                assert MIN_EFFECTIVE_WEIGHT - 1e-6 <= v <= MAX_EFFECTIVE_WEIGHT + 1e-6
 
     def test_raw_pre_normalisation_clamp_still_applies_every_call(self, engine):
-        # Even though the *effective* weight can drift past MAX_WEIGHT via
-        # normalisation, the per-call raw delta step itself is still
-        # bounded -- confirmed by checking a single large-contribution
-        # update never jumps by more than LEARNING_RATE in one call.
-        before = engine.get_weights()["technical"]
-        after = engine.record_outcome("WIN", {"technical": 1.0, "news": 0.0, "social": 0.0, "macro": 0.0})["technical"]
+        # The original T-041 per-call raw delta bound is unchanged by
+        # T-069 -- confirmed by checking a single large-contribution
+        # update never jumps by more than LEARNING_RATE in one call
+        # (using "news", which has headroom below the effective ceiling,
+        # so the effective-bounds clamp doesn't mask this check).
+        before = engine.get_weights()["news"]
+        after = engine.record_outcome("WIN", {"technical": 0.0, "news": 1.0, "social": 0.0, "macro": 0.0})["news"]
         assert after - before <= LEARNING_RATE + 0.01  # + normalisation slack
+
+    def test_opposite_steady_state_also_respects_bounds(self, engine):
+        # Same scenario, opposite direction: "technical" always loses,
+        # the other three always win -- proves the floor holds too, not
+        # just the ceiling from the primary scenario above.
+        for _ in range(500):
+            engine.record_outcome("LOSS", {"technical": 1.0, "news": 0.0, "social": 0.0, "macro": 0.0})
+            engine.record_outcome("WIN",  {"technical": 0.0, "news": 1.0, "social": 0.0, "macro": 0.0})
+            engine.record_outcome("WIN",  {"technical": 0.0, "news": 0.0, "social": 1.0, "macro": 0.0})
+            engine.record_outcome("WIN",  {"technical": 0.0, "news": 0.0, "social": 0.0, "macro": 1.0})
+
+        w = engine.get_weights()
+        assert w["technical"] >= MIN_EFFECTIVE_WEIGHT - 1e-6
+        for k in ("news", "social", "macro"):
+            assert w[k] <= MAX_EFFECTIVE_WEIGHT + 1e-6
+        assert abs(sum(w.values()) - 1.0) < 1e-2
+
+
+class TestClampToEffectiveBounds:
+    """Direct unit tests for the clamp-and-redistribute algorithm itself,
+    independent of the full RLWeightEngine."""
+
+    def test_already_in_bounds_weights_pass_through_unchanged(self):
+        w = _clamp_to_effective_bounds({"a": 0.30, "b": 0.30, "c": 0.20, "d": 0.20})
+        assert w == {"a": 0.30, "b": 0.30, "c": 0.20, "d": 0.20}
+
+    def test_one_weight_over_ceiling_redistributes_the_excess(self):
+        w = _clamp_to_effective_bounds({"a": 0.70, "b": 0.10, "c": 0.10, "d": 0.10})
+        assert w["a"] == MAX_EFFECTIVE_WEIGHT
+        # Tolerance is 1e-5, not 1e-6: the function's own return statement
+        # rounds each of the 4 values to 6dp independently, which can
+        # accumulate up to ~4*0.5e-6 of drift in the total -- a real
+        # (harmless) rounding artifact, not an algorithm bug.
+        assert abs(sum(w.values()) - 1.0) < 1e-5
+        assert all(MIN_EFFECTIVE_WEIGHT - 1e-6 <= v <= MAX_EFFECTIVE_WEIGHT + 1e-6 for v in w.values())
+
+    def test_the_t041_documented_steady_state_is_correctly_bounded(self):
+        # The exact values T-041's simulation found before this fix existed.
+        w = _clamp_to_effective_bounds({"technical": 0.7277, "news": 0.15, "social": 0.05, "macro": 0.0723})
+        # technical was the only value over the ceiling -- pinned exactly.
+        assert w["technical"] == MAX_EFFECTIVE_WEIGHT
+        # social and macro started under the floor, but redistributing
+        # technical's excess among the remaining free weights lifts both
+        # back above the floor in the same pass -- neither needs a second,
+        # separate pin to hit the bound exactly (that would only happen if
+        # the redistributed share itself still undershot the floor).
+        assert w["social"] >= MIN_EFFECTIVE_WEIGHT - 1e-9
+        assert w["macro"] >= MIN_EFFECTIVE_WEIGHT - 1e-9
+        assert all(v <= MAX_EFFECTIVE_WEIGHT + 1e-9 for v in w.values())
+        assert abs(sum(w.values()) - 1.0) < 1e-5
+
+    def test_multiple_weights_simultaneously_out_of_bounds_still_converges(self):
+        # Two weights over ceiling, one under floor -- exercises the
+        # iterative (not single-pass) part of the algorithm.
+        w = _clamp_to_effective_bounds({"a": 0.60, "b": 0.60, "c": 0.02, "d": -0.22})
+        assert abs(sum(w.values()) - 1.0) < 1e-5
+        assert all(MIN_EFFECTIVE_WEIGHT - 1e-6 <= v <= MAX_EFFECTIVE_WEIGHT + 1e-6 for v in w.values())

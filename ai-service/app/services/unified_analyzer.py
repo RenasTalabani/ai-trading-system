@@ -13,7 +13,22 @@ _TF_MAP = {'15m': '1d', '1h': '7d', '4h': '7d', '1d': '30d'}
 
 
 def _action_to_score(action: str, confidence: float) -> float:
-    """Convert a directional action + confidence into a 0-100 bullish score."""
+    """Convert a directional action + confidence into a 0-100 bullish score.
+
+    T-070 (2026-08-29, owner-reviewed, kept as-is): a HOLD vote here always
+    flattens to exactly 50 regardless of its own reported `confidence` --
+    e.g. Strategy voting "HOLD, 80% confident" contributes the same neutral
+    50 as "HOLD, 51% confident" to the fused score. Flagged during the
+    overnight validation pass as a candidate contributor to crypto assets
+    struggling to clear MIN_FUSED_SCORE (a confident-but-neutral Strategy
+    vote dilutes a strong directional OB signal at OB's 40% weight no
+    differently than a barely-neutral one would). Owner decision: a HOLD
+    vote genuinely carries no directional edge -- there's no principled way
+    to turn "how confident is this non-signal" into a bullish/bearish
+    lean -- so contributing flat neutral is arguably correct, and the
+    fusion formula is deliberately left unchanged rather than trying to
+    smuggle directional information out of a HOLD's confidence value.
+    """
     if action == 'BUY':
         return confidence
     if action == 'SELL':

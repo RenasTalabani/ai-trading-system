@@ -25,36 +25,100 @@ DEFAULT_WEIGHTS = {
 
 LEARNING_RATE   = 0.02    # how much to shift on each update
 
-# T-041 (2026-08-22) NOTE ON ACTUAL BEHAVIOR:
-# MIN_WEIGHT/MAX_WEIGHT are applied to each weight's *pre-normalisation*
-# raw value inside record_outcome(), before _normalise() rescales the
-# whole dict to sum to 1.0. That rescale step is not itself bounded, so
-# the *effective* weight actually returned by get_weights() (and used
-# directly in every live rl_score fusion formula, e.g.
-# GlobalAnalyzer._score_crypto()'s
-# `rl_score = fs*weights["technical"] + news_sc*weights["news"] + ...`)
-# can end up outside [MIN_WEIGHT, MAX_WEIGHT] despite the names "floor"
+# T-041 (2026-08-22): MIN_WEIGHT/MAX_WEIGHT below are applied to each
+# weight's *pre-normalisation* raw value inside record_outcome(), before
+# _normalise() rescales the whole dict to sum to 1.0. That rescale step
+# was not itself bounded, so the *effective* weight actually returned by
+# get_weights() (and used directly in every live rl_score fusion formula)
+# could end up outside [MIN_WEIGHT, MAX_WEIGHT] despite the names "floor"
 # and "ceiling" implying an absolute bound on that effective weight.
-# Confirmed by simulation: sustained, realistic feedback where the same
-# signal source keeps winning while the other three keep losing (exactly
-# the steady-state this module exists to reach) converges "technical" to
-# an effective weight of ~0.7277 -- above the documented 0.70 ceiling --
-# while the other three settle above the 0.05 floor. The magnitude is
-# modest (roughly +4% over the stated ceiling in the worst realistic case
-# found), and it only manifests after many (~hundreds of) consistent
-# updates, not on any single call.
-# A "fix" that enforces both constraints at once (weights sum to 1.0 AND
-# every individual weight in [MIN_WEIGHT, MAX_WEIGHT]) requires an actual
-# algorithm choice (e.g. iterative water-filling redistribution of the
-# clamped excess/deficit across the unclamped weights) rather than a
-# single unambiguous one-line change, and changes live signal-fusion
-# weights -- so, per the standing instruction not to invent fixes without
-# one evidence-backed correct answer, this pass documents and tests the
-# actual behavior rather than changing it. See TASKS.md/PROJECT_STATUS.md
-# T-041 for the corresponding OWNER DECISION flag.
+# Confirmed by simulation at the time: sustained, realistic feedback
+# (the same signal source consistently winning, the others consistently
+# losing) converged "technical" to an effective weight of ~0.7277 --
+# above the documented 0.70 ceiling. Left undecided at the time since a
+# real fix needs an algorithm choice (enforcing sum=1.0 AND a per-key box
+# constraint simultaneously isn't a single unambiguous one-line change).
+#
+# T-069 (2026-08-29, owner-authorized fix): the owner reviewed this gap
+# together with its real, live-observed consequence -- the "macro"
+# component drifting to ~72% of the fused score, which independently
+# combined with a separate vocabulary bug (T-068) to make it
+# mathematically impossible for any asset to pass MIN_FUSED_SCORE
+# regardless of real market conditions -- and authorized bounding the
+# *effective* (post-normalisation) weight directly, using an iterative
+# clamp-and-redistribute pass (see _clamp_to_effective_bounds()) so the
+# RL engine can still adapt within a meaningful range but can never again
+# let one component structurally dominate the fusion. The original
+# pre-normalisation MIN_WEIGHT/MAX_WEIGHT below are UNCHANGED and still
+# serve their original purpose (rate-limiting how far a single update can
+# move a raw weight) -- MIN_EFFECTIVE_WEIGHT/MAX_EFFECTIVE_WEIGHT are a
+# second, independent bound on the final value actually used.
 MIN_WEIGHT      = 0.05    # floor on each weight's raw pre-normalisation value
 MAX_WEIGHT      = 0.70    # ceiling on each weight's raw pre-normalisation value
 MIN_UPDATES_LOG = 5       # only log drift after N updates
+
+# T-069: bounds on the final, effective (post-normalisation) weight --
+# what get_weights() actually returns and every live fusion formula
+# actually uses. 10%/45% chosen so the RL engine keeps a meaningful
+# adaptive range (a 4.5x spread between the weakest and strongest
+# possible component) while guaranteeing no single signal can ever
+# structurally decide every outcome on its own. Feasible for this
+# engine's 4 weights (4*0.10=0.40 <= 1.0 <= 4*0.45=1.80); would need
+# reassessing if the number of weighted components ever changes.
+MIN_EFFECTIVE_WEIGHT = 0.10
+MAX_EFFECTIVE_WEIGHT = 0.45
+
+
+def _clamp_to_effective_bounds(weights: dict, min_w: float = MIN_EFFECTIVE_WEIGHT,
+                                max_w: float = MAX_EFFECTIVE_WEIGHT) -> dict:
+    """Clamp every value in `weights` (assumed to already sum to ~1.0)
+    into [min_w, max_w] while keeping the total at exactly 1.0 -- standard
+    iterative water-filling / simplex projection with box constraints.
+
+    Redistributes the total proportionally among the still-"free"
+    weights, then pins the SINGLE worst remaining bound violation (not
+    every violator at once) and repeats. Pinning matters one at a time:
+    if several weights are simultaneously out of bounds, clamping all of
+    them to their exact respective bound in one shot can overshoot the
+    total (e.g. two weights over the ceiling and two under the floor can
+    sum to more than 1.0 once each is pinned to its own bound -- there is
+    no guarantee the bounds alone are individually consistent with
+    sum=1.0, only that *some* feasible assignment exists when
+    n*min_w <= 1.0 <= n*max_w). Pinning the worst violator, then
+    re-deriving the rest from the shrunk remaining budget, converges to a
+    feasible point in at most len(weights) iterations (each iteration
+    permanently pins one more weight, or none remain violating and the
+    loop is done).
+    """
+    w = dict(weights)
+    fixed: dict = {}
+    free = list(w.keys())
+
+    for _ in range(len(w) + 1):
+        if not free:
+            break
+
+        remaining  = 1.0 - sum(fixed.values())
+        free_total = sum(w[k] for k in free)
+        if free_total <= 0:
+            share = remaining / len(free)
+            for k in free:
+                w[k] = share
+        else:
+            scale = remaining / free_total
+            for k in free:
+                w[k] = w[k] * scale
+
+        violators = [k for k in free if w[k] > max_w + 1e-9 or w[k] < min_w - 1e-9]
+        if not violators:
+            break
+
+        worst = max(violators, key=lambda k: max(w[k] - max_w, min_w - w[k]))
+        w[worst] = max_w if w[worst] > max_w else min_w
+        fixed[worst] = w[worst]
+        free.remove(worst)
+
+    return {k: round(v, 6) for k, v in w.items()}
 
 
 class RLWeightEngine:
@@ -148,4 +212,19 @@ class RLWeightEngine:
         total = sum(w.values())
         if total <= 0:
             return dict(DEFAULT_WEIGHTS)
-        return {k: round(v / total, 4) for k, v in w.items()}
+        naive = {k: v / total for k, v in w.items()}
+        # T-069: the naive rescale above is what used to be returned
+        # directly -- it can (and, per T-041's simulation, eventually
+        # does) push an individual weight outside [MIN_EFFECTIVE_WEIGHT,
+        # MAX_EFFECTIVE_WEIGHT] even though every value going in already
+        # respected [MIN_WEIGHT, MAX_WEIGHT]. Clamp-and-redistribute the
+        # naive result so the *returned* weights always stay in bounds.
+        bounded = _clamp_to_effective_bounds(naive)
+        if any(abs(bounded[k] - round(naive[k], 4)) > 1e-4 for k in bounded):
+            logger.info(
+                f"[RL] T-069 effective-weight bounds "
+                f"([{MIN_EFFECTIVE_WEIGHT:.0%}, {MAX_EFFECTIVE_WEIGHT:.0%}]) adjusted "
+                f"the naively-renormalised weights: "
+                f"{ {k: round(v, 4) for k, v in naive.items()} } -> {bounded}"
+            )
+        return bounded
