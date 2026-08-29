@@ -14,8 +14,10 @@ const BudgetSession    = require('../src/models/BudgetSession');
 // try real Mongoose/Firebase calls against a connection that never exists in
 // this suite, leaving an open handle after the run.
 jest.mock('../src/services/notificationService', () => ({
-  sendTradeClosedNotification: async () => {},
+  sendTradeClosedNotification: jest.fn(async () => {}),
+  sendTradeOpenedNotification: jest.fn(async () => {}),
 }));
+const { sendTradeOpenedNotification } = require('../src/services/notificationService');
 
 function chain(result) {
   return { sort: () => ({ limit: () => ({ lean: async () => result }) }) };
@@ -196,6 +198,14 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
     const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
     expect(trade.signalId).toBeNull();
     expect(trade.aiDecisionId).toBeNull();
+  });
+
+  test('notifies (in-app, BUG-004) that a new position was opened', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    sendTradeOpenedNotification.mockClear();
+    const trade = await svc.approveSuggestion({ asset: 'BTCUSDT', direction: 'BUY', entryPrice: 65000 });
+    expect(sendTradeOpenedNotification).toHaveBeenCalledTimes(1);
+    expect(sendTradeOpenedNotification).toHaveBeenCalledWith(trade);
   });
 
   test('worst-case config (50% risk + max edge multiplier) is still capped, same as every other path', async () => {

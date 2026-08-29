@@ -18,7 +18,7 @@ const { getCache: getGlobalCache } = require('../jobs/globalScanJob');
 const Signal = require('../models/Signal');
 const AIDecision = require('../models/AIDecision');
 const VirtualTrade = require('../models/VirtualTrade');
-const { getAllCachedPrices } = require('../services/binanceService');
+const { getAllCachedPrices, getSymbolStatus, TRACKED_ASSETS } = require('../services/binanceService');
 const aiService = require('../services/aiService');
 const { approveSuggestion, previewSizeUsd, getSummary, closePositionNow } = require('../services/virtualTrackingService');
 const logger = require('../config/logger');
@@ -160,7 +160,35 @@ async function resolveSuggestion() {
 // NOT second-guess a healthy, on-plan position. HOLD estimates are a rough,
 // honest qualitative guess based on how far price has already moved toward
 // the take-profit target, not a real prediction.
-function buildPositionGuidance(trade, currentPrice, latestSignal) {
+// BUG-003 (2026-08-29 overnight validation): a tracked asset with no
+// live price available (confirmed halted on the exchange, e.g. MATICUSDT
+// under Binance's "BREAK" status during the MATIC->POL migration) used to
+// silently fall back to trade.entryPrice here, rendering an indefinite,
+// indistinguishable-from-real "0% P&L, nothing has changed" state for as
+// long as the halt lasts. isHalted is now computed explicitly by the
+// caller (getPositions(), via binanceService.getSymbolStatus()) and
+// short-circuits to an honest "price unavailable" state instead of
+// guessing at a P&L that cannot actually be known right now.
+function buildPositionGuidance(trade, currentPrice, latestSignal, isHalted = false) {
+  if (isHalted) {
+    return {
+      tradeId: trade._id,
+      asset: trade.asset,
+      direction: trade.direction,
+      sizeUsd: trade.sizeUsd,
+      entryPrice: trade.entryPrice,
+      currentPrice: null,
+      pnlPct: null,
+      recommendation: 'HOLD',
+      why: [`${trade.asset} appears to be halted on the exchange right now — its price is unavailable, so P&L can't be shown until trading resumes.`],
+      holdEstimate: null,
+      isHalted: true,
+      maxLossUsd: null,
+      maxGainUsd: null,
+      openedAt: trade.openedAt,
+    };
+  }
+
   const pnlPct = trade.direction === 'BUY'
     ? ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100
     : ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
@@ -214,6 +242,7 @@ function buildPositionGuidance(trade, currentPrice, latestSignal) {
     recommendation,
     why,
     holdEstimate,
+    isHalted: false,
     maxLossUsd: maxLossFor(trade.direction, trade.entryPrice, trade.stopLoss, trade.sizeUsd),
     maxGainUsd: maxGainFor(trade.direction, trade.entryPrice, trade.takeProfit, trade.sizeUsd),
     openedAt: trade.openedAt,
@@ -262,11 +291,30 @@ exports.getPositions = async (req, res) => {
       if (!latestByAsset[s.asset]) latestByAsset[s.asset] = s;
     }
 
-    const positions = openTrades.map(trade => {
+    // BUG-003: a missing cache entry for a tracked crypto asset can mean
+    // either "genuinely halted on the exchange" (MATICUSDT's case) or just
+    // "cache hasn't populated yet" (e.g. right after a server restart) --
+    // only check the real exchange status for assets that actually hit
+    // this gap, so this doesn't add a Binance call to every position on
+    // every request.
+    const positions = await Promise.all(openTrades.map(async trade => {
       const cached = prices[trade.asset];
-      const currentPrice = cached ? (typeof cached === 'object' ? cached.price : cached) : trade.entryPrice;
-      return buildPositionGuidance(trade, currentPrice, latestByAsset[trade.asset]);
-    });
+      if (cached) {
+        const currentPrice = typeof cached === 'object' ? cached.price : cached;
+        return buildPositionGuidance(trade, currentPrice, latestByAsset[trade.asset]);
+      }
+      if (TRACKED_ASSETS.includes(trade.asset)) {
+        const status = await getSymbolStatus(trade.asset);
+        if (status && status !== 'TRADING') {
+          return buildPositionGuidance(trade, null, latestByAsset[trade.asset], true);
+        }
+      }
+      // Unknown/transient gap (not a confirmed halt) -- entryPrice fallback
+      // preserved here exactly as before, so a brief post-restart cache gap
+      // still shows a reasonable (if momentarily stale) position instead of
+      // an alarming "halted" label it hasn't actually earned.
+      return buildPositionGuidance(trade, trade.entryPrice, latestByAsset[trade.asset]);
+    }));
 
     // Live, "always on" risk total: the sum of every position's defined
     // worst-case loss (if every stop-loss hit at once, unrealistic but the
@@ -403,7 +451,26 @@ exports.sellNow = async (req, res) => {
 
     const currentPrice = await getLivePrice(trade.asset);
     if (!currentPrice) {
-      return res.status(409).json({ success: false, message: "No live price available for this asset right now — try again shortly." });
+      // BUG-003: a genuinely exchange-halted symbol (confirmed via a real
+      // status check, not guessed) will never get a live price again on
+      // its own -- "try again shortly" is actively misleading for that
+      // case, so it's offered a manual close at the trade's last-known
+      // (entry) price instead of being blocked indefinitely. A transient
+      // cache gap that isn't a confirmed halt keeps the original behavior.
+      let isHalted = false;
+      if (TRACKED_ASSETS.includes(trade.asset)) {
+        const status = await getSymbolStatus(trade.asset);
+        isHalted = !!status && status !== 'TRADING';
+      }
+      if (!isHalted) {
+        return res.status(409).json({ success: false, message: "No live price available for this asset right now — try again shortly." });
+      }
+      const result = await closePositionNow(req.params.tradeId, trade.entryPrice, 'HALTED');
+      return res.json({
+        success: true,
+        message: `${result.asset} is halted on the exchange — closed at its last-known price (no gain/loss from the halt itself).`,
+        result,
+      });
     }
 
     const result = await closePositionNow(req.params.tradeId, currentPrice);

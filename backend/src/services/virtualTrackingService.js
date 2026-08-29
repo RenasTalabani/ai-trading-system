@@ -261,6 +261,12 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
   }
 
   logger.info(`[VirtualTracker] Guide suggestion approved — ${asset} ${direction} @ $${sizeUsd.toFixed(2)}`);
+
+  // BUG-004 (2026-08-29 overnight validation): no notification-creation
+  // code existed anywhere for trade-open events -- a user would only find
+  // out the AI opened a position for them by manually checking the app.
+  notifySvc().sendTradeOpenedNotification(trade).catch(() => {});
+
   return trade;
 }
 
@@ -558,7 +564,7 @@ async function checkOpenTrades(priceCache) {
 // helper, so refactoring this newer, less-tested path can never risk
 // destabilizing the already-verified TP/SL/liquidation logic above.
 
-async function closePositionNow(tradeId, currentPrice) {
+async function closePositionNow(tradeId, currentPrice, exitReason = 'MANUAL') {
   return withPortfolioLock(async () => {
     const trade = await VirtualTrade.findOne({ _id: tradeId, status: 'open' });
     if (!trade) {
@@ -593,7 +599,7 @@ async function closePositionNow(tradeId, currentPrice) {
       status:          result === 'win' ? 'closed_profit' : 'closed_loss',
       result,
       exitPrice:       parseFloat(exitPrice.toFixed(8)),
-      exitReason:      'MANUAL',
+      exitReason,
       pnl:             parseFloat(pnl.toFixed(2)),
       pnlPct:          parseFloat(pnlPct.toFixed(2)),
       balanceBefore,
@@ -622,14 +628,14 @@ async function closePositionNow(tradeId, currentPrice) {
     await portfolio.save();
 
     logger.info(
-      `[VirtualTracker] Manual sell — ${trade.asset} ${trade.direction} ` +
+      `[VirtualTracker] ${exitReason === 'HALTED' ? 'Halted-symbol close' : 'Manual sell'} — ${trade.asset} ${trade.direction} ` +
       `| result: ${result} | P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%) ` +
       `| balance: $${portfolio.currentBalance}`
     );
 
     try {
       notifySvc().sendTradeClosedNotification(
-        { asset: trade.asset, direction: trade.direction, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), exitReason: 'MANUAL', result },
+        { asset: trade.asset, direction: trade.direction, pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), exitReason, result },
         portfolio,
       ).catch(() => {});
     } catch (_) {}
@@ -641,6 +647,7 @@ async function closePositionNow(tradeId, currentPrice) {
       pnlPct: parseFloat(pnlPct.toFixed(2)),
       result,
       exitPrice: parseFloat(exitPrice.toFixed(8)),
+      exitReason,
     };
   });
 }

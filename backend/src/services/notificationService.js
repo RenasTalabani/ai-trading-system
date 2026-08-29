@@ -302,6 +302,47 @@ async function sendSignalNotification(signal) {
   return { fcmSent: fcmSuccess, fcmFailed: fcmFail, telegramSent, riskFlags };
 }
 
+// ─── Trade-event in-app persistence (BUG-004) ──────────────────────────────────
+// Fans a trade-open/trade-close event out to every active user's in-app
+// notification list. Deliberately NOT gated on preferences.fcmEnabled --
+// that preference controls whether a *push* goes to the device, but a
+// user who disabled push should still be able to open the app and see
+// what the AI actually did with their (paper) money, which is the whole
+// point of this fix. This app has a single shared paper-trading portfolio
+// (VirtualTrade carries no per-user field), so "every active user" is the
+// correct audience, matching sendTradeClosedNotification's existing push
+// fan-out (User.find({isActive:true, ...})) above/below.
+async function persistTradeEventNotification(type, title, body, data) {
+  try {
+    const users = await User.find({ isActive: true }).select('_id').lean();
+    await Promise.all(users.map(u =>
+      Notification.create({ userId: u._id, type, title, body, data }).catch(() => null)
+    ));
+  } catch (err) {
+    logger.warn(`[Notify] persistTradeEventNotification(${type}) failed:`, err.message);
+  }
+}
+
+// ─── Trade opened notification (BUG-004) ───────────────────────────────────────
+// Previously: no notification-creation code of any kind existed for
+// trade-open events (confirmed by tracing virtualTrackingService.js) -- a
+// user relying on notifications to know when the AI took a position for
+// them would only find out by manually checking the app. In-app only for
+// now (matches the reported gap exactly); push/Telegram on open was not
+// requested and isn't added here to keep this change scoped to what was
+// actually found missing.
+async function sendTradeOpenedNotification(trade) {
+  const { asset, direction, entryPrice, sizeUsd } = trade;
+  const title = `🟢 ${asset} ${direction} opened`;
+  const body  = `Entry: $${entryPrice} · Size: $${sizeUsd?.toFixed ? sizeUsd.toFixed(2) : sizeUsd}`;
+  await persistTradeEventNotification('trade_open', title, body, {
+    tradeId: trade._id?.toString(),
+    asset,
+    action: direction,
+    price:  entryPrice,
+  });
+}
+
 // ─── Trade closed notification ────────────────────────────────────────────────
 
 async function sendTradeClosedNotification(trade, portfolio) {
@@ -356,6 +397,20 @@ async function sendTradeClosedNotification(trade, portfolio) {
     if (adminChannel) {
       await sendTelegramMessage(adminChannel, tgMsg).catch(() => {});
     }
+
+    // BUG-004: this used to be push/Telegram-only and never appeared in the
+    // in-app notification list at all -- unlike sendSignalNotification,
+    // which always persists one. Added so trade-close events work the same
+    // way even when push isn't configured (e.g. this local dev environment
+    // has no Firebase credentials, so before this fix a closed trade
+    // produced literally no visible notification anywhere).
+    await persistTradeEventNotification('trade_closed', title, body, {
+      tradeId: trade._id?.toString(),
+      asset, action: direction,
+      pnl: parseFloat(pnl.toFixed(2)),
+      pnlPct: pnlPct != null ? parseFloat(pnlPct.toFixed(2)) : null,
+      exitReason,
+    });
   } catch (err) {
     logger.warn('[Notify] sendTradeClosedNotification error:', err.message);
   }
@@ -377,6 +432,7 @@ module.exports = {
   sendSignalNotification,
   sendTelegramMessage,
   sendPushToUser,
+  sendTradeOpenedNotification,
   sendTradeClosedNotification,
   buildSignalMessage,
   getRiskFlags,

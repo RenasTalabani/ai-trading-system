@@ -39,7 +39,7 @@ const virtualTradeSchema = new mongoose.Schema(
       index: true,
     },
     result:     { type: String, enum: ['win', 'loss', 'cancelled', null], default: null },
-    exitReason: { type: String, enum: ['TP', 'SL', 'LIQUIDATED', 'EXPIRED', 'MANUAL', 'session_reset', null], default: null },
+    exitReason: { type: String, enum: ['TP', 'SL', 'LIQUIDATED', 'EXPIRED', 'MANUAL', 'HALTED', 'session_reset', null], default: null },
     exitPrice:  { type: Number, default: null },
     pnl:        { type: Number, default: null },
     pnlPct:     { type: Number, default: null },

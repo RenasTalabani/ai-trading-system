@@ -14,7 +14,13 @@ const notificationSchema = new mongoose.Schema({
 
   type: {
     type: String,
-    enum: ['signal', 'alert', 'system', 'news'],
+    // BUG-004 (2026-08-29 overnight validation): trade-open events had no
+    // notification-creation code at all, and trade-close was push/Telegram-
+    // only, never persisted in-app -- a user relying on the in-app
+    // notification list to know when the AI opened or closed a position
+    // for them would never find out. 'trade_open'/'trade_closed' added so
+    // both now use the same persisted-notification list signals already do.
+    enum: ['signal', 'alert', 'system', 'news', 'trade_open', 'trade_closed'],
     default: 'signal',
     index: true,
   },
@@ -24,12 +30,19 @@ const notificationSchema = new mongoose.Schema({
 
   data: {
     signalId:   String,
+    tradeId:    String,
     asset:      String,
     action:     String,
     confidence: Number,
     price:      Number,
     stopLoss:   Number,
     takeProfit: Number,
+    // Trade-close-specific fields (BUG-004) -- undeclared fields are
+    // silently stripped by Mongoose's default strict embedded-object mode,
+    // so these need to be named explicitly, same as every field above.
+    pnl:        Number,
+    pnlPct:     Number,
+    exitReason: String,
   },
 
   delivery: [deliverySchema],

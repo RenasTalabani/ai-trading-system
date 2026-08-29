@@ -205,8 +205,46 @@ function getAllCachedPrices() {
   return Object.fromEntries(priceCache);
 }
 
+// BUG-003 (2026-08-29 overnight validation): MATICUSDT's position was
+// found frozen at exactly its entry price / 0% P&L for 19+ consecutive
+// days -- Binance put the symbol under trading status "BREAK" (the
+// MATIC->POL migration), so it never appears in priceCache (no WebSocket
+// ticks, no REST-poll entry) and the caller previously fell back to
+// trade.entryPrice, silently rendering a permanent, indistinguishable-
+// from-real "0% P&L, nothing has changed" state instead of "unavailable".
+// This checks the symbol's real exchange status directly (the same
+// exchangeInfo endpoint used to diagnose the MATICUSDT case) so callers
+// can tell "genuinely halted" apart from "price cache just hasn't
+// populated yet" instead of guessing from an absent cache entry alone.
+// Cached for an hour -- trading-status changes are rare and slow-moving,
+// unlike price, so this doesn't need to be checked on every request.
+const _symbolStatusCache = new Map(); // asset -> { status, ts }
+const SYMBOL_STATUS_TTL_MS = 60 * 60 * 1000;
+
+async function getSymbolStatus(asset) {
+  const hit = _symbolStatusCache.get(asset);
+  if (hit && (Date.now() - hit.ts) < SYMBOL_STATUS_TTL_MS) {
+    return hit.status;
+  }
+  try {
+    const resp = await axios.get(`${BINANCE_REST}/api/v3/exchangeInfo`, {
+      params: { symbol: asset },
+      timeout: 8000,
+    });
+    const status = resp.data?.symbols?.[0]?.status || null;
+    _symbolStatusCache.set(asset, { status, ts: Date.now() });
+    return status;
+  } catch (err) {
+    logger.warn(`[Binance] getSymbolStatus(${asset}) failed:`, err.message);
+    // Unknown, not "halted" -- don't let a transient API error masquerade
+    // as a real exchange halt and trigger the halted-close path below.
+    return hit ? hit.status : null;
+  }
+}
+
 module.exports = {
   fetchKlines,
+  getSymbolStatus,
   startRestPricePoll,
   stopRestPricePoll,
   fetchCurrentPrice,
