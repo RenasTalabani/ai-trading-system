@@ -656,6 +656,19 @@ function rangeStart(range) {
 
 // ─── Summary with time-range filtering ───────────────────────────────────────
 
+// DATA-001 (2026-08-29 overnight validation): flagged as an unreconciled
+// discrepancy -- /virtual/performance's totalTrades (this function) read
+// 147 while /virtual/trades/history's total read 162, a gap of exactly 15.
+// Traced and confirmed NOT a bug: this function's closedTrades filter
+// deliberately excludes 'cancelled' (a cancelled trade never reached a
+// real market outcome, so it shouldn't count toward win-rate/P&L stats),
+// while /trades/history's filter (`{status: {$in: ['closed_profit',
+// 'closed_loss', 'cancelled']}}`, see routes/virtual.js) intentionally
+// includes cancelled trades since it's a full historical record, not a
+// performance summary. 106 losses + 41 profits = 147 here; +15 cancelled
+// = 162 there. Both numbers are correct for what each endpoint answers --
+// documenting this explicitly so it isn't mistaken for a data-integrity
+// bug again.
 async function getSummary(range = 'all') {
   const portfolio  = await getPortfolio();
   const since      = rangeStart(range);

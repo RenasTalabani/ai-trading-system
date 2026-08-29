@@ -47,6 +47,15 @@ class SocialAnalyzer:
         self.model = sentiment_model
         self._cache: Optional[dict] = None
         self._cache_ts: float = 0
+        # BUG-001 (2026-08-29 overnight validation): same missing-lock issue
+        # flagged for NewsAnalyzer.refresh() -- N concurrent callers hitting
+        # a cold/expired cache each independently kick off their own
+        # Telegram/Twitter/Reddit collection instead of sharing one in-flight
+        # refresh. The per-asset scoring loop below is comparatively cheap
+        # (VADER/rule-based, not FinBERT) so it's left as a plain sequential
+        # loop -- the real cost here is the network collection, which the
+        # lock now protects against duplicating.
+        self._refresh_lock = asyncio.Lock()
 
     async def refresh(self) -> dict:
         now = time.time()
@@ -54,6 +63,14 @@ class SocialAnalyzer:
             logger.debug("Social cache hit.")
             return self._cache
 
+        async with self._refresh_lock:
+            now = time.time()
+            if self._cache and (now - self._cache_ts) < self.CACHE_TTL:
+                logger.debug("Social cache hit (after waiting on an in-flight refresh).")
+                return self._cache
+            return await self._do_refresh(now)
+
+    async def _do_refresh(self, now: float) -> dict:
         logger.info("Refreshing social media intelligence...")
 
         # Collect from all 3 platforms concurrently

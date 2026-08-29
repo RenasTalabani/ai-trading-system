@@ -213,6 +213,24 @@ class MacroDataService:
         elif fg_val <= 35 or mktchg < -3:
             macro_sentiment = "bearish"
 
+        # DATA-002 (2026-08-29 overnight validation): flagged as a
+        # discrepancy -- /api/macro/snapshot showed "bullish" while
+        # /api/global/scan showed "neutral" in the same short window.
+        # Traced and confirmed NOT a caching/timing issue: these are two
+        # genuinely different fields with two genuinely different formulas.
+        # `macro_sentiment` above is a simple OR-based 3-state rule using
+        # only fear/greed + market-cap change. `macro_bias` (from
+        # `_macro_bias()` below) is a scored 5-state system that also
+        # factors in funding rate, with different thresholds -- they can
+        # legitimately disagree on the same underlying data, and do.
+        # Confusingly, GlobalAnalyzer._get_macro_sentiment() (see
+        # global_analyzer.py, T-034) reads `macro_bias` from this dict and
+        # exposes it under ITS OWN key also named "macro_sentiment" in
+        # /api/global/scan's response -- so the same field name means two
+        # different things depending on which endpoint you're looking at.
+        # Not renamed here to avoid an API-contract change beyond this
+        # validation pass's scope; documented so this isn't mistaken for a
+        # data-integrity bug again.
         return {
             "fear_greed":        fear_greed,
             "global_crypto":     global_crypto,

@@ -23,6 +23,12 @@ class NewsAnalyzer:
         self._cache: Optional[dict] = None
         self._cache_ts: float = 0
         self._cache_ttl: int = 1800  # 30 min
+        # BUG-001 (2026-08-29 overnight validation): refresh() had no lock,
+        # so N concurrent callers hitting a cold/expired cache each kicked
+        # off their own full collect+FinBERT pass independently -- N times
+        # the network fetch and N times the (already slow, see below)
+        # sentiment work, compounding the very hang this hunts.
+        self._refresh_lock = asyncio.Lock()
 
     async def refresh(self) -> dict:
         """Fetch fresh news and run full analysis. Result cached for 30 min."""
@@ -32,6 +38,17 @@ class NewsAnalyzer:
             logger.debug("News cache hit.")
             return self._cache
 
+        async with self._refresh_lock:
+            # Re-check after acquiring the lock -- a concurrent caller may
+            # have just finished a refresh while we were waiting for it,
+            # in which case we return that result instead of doing it again.
+            now = time.time()
+            if self._cache and (now - self._cache_ts) < self._cache_ttl:
+                logger.debug("News cache hit (after waiting on an in-flight refresh).")
+                return self._cache
+            return await self._do_refresh(now)
+
+    async def _do_refresh(self, now: float) -> dict:
         logger.info("Refreshing news cache...")
         articles: List[NewsArticle] = await collect_all_news()
 
@@ -97,28 +114,39 @@ class NewsAnalyzer:
                 "neutral"
             )
 
-        # Per-asset breakdown
-        asset_scores = {}
-        for asset in ASSET_KEYWORDS:
+        # Per-asset breakdown.
+        # BUG-001 (2026-08-29 overnight validation): this used to await one
+        # asset's FinBERT pass at a time in a sequential for-loop -- with
+        # ~10-15 tracked assets each needing their own run_in_executor call,
+        # that's that many sequential CPU-bound passes stacked end to end on
+        # every cache refresh, the leading root cause of the reported
+        # multi-minute /predict hang. Per-headline results are already cached
+        # by text in NewsSentimentModel (self._sentiment_cache), so this does
+        # not change what gets computed or its outputs -- only that the
+        # per-asset passes now run concurrently via asyncio.gather instead of
+        # one after another.
+        async def _score_asset(asset: str):
             kws = ASSET_KEYWORDS[asset]
             relevant = [a.title for a in articles if any(k in a.title.lower() for k in kws)]
             if relevant:
                 asset_result = await loop.run_in_executor(None, self.model.analyze, relevant)
-                asset_scores[asset] = {
+                return asset, {
                     "market_score": asset_result["market_score"],
                     "sentiment": asset_result["overall_sentiment"],
                     "impact": asset_result["impact"],
                     "article_count": len(relevant),
                     "top_events": asset_result["detected_events"][:3],
                 }
-            else:
-                asset_scores[asset] = {
-                    "market_score": 50,
-                    "sentiment": "neutral",
-                    "impact": 0,
-                    "article_count": 0,
-                    "top_events": [],
-                }
+            return asset, {
+                "market_score": 50,
+                "sentiment": "neutral",
+                "impact": 0,
+                "article_count": 0,
+                "top_events": [],
+            }
+
+        asset_pairs = await asyncio.gather(*(_score_asset(a) for a in ASSET_KEYWORDS))
+        asset_scores = dict(asset_pairs)
 
         result = {
             "global": {

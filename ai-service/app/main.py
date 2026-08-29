@@ -14,6 +14,7 @@ from app.api.routes import (
     transformer_model, online_learner, drift_detector, model_registry,
 )
 from app.services.collectors.binance_collector import TRACKED_ASSETS
+from app.services.data_processor import DataProcessor
 
 settings = get_settings()
 
@@ -109,6 +110,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.environment} | Model path: {settings.model_path}")
     logger.info("Phase 8: Transformer + Online Learning + Drift Detection active.")
     yield
+    # BUG-002 follow-up: DataProcessor now keeps one shared aiohttp session
+    # instead of one per request -- close it cleanly on shutdown rather
+    # than leaking its connections when the process exits.
+    await DataProcessor.close_session()
     logger.info("AI Service shutting down.")
 
 
