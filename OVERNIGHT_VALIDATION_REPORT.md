@@ -26,6 +26,18 @@ Also ran the actual backend Jest suite myself (not trusted from the report): all
 
 **Bottom line: yes, he did real, verifiable work — this was not a fabricated report.** The one thing to correct before treating this as fully closed: the `/api/global/scan` 0/13 result, which the overnight report suspected was caused by BUG-002, is **still happening after the fix**, so that root cause is still unknown and needs its own investigation — it should not be assumed solved.
 
+### 0b. T-068 follow-up — independently verified, 2026-08-29 ~19:00 UTC
+
+Claude Code kept digging on the exact gap I flagged above (0/13 still unexplained) and found a real, separate bug, pushed as commit `9d1bc72` (T-068). I re-verified this one too, line by line, before writing it down here:
+
+- **The bug, confirmed by reading the actual diff**: `global_analyzer.py`'s `macro_sc` calculation only ever matched the strings `"bullish"`/`"bearish"`, but the real macro-sentiment vocabulary is 5-state (`strong_bull`/`mild_bull`/`neutral`/`mild_bear`/`strong_bear`) — so `mild_bull` and `mild_bear` silently fell through to neutral (50) every time, regardless of the real market lean.
+- **Live re-check, by me, just now**: `/api/global/scan` now correctly reports `macro_sentiment: "mild_bull"` (previously this field showed "neutral" even when the underlying data was mildly bullish) — confirms the fix changed real behavior, not just internal code. `passed_filter` is **still 0/13** — but this was never claimed to fix that by itself; combined with the RL-adaptive macro weight having drifted to ~71-72% of the fused score (a separate, already-known issue, T-041, deliberately left untouched here), the math genuinely doesn't allow anything through right now regardless of real conditions.
+- **The second issue he found and did NOT fix (correctly, in my view)**: I independently re-ran `POST /api/unified/analyze` for BTCUSDT myself and got the exact numbers he described — Order Blocks confidently BUY at 68% confidence, Strategy sitting at HOLD (its own 55% confidence gets thrown away and flattened to a neutral 50 purely because the action is HOLD), News/Social both neutral (0 matched articles). Fusion: `0.4×68 + 0.35×50 + 0.15×50 + 0.1×50 = 57.2` — matches his number exactly. This is a real, evidenced design question (should a HOLD vote flatten to neutral regardless of its own confidence?) that changes trading behavior if answered either way, so it staying as an owner decision rather than a unilateral retune is the right call.
+
+**What this means practically: the scan will very likely keep showing 0/13 today even with this fix merged**, because the deeper cause (macro weight drift + HOLD-flattening) is still there and is explicitly not something either of us should decide unilaterally. T-068 is real, correct, and narrowly scoped — but it is not "the scan is fixed now."
+
+Branch now has 9 commits, all independently spot-checked against real code and the real running app tonight, not just read as a summary.
+
 ---
 
 ## 1. Executive Summary
