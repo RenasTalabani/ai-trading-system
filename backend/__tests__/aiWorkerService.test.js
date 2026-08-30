@@ -196,3 +196,37 @@ describe('runAIWorkerCycle — reuses globalScanJob\'s cache instead of always r
     expect(CREATED_TRADES[0].asset).toBe('DIRECTUSDT');
   });
 });
+
+/**
+ * T-073 (2026-08-30): atrAtEntry -- reuses the ATR value GlobalAnalyzer
+ * already computed and used to size stop_loss/take_profit for this exact
+ * opportunity, so the tight-1.5x-ATR-stop hypothesis in WINRATE_DIAGNOSIS.md
+ * can be tested against real per-trade data instead of only inferred.
+ */
+describe('runAIWorkerCycle — persists atrAtEntry from the opportunity (T-073)', () => {
+  test('atrAtEntry is populated from the opportunity\'s own atr field', async () => {
+    SCAN_RESPONSE = {
+      success: true, scanned: 1,
+      top_opportunities: [{
+        asset: 'ATRUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+        current_price: 100, stop_loss: 95, take_profit: 110, atr: 3.3333,
+      }],
+    };
+    const result = await runAIWorkerCycle();
+    expect(result.tradesCreated).toBe(1);
+    expect(CREATED_TRADES[0].atrAtEntry).toBe(3.3333);
+  });
+
+  test('atrAtEntry is null (not fabricated) when the opportunity carries no atr field', async () => {
+    SCAN_RESPONSE = {
+      success: true, scanned: 1,
+      top_opportunities: [{
+        asset: 'NOATRUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+        current_price: 100, stop_loss: 95, take_profit: 110,
+      }],
+    };
+    const result = await runAIWorkerCycle();
+    expect(result.tradesCreated).toBe(1);
+    expect(CREATED_TRADES[0].atrAtEntry).toBeNull();
+  });
+});

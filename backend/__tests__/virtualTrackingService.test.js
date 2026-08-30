@@ -226,6 +226,21 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
       .rejects.toThrow(/already/i);
     expect(CREATED_TRADES.length).toBe(0);
   });
+
+  test('persists the caller-supplied atrAtEntry onto the trade, reused as-is (T-073)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({
+      asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95, takeProfit: 110,
+      atrAtEntry: 3.3333,
+    });
+    expect(trade.atrAtEntry).toBe(3.3333);
+  });
+
+  test('defaults atrAtEntry to null when the caller does not supply it (e.g. a Signal-sourced suggestion, which has no ATR data)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    expect(trade.atrAtEntry).toBeNull();
+  });
 });
 
 describe('previewSizeUsd — read-only sizing preview matches what approveSuggestion would actually charge', () => {

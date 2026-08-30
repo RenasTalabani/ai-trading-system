@@ -99,3 +99,62 @@ describe('guideController.approve — traces the resulting trade back to its AI 
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 });
+
+describe('guideController.approve — client-supplied sizing is always ignored (T-071)', () => {
+  test('an arbitrary/garbage amountUsd in the request body produces the exact same approveSuggestion call as no body at all', async () => {
+    Signal.findOne = () => ({
+      sort: () => ({
+        _id: 'sig123', asset: 'BTCUSDT', direction: 'BUY',
+        price: { entry: 65000, stopLoss: 63000, takeProfit: 68000 },
+        confidence: 80, createdAt: new Date(),
+      }),
+    });
+
+    await guideController.approve({}, mockRes());
+    const noBodyArgs = approveSuggestion.mock.calls[0][0];
+
+    approveSuggestion.mockClear();
+
+    await guideController.approve({ body: { amountUsd: 999999999 } }, mockRes());
+    const hugeAmountArgs = approveSuggestion.mock.calls[0][0];
+
+    approveSuggestion.mockClear();
+
+    await guideController.approve({ body: { amountUsd: -50 } }, mockRes());
+    const negativeAmountArgs = approveSuggestion.mock.calls[0][0];
+
+    // Same trade every time -- the handler never reads req.body, so a
+    // garbage/hostile amountUsd has literally zero effect on sizing.
+    expect(hugeAmountArgs).toEqual(noBodyArgs);
+    expect(negativeAmountArgs).toEqual(noBodyArgs);
+    expect(hugeAmountArgs.asset).toBe('BTCUSDT');
+  });
+});
+
+describe('guideController.approve — threads atrAtEntry through from the resolved suggestion (T-073)', () => {
+  test('a global-scan-sourced suggestion passes best.atr through as atrAtEntry', async () => {
+    Signal.findOne = () => ({ sort: () => null });
+    getCache.mockReturnValue({
+      result: { best: { asset: 'ETHUSDT', action: 'BUY', current_price: 3000, confidence: 75, atr: 45.6 } },
+      scannedAt: new Date(),
+    });
+
+    await guideController.approve({}, mockRes());
+
+    expect(approveSuggestion.mock.calls[0][0].atrAtEntry).toBe(45.6);
+  });
+
+  test('a Signal-sourced suggestion (no ATR data available) passes atrAtEntry: null, not fabricated', async () => {
+    Signal.findOne = () => ({
+      sort: () => ({
+        _id: 'sig123', asset: 'BTCUSDT', direction: 'BUY',
+        price: { entry: 65000, stopLoss: 63000, takeProfit: 68000 },
+        confidence: 80, createdAt: new Date(),
+      }),
+    });
+
+    await guideController.approve({}, mockRes());
+
+    expect(approveSuggestion.mock.calls[0][0].atrAtEntry).toBeNull();
+  });
+});

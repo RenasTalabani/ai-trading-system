@@ -221,7 +221,7 @@ async function pickupNewSignals() {
 // opens a spot position, so a manually-approved trade can never risk more
 // than an automatically-picked-up one would.
 
-async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit, signalId = null, aiDecisionId = null }) {
+async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit, atrAtEntry = null, signalId = null, aiDecisionId = null }) {
   if (!asset || !entryPrice) {
     throw new Error('Missing asset or entry price.');
   }
@@ -247,6 +247,7 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
     entryPrice,
     stopLoss:   stopLoss   || null,
     takeProfit: takeProfit || null,
+    atrAtEntry, // T-073: reused as-is from the caller's already-resolved suggestion
     sizeUsd,
     sizeMultiplier: edgeMultiplier,
     trailingStopDistance: trailingDistanceFor(entryPrice, stopLoss),

@@ -118,6 +118,10 @@ async function resolveSuggestion() {
       entryPrice:  best.current_price,
       stopLoss:    best.stop_loss   || null,
       takeProfit:  best.take_profit || null,
+      // T-073: GlobalAnalyzer already computes/carries this (it's what sized
+      // stopLoss/takeProfit above) — threaded through so the resulting
+      // trade can record it, not a new calculation.
+      atrAtEntry:  best.atr ?? null,
       confidence:  best.confidence ?? 0,
       why:         plainWhyFromGlobalBest(best),
       generatedAt: cached.scannedAt,
@@ -144,6 +148,10 @@ async function resolveSuggestion() {
       entryPrice:  sig.price.entry,
       stopLoss:    sig.price.stopLoss   || null,
       takeProfit:  sig.price.takeProfit || null,
+      // T-073: the Signal-sourced pipeline carries no ATR data at all
+      // (unlike the global-scan branch above) -- honestly null rather than
+      // fabricated.
+      atrAtEntry:  null,
       confidence:  sig.confidence ?? 0,
       why:         plainWhyFromSignal(sig),
       generatedAt: sig.createdAt,
@@ -390,6 +398,20 @@ exports.getSuggestion = async (req, res) => {
   }
 };
 
+// T-071 (2026-08-30, owner-reviewed): this handler intentionally never reads
+// req.body at all. Position sizing (sizeUsd) always comes from
+// computeSpotSizeUsd() inside approveSuggestion() -- driven by the server's
+// own portfolio balance and risk-cap logic, never by anything the client
+// sends. Overnight testing sent amountUsd:-50 and amountUsd:999999999 in the
+// request body expecting either a validation error or that value to be
+// used; instead both were silently ignored and the trade opened at the
+// AI's own default size, which read as a possible oversight rather than the
+// deliberate safety property it actually is. Owner decision: keep it this
+// way -- do NOT add a body-driven size parameter or validate/reject one
+// that's present. A client (or a malicious/compromised one) can request an
+// approval but can never dictate how much of the portfolio it commits. See
+// guideApprove.test.js's T-071 test for a regression proving an arbitrary
+// amountUsd in the body has zero effect on the resulting trade.
 exports.approve = async (req, res) => {
   try {
     const suggestion = await resolveSuggestion();
@@ -424,6 +446,7 @@ exports.approve = async (req, res) => {
       entryPrice: suggestion.entryPrice,
       stopLoss:   suggestion.stopLoss,
       takeProfit: suggestion.takeProfit,
+      atrAtEntry: suggestion.atrAtEntry ?? null, // T-073
       signalId:   suggestion.signalId || null,
       aiDecisionId,
     });

@@ -159,6 +159,11 @@ async function runAIWorkerCycle() {
       entryPrice:   parseFloat(Number(entryPrice).toFixed(8)),
       stopLoss:     stopLoss   != null ? parseFloat(Number(stopLoss).toFixed(8))   : null,
       takeProfit:   takeProfit != null ? parseFloat(Number(takeProfit).toFixed(8)) : null,
+      // T-073: same ATR value ai-service's GlobalAnalyzer already computed
+      // and used to size this exact opportunity's stopLoss/takeProfit
+      // (see global_analyzer.py's _score_crypto/_score_multi_asset) --
+      // reused as-is, not recalculated.
+      atrAtEntry:   _pick(opp, 'atr'),
       sizeUsd,
       openedAt:     new Date(),
     });

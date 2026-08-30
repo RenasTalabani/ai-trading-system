@@ -68,6 +68,7 @@ online_learner     = OnlineLearner(                                      # Phase
     transformer=transformer_model,
     calibrator=calibrator,
     registry=model_registry,
+    model_path=settings.model_path,   # T-072: persist telemetry across restarts
 )
 feedback_evaluator = SignalOutcomeEvaluator(
     calibrator=calibrator,

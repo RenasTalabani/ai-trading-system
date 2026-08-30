@@ -13,6 +13,16 @@ const virtualTradeSchema = new mongoose.Schema(
     entryPrice: { type: Number, required: true },
     stopLoss:   { type: Number, default: null },
     takeProfit: { type: Number, default: null },
+    // T-073 (2026-08-30): the ATR value that fed this trade's SL/TP sizing
+    // at open time (whichever calculation already produced stopLoss/
+    // takeProfit above -- this field does not compute anything new). Added
+    // so a tight-stop hypothesis (SL-hit trades showing a 0% win rate by
+    // definition, MANUAL closes showing 57.5% -- see WINRATE_DIAGNOSIS.md)
+    // can actually be tested against real per-trade ATR data instead of
+    // only inferred. null wherever the opening path has no ATR available
+    // (e.g. the plain Signal-sourced pickup/approve paths, which carry no
+    // ATR field at all -- an honest gap, not a bug to paper over here).
+    atrAtEntry: { type: Number, default: null },
     sizeUsd:    { type: Number, required: true },
     // How much sizeUsd was scaled from the baseline risk% — 1.0 = baseline,
     // >1 = this asset has a proven recent edge, <1 = it doesn't (yet). See
