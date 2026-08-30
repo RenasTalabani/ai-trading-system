@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from typing import List, Optional
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -48,19 +49,63 @@ class NewsSentimentModel:
     Includes event detection, asset mapping, impact scoring.
     """
 
-    def __init__(self):
+    def __init__(self, load_finbert_in_background: bool = True):
         self.vader = SentimentIntensityAnalyzer()
         self.is_loaded = True
         self._finbert = None
-        self._try_load_finbert()
         # FinBERT inference is comparatively expensive — the same headlines get
         # analyzed once globally and again per-asset on overlapping subsets, so
         # memoize per unique text to avoid re-running the model on repeats.
         self._sentiment_cache: dict = {}
-        logger.info(f"News sentiment model ready (FinBERT={'loaded' if self._finbert else 'not available, using VADER'})")
+
+        # T-076 (2026-08-30): FinBERT used to load synchronously right here,
+        # in __init__ -- which runs at Python *import* time (routes.py
+        # constructs NewsSentimentModel() at module level, before uvicorn
+        # ever binds a port). transformers.pipeline() downloads/loads a
+        # 400MB+ model with no build-time warm-up in this service's
+        # Dockerfile, so on a fresh Railway container this delayed the
+        # import long enough to blow past the platform's healthcheck
+        # timeout -- the process was still importing, not even listening
+        # yet, when the healthcheck probe gave up (confirmed live: the app
+        # DID eventually come up and pass /health once the import finished,
+        # just after the healthcheck window had already expired and marked
+        # the deployment failed).
+        #
+        # Fixed by loading FinBERT in a background thread instead, so
+        # __init__ (and therefore module import, and therefore uvicorn's
+        # ability to bind and answer /health) returns immediately regardless
+        # of how long the download takes. self._finbert stays None (already
+        # this class's existing "not available" sentinel -- see
+        # analyze_single()'s `if self._finbert else` branch, unchanged)
+        # until the background load completes, so any sentiment call made
+        # during that window transparently uses the same VADER fallback
+        # this class already falls back to on a genuine load failure --
+        # not a new behavior, not a silent permanent downgrade, just that
+        # existing fallback now also covering a brief "still loading"
+        # window instead of only a hard failure. Once loaded,
+        # self._finbert is a single attribute write from the loader
+        # thread -- safe to read from request-handling code under
+        # CPython's GIL with no additional locking needed -- and every
+        # subsequent call transparently gets real FinBERT results again,
+        # exactly as before this change.
+        #
+        # load_finbert_in_background=False (tests only) restores the old
+        # synchronous behavior for callers that need FinBERT ready
+        # immediately after construction.
+        if load_finbert_in_background:
+            threading.Thread(
+                target=self._try_load_finbert, daemon=True, name="finbert-loader"
+            ).start()
+            logger.info("News sentiment model ready (FinBERT loading in background; VADER active until it's ready)")
+        else:
+            self._try_load_finbert()
+            logger.info(f"News sentiment model ready (FinBERT={'loaded' if self._finbert else 'not available, using VADER'})")
 
     def _try_load_finbert(self):
-        """Try loading FinBERT. Falls back to VADER if unavailable."""
+        """Try loading FinBERT. Falls back to VADER if unavailable.
+        Runs in a background thread by default (see __init__) -- any
+        exception here is caught locally, same as before, so it can never
+        crash the process regardless of which thread it runs on."""
         try:
             from transformers import pipeline
             model_name = settings.sentiment_model  # ProsusAI/finbert
