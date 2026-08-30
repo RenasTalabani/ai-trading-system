@@ -7,6 +7,62 @@ const virtualTradeSchema = new mongoose.Schema(
     signalId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Signal',     default: null, index: true },
     aiDecisionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AIDecision', default: null, index: true },
 
+    // T-074a (2026-08-30): `source` above distinguishes *which code path*
+    // opened a trade, not *who/what actually triggered it* -- and per
+    // WINRATE_DIAGNOSIS.md's own root-cause finding, every `source:'guide'`
+    // trade (100% of the analyzed history) is opened by the same
+    // POST /guide/suggestion/approve endpoint whether a real user tapped
+    // "Yes" in the app or a testing/validation session called that endpoint
+    // directly -- `source` cannot and does not already carry that
+    // distinction, so this is a genuinely new axis, not a duplicate of it.
+    // `origin` records the real, 100%-certain code path for every NEW trade
+    // going forward:
+    //   - 'ai_worker'           — aiWorkerService.js's autonomous cycle;
+    //                             no HTTP request or human involved at all.
+    //   - 'signal_auto_pickup'  — pickupNewSignals()'s automatic sweep;
+    //                             same certainty as ai_worker (no human
+    //                             involved), though this path is not
+    //                             currently wired into any running job.
+    //   - 'guide_approval'      — POST /guide/suggestion/approve. Honestly
+    //                             NOT further distinguishable: there is no
+    //                             test-account flag, role, header, or any
+    //                             other reliable signal in this codebase
+    //                             today that tells a real user's tap apart
+    //                             from a testing/validation session calling
+    //                             the same endpoint directly (confirmed by
+    //                             checking User.js's role enum and
+    //                             middleware/auth.js -- nothing exists to
+    //                             key off). Recording the real, honest
+    //                             answer rather than inventing a heuristic
+    //                             that would just be guessing.
+    //   - 'futures_manual'      — POST /virtual/trades/:signalId/open-futures.
+    //                             Same ambiguity as 'guide_approval' above.
+    // No default -- pre-existing trades are simply undefined on this field
+    // (see likelyTestOrigin below for a separate, clearly-labeled
+    // best-effort backfill for those), matching this schema's existing
+    // convention for additive fields (see `decision` on Signal.js, T-066).
+    origin: {
+      type: String,
+      enum: ['ai_worker', 'signal_auto_pickup', 'guide_approval', 'futures_manual'],
+      index: true,
+    },
+
+    // T-074b (2026-08-30): best-effort, INFERRED backfill for trades that
+    // predate `origin` above -- deliberately a separate field so a reader
+    // can always tell "we know this one for a fact" (origin) apart from
+    // "we inferred this one from a pattern" (likelyTestOrigin). Computed by
+    // backend/scripts/backfillLikelyTestOrigin.js, reusing
+    // WINRATE_DIAGNOSIS.md's exact duplicate-fingerprint definition
+    // (same asset + entryPrice + stopLoss, exact match) rather than a new
+    // heuristic. true = this trade belongs to a fingerprint-duplicate batch
+    // (>=2 trades sharing the same asset+entryPrice+stopLoss), the same
+    // signature WINRATE_DIAGNOSIS.md traced to repeated
+    // testing/validation-session calls against the live approve endpoint.
+    // Never set for trades created after `origin` exists -- those have a
+    // known, not inferred, origin instead. Does not change pnl/result/
+    // status or any win-rate calculation by itself.
+    likelyTestOrigin: { type: Boolean, default: null },
+
     asset:     { type: String, required: true, uppercase: true },
     direction: { type: String, enum: ['BUY', 'SELL'], required: true },
 

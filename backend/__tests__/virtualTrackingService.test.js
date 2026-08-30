@@ -161,6 +161,13 @@ describe('pickupNewSignals — spot position sizing never exceeds the hard cap',
     const riskPct = (CREATED_TRADES[0].sizeUsd / FAKE_PORTFOLIO.currentBalance) * 100;
     expect(riskPct).toBeLessThanOrEqual(svc.MAX_POSITION_RISK_PCT + 1e-9);
   });
+
+  test('tags the trade origin: "signal_auto_pickup" (T-074a — no human/HTTP request involved)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    FAKE_SIGNAL = makeSignal('NORMAL');
+    await svc.pickupNewSignals();
+    expect(CREATED_TRADES[0].origin).toBe('signal_auto_pickup');
+  });
 });
 
 describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized spot trade', () => {
@@ -241,6 +248,12 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
     const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
     expect(trade.atrAtEntry).toBeNull();
   });
+
+  test('tags the trade origin: "guide_approval" (T-074a)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    expect(trade.origin).toBe('guide_approval');
+  });
 });
 
 describe('previewSizeUsd — read-only sizing preview matches what approveSuggestion would actually charge', () => {
@@ -289,6 +302,13 @@ describe('openFuturesTrade — margin sizing never exceeds the hard cap', () => 
     FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'SELL' });
     const sellTrade = await svc.openFuturesTrade('sig_LIQTEST', 10);
     expect(sellTrade.liquidationPrice).toBeCloseTo(100 * (1 + 1 / 10), 6);
+  });
+
+  test('tags the trade origin: "futures_manual" (T-074a)', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    FAKE_SIGNAL = makeSignal('ORIGINTEST');
+    const trade = await svc.openFuturesTrade('sig_ORIGINTEST', 5);
+    expect(trade.origin).toBe('futures_manual');
   });
 });
 

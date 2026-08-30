@@ -187,6 +187,7 @@ async function pickupNewSignals() {
         entryPrice: sig.price.entry,
         stopLoss:   sig.price.stopLoss   || null,
         takeProfit: sig.price.takeProfit || null,
+        origin:     'signal_auto_pickup', // T-074a: 100%-certain, no HTTP request/human involved
         sizeUsd,
         sizeMultiplier: edgeMultiplier,
         trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
@@ -242,6 +243,11 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
   // justified it (previously neither was ever set for source:'guide').
   const trade = await VirtualTrade.create({
     source:     'guide',
+    // T-074a: known to come through this endpoint, but honestly NOT
+    // distinguishable between a real user's tap and a testing/validation
+    // session calling it directly -- see the field's comment in
+    // VirtualTrade.js for why no such signal exists in this codebase today.
+    origin:     'guide_approval',
     asset,
     direction,
     entryPrice,
@@ -302,6 +308,10 @@ async function openFuturesTrade(signalId, leverage) {
 
   const trade = await VirtualTrade.create({
     signalId:         sig._id,
+    // T-074a: same ambiguity as 'guide_approval' -- known to come through
+    // this endpoint, not distinguishable between a real user and a
+    // testing/validation session calling it directly.
+    origin:           'futures_manual',
     asset:            sig.asset,
     direction:        sig.direction,
     entryPrice:       sig.price.entry,

@@ -230,3 +230,23 @@ describe('runAIWorkerCycle — persists atrAtEntry from the opportunity (T-073)'
     expect(CREATED_TRADES[0].atrAtEntry).toBeNull();
   });
 });
+
+/**
+ * T-074a (2026-08-30): every trade this worker opens is tagged
+ * origin:'ai_worker' -- the one code path with zero ambiguity, since it's
+ * a cron cycle with no HTTP request or human involved at all.
+ */
+describe('runAIWorkerCycle — tags every opened trade origin: "ai_worker" (T-074a)', () => {
+  test('opened trade carries origin: "ai_worker"', async () => {
+    SCAN_RESPONSE = {
+      success: true, scanned: 1,
+      top_opportunities: [{
+        asset: 'ORIGINUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+        current_price: 100, stop_loss: 95, take_profit: 110,
+      }],
+    };
+    const result = await runAIWorkerCycle();
+    expect(result.tradesCreated).toBe(1);
+    expect(CREATED_TRADES[0].origin).toBe('ai_worker');
+  });
+});

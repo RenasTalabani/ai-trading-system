@@ -153,6 +153,7 @@ async function runAIWorkerCycle() {
     // Open virtual trade
     const trade = await VirtualTrade.create({
       source:       'ai',
+      origin:       'ai_worker', // T-074a: 100%-certain, no HTTP request/human involved
       aiDecisionId: decision._id,
       asset:        opp.asset,
       direction:    opp.action,
