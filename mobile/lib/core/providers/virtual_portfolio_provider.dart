@@ -85,6 +85,15 @@ class VirtualTradesState {
 }
 
 class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
+  // MOBILE-001 (2026-08-31): Trade History's All/Open/Closed tabs all share
+  // this one provider's state with no request-ordering guard. Switching
+  // tabs quickly fires overlapping fetch() calls; without a sequence check,
+  // an older, slower response can resolve after a newer one and overwrite
+  // it -- the wrong tab silently shows the wrong trades. _requestSeq is
+  // captured at the start of each fetch() and checked before the response
+  // is ever applied to state; a response for a stale request is dropped.
+  int _requestSeq = 0;
+
   @override
   VirtualTradesState build() {
     Future.microtask(fetch);
@@ -108,6 +117,7 @@ class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
   }
 
   Future<void> fetch({int page = 1, String? status, String? range}) async {
+    final seq = ++_requestSeq;
     final effectiveRange = range ?? state.range;
     state = state.copyWith(loading: true, range: effectiveRange);
     try {
@@ -117,6 +127,10 @@ class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
 
       final resp = await ApiService.dio.get('virtual/trades',
           queryParameters: params);
+
+      // A newer fetch() started while this one was in flight -- its
+      // response, whenever it lands, is what should win. Drop this one.
+      if (seq != _requestSeq) return;
 
       final list = (resp.data['trades'] as List)
           .map((e) => VirtualTradeModel.fromJson(e as Map<String, dynamic>))
@@ -130,6 +144,7 @@ class VirtualTradesNotifier extends Notifier<VirtualTradesState> {
         loading: false,
       );
     } catch (_) {
+      if (seq != _requestSeq) return;
       state = state.copyWith(loading: false);
     }
   }
