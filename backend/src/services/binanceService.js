@@ -242,6 +242,39 @@ async function getSymbolStatus(asset) {
   }
 }
 
+// ─── Last-known-price fallback (T-084, 2026-08-31) ───────────────────────────
+// Live watchlist prices went blank in production: Binance became fully
+// unreachable from this service (WS stream stuck in a permanent 1006-close/
+// reconnect loop, REST calls returning 451) while ai-service's identical
+// default Binance calls kept succeeding -- almost certainly a Railway
+// egress-IP/region difference between the two services, not a code bug (see
+// the T-083 commit message for the live evidence trail). That's an
+// infrastructure fix outside this codebase's reach (needs the backend
+// service's Railway region aligned with ai-service's, a dashboard action).
+// In the meantime, marketController's price/ticker endpoints had zero
+// fallback -- a live-fetch failure meant an empty/error response and a
+// blank watchlist, even though MarketData already holds recent candles from
+// before the outage (written by the same collectHistoricalData() job this
+// same outage is currently also blocking, so this data ages during a long
+// outage -- that's why every fallback response below is explicitly marked
+// stale with its real timestamp, never presented as live).
+async function getLastKnownPrice(asset) {
+  const doc = await MarketData.findOne({ asset, interval: '1h' })
+    .sort({ timestamp: -1 })
+    .lean();
+  return doc ? { asset, price: doc.close, timestamp: doc.timestamp } : null;
+}
+
+async function getLastKnownTickers(assets) {
+  if (!assets.length) return [];
+  const rows = await MarketData.aggregate([
+    { $match: { asset: { $in: assets }, interval: '1h' } },
+    { $sort: { asset: 1, timestamp: -1 } },
+    { $group: { _id: '$asset', close: { $first: '$close' }, timestamp: { $first: '$timestamp' } } },
+  ]);
+  return rows.map((r) => ({ asset: r._id, price: r.close, timestamp: r.timestamp }));
+}
+
 module.exports = {
   fetchKlines,
   getSymbolStatus,
@@ -256,5 +289,7 @@ module.exports = {
   stopLivePriceStream,
   getCachedPrice,
   getAllCachedPrices,
+  getLastKnownPrice,
+  getLastKnownTickers,
   TRACKED_ASSETS,
 };
