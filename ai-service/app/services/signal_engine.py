@@ -10,6 +10,7 @@ Central brain combining:
   - Online learning feedback     (continuous self-improvement)
   - Model drift detector         (auto-triggers retraining alert)
 """
+import asyncio
 import logging
 from typing import Optional
 import pandas as pd
@@ -201,9 +202,30 @@ class SignalEngine:
 
         lstm_proba = lstm_result.get("probabilities", {"BUY": 33, "SELL": 33, "HOLD": 34})
 
-        # ── 3. News intelligence ───────────────────────────────────────────────
-        try:
-            news_cache  = await self.news_analyzer.refresh()
+        # ── 3+4. News + Social intelligence ────────────────────────────────────
+        # AISERVICE-001 (2026-08-31): these two used to be sequential awaits
+        # with no timeout guard of their own -- generate_signal() (this
+        # method, /predict's real pipeline) had no bound on how long a
+        # hung news_analyzer/social_analyzer.refresh() could hold it up,
+        # unlike unified_analyzer.py's analyze() (the global-scan pipeline),
+        # which already wraps its own equivalent calls in asyncio.wait_for()
+        # via its _safe() helper (see that file's T-086 fix). Mirrored the
+        # same pattern here, and made the two calls concurrent instead of
+        # sequential -- they're independent, unrelated data sources, so
+        # there's no reason to pay their latency twice back-to-back.
+        async def _safe_refresh(analyzer, label, timeout=35):
+            try:
+                return await asyncio.wait_for(analyzer.refresh(), timeout=timeout)
+            except Exception as e:
+                logger.warning(f"{label} failed/timed out for {asset}: {e}")
+                return None
+
+        news_cache, social_cache = await asyncio.gather(
+            _safe_refresh(self.news_analyzer, "News", timeout=35),
+            _safe_refresh(self.social_analyzer, "Social", timeout=35),
+        )
+
+        if news_cache is not None:
             asset_news  = news_cache.get("by_asset", {}).get(asset, {})
             news_score  = asset_news.get("market_score", 50)
             all_events  = list(set(
@@ -217,16 +239,13 @@ class SignalEngine:
                 "events":        all_events,
                 "headlines":     news_cache.get("top_headlines", [])[:3],
             }
-        except Exception as e:
-            logger.warning(f"News failed for {asset}: {e}")
+        else:
             news_score, all_events, news_result = 50, [], {
                 "article_count": 0, "sentiment": "neutral",
                 "market_score": 50, "events": [], "headlines": [],
             }
 
-        # ── 4. Social intelligence ─────────────────────────────────────────────
-        try:
-            social_cache   = await self.social_analyzer.refresh()
+        if social_cache is not None:
             asset_social   = social_cache.get("by_asset", {}).get(asset, {})
             social_score   = asset_social.get("market_score", 50)
             manip_detected = (asset_social.get("manipulation_detected", False) or
@@ -241,8 +260,7 @@ class SignalEngine:
                 "manipulation_detected": manip_detected,
                 "count":                 asset_social.get("relevant_posts", 0),
             }
-        except Exception as e:
-            logger.warning(f"Social failed for {asset}: {e}")
+        else:
             social_score, social_result = 50, {
                 "overall": "neutral", "market_score": 50,
                 "hype_level": 0, "manipulation_detected": False, "count": 0,
