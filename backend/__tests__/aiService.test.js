@@ -58,12 +58,36 @@ describe('generatePrediction', () => {
   test('posts /api/predict with the asset and returns the response body', async () => {
     mockInstance.post.mockResolvedValue({ data: { asset: 'BTCUSDT', prediction: 'up', confidence: 0.7 } });
     const result = await generatePrediction('BTCUSDT');
-    expect(mockInstance.post).toHaveBeenCalledWith('/api/predict', { asset: 'BTCUSDT' });
+    expect(mockInstance.post).toHaveBeenCalledWith(
+      '/api/predict', { asset: 'BTCUSDT' }, { timeout: 90_000 },
+    );
     expect(result).toEqual({ asset: 'BTCUSDT', prediction: 'up', confidence: 0.7 });
+  });
+
+  // T-088 (2026-09-01): the shared aiClient's default 30s timeout was
+  // cutting off /api/predict specifically -- confirmed live in production
+  // ("AI prediction failed" firing rhythmically every ~30s in signalJob's
+  // per-asset loop) even though ai-service's own pipeline had already been
+  // bounded/parallelized the same night (AISERVICE-001). A cold-cache
+  // /predict call was independently measured at ~78s end-to-end, so 30s
+  // was never enough. Overridden per-call (not raised on the shared
+  // client) so every other call through aiClient -- prices, funding
+  // rates, status -- keeps its fast 30s fail-fast behavior; only the one
+  // genuinely slow endpoint gets the longer budget.
+  test('overrides the timeout to 90s for this call specifically, not the client default', async () => {
+    mockInstance.post.mockResolvedValue({ data: {} });
+    await generatePrediction('BTCUSDT');
+    const callArgs = mockInstance.post.mock.calls[0];
+    expect(callArgs[2]).toEqual({ timeout: 90_000 });
   });
 
   test('returns null (not a throw) when ai-service is unreachable', async () => {
     mockInstance.post.mockRejectedValue(new Error('ECONNREFUSED'));
+    await expect(generatePrediction('BTCUSDT')).resolves.toBeNull();
+  });
+
+  test('returns null (not a throw) on a real timeout, exactly the failure mode this fix addresses', async () => {
+    mockInstance.post.mockRejectedValue(new Error('timeout of 90000ms exceeded'));
     await expect(generatePrediction('BTCUSDT')).resolves.toBeNull();
   });
 });
