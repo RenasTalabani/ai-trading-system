@@ -449,3 +449,57 @@ describe('closePositionNow — the Guide screen\'s "Sell Now" button', () => {
     await expect(svc.closePositionNow('t4', NaN)).rejects.toThrow(/price/i);
   });
 });
+
+describe('checkOpenTrades — per-trade error boundary (T-087)', () => {
+  test("one trade throwing during close does not lose an earlier trade's already-applied balance change", async () => {
+    let saveCalls = 0;
+    FAKE_PORTFOLIO = {
+      currentBalance: 1000, riskPerTradePct: 5, startedAt: new Date(),
+      save: async () => { saveCalls++; },
+      totalProfit: 0, totalLoss: 0, winCount: 0, lossCount: 0,
+      peakBalance: 1000, maxDrawdown: 0, bestTrade: null, worstTrade: null,
+      balanceHistory: [],
+    };
+    FAKE_OPEN_TRADES = [
+      openTrade({ _id: 'good', asset: 'BTCUSDT', direction: 'BUY', entryPrice: 100, takeProfit: 110, sizeUsd: 50 }),
+      openTrade({ _id: 'bad',  asset: 'ETHUSDT', direction: 'BUY', entryPrice: 100, takeProfit: 110, sizeUsd: 50 }),
+    ];
+
+    const realUpdateOne = VirtualTrade.updateOne;
+    VirtualTrade.updateOne = async (filter, update) => {
+      if (filter._id === 'bad') throw new Error('simulated transient DB write failure');
+      return realUpdateOne(filter, update);
+    };
+
+    await svc.checkOpenTrades({ BTCUSDT: 115, ETHUSDT: 115 }); // both would hit TP
+
+    // The good trade's own close was still recorded...
+    const goodClose = UPDATE_CALLS.find(c => c.filter._id === 'good' && c.update.status === 'closed_profit');
+    expect(goodClose).toBeDefined();
+
+    // ...and critically, the portfolio-level aggregate save still happened despite
+    // the other trade throwing -- this is the actual bug (T-087): without a
+    // per-trade error boundary, the bad trade's exception propagates straight to
+    // checkOpenTrades' outer catch, skipping this save entirely and silently
+    // losing the good trade's balance change (it can never be recovered, since
+    // the good trade is no longer status:'open' on the next cron cycle).
+    expect(saveCalls).toBe(1);
+    expect(FAKE_PORTFOLIO.currentBalance).toBeCloseTo(1005, 6); // only the good trade's +$5 applied
+    expect(FAKE_PORTFOLIO.winCount).toBe(1);
+  });
+
+  test('a throwing trade is logged and skipped, not silently swallowed', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    FAKE_OPEN_TRADES = [openTrade({ _id: 'bad', asset: 'BTCUSDT', direction: 'BUY', entryPrice: 100, takeProfit: 110, sizeUsd: 50 })];
+
+    VirtualTrade.updateOne = async () => { throw new Error('simulated transient DB write failure'); };
+
+    const logger = require('../src/config/logger');
+    const errSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(svc.checkOpenTrades({ BTCUSDT: 115 })).resolves.not.toThrow();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('Error processing trade'));
+
+    errSpy.mockRestore();
+  });
+});
