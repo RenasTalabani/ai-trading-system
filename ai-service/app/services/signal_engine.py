@@ -294,21 +294,33 @@ class SignalEngine:
             elif sell_s >= 0.58: final_dir, raw_conf = "SELL", round(sell_s * 100, 1)
             else:                final_dir, raw_conf = "HOLD", round(50 + abs(buy_s - sell_s) * 50, 1)
 
+        # T-078 (2026-08-31): confidence_trace below records each stage's
+        # OUTPUT value purely for later auditing (e.g. re-deriving why a
+        # signal ended up at a suspiciously round number like 100) --
+        # nothing in this block changes what raw_conf/final_dir actually
+        # compute to. fusion_conf is captured here, before any of the
+        # stages below touch raw_conf.
+        fusion_conf = raw_conf
+
         # ── 6. Event override ──────────────────────────────────────────────────
         final_dir, raw_conf = self._event_override(final_dir, raw_conf, all_events)
+        conf_after_event_override = raw_conf
 
         # ── 6b. Regime adjustment ───────────────────────────────────────────────
         regime = "TRENDING"
+        regime_modifier = None
         try:
             regime = _regime_detector.detect(candles)
-            modifier = _regime_detector.regime_score_modifier(regime, final_dir)
-            raw_conf = round(min(100, max(0, raw_conf * modifier)), 1)
+            regime_modifier = _regime_detector.regime_score_modifier(regime, final_dir)
+            raw_conf = round(min(100, max(0, raw_conf * regime_modifier)), 1)
         except Exception as e:
             logger.debug(f"Regime detection skipped for {asset}: {e}")
+        conf_after_regime = raw_conf
 
         # ── 6c. Multi-timeframe confirmation ────────────────────────────────────
         trend_alignment = "neutral"
         mtf_fights = False  # T-065: surfaced to _decision_label() below (WAIT/AVOID)
+        mtf_agrees = False
         if final_dir != "HOLD":
             try:
                 mtf = await _mtf_analyzer.analyze(asset, ["4h", "1d"])
@@ -320,8 +332,10 @@ class SignalEngine:
                 if agrees: raw_conf = round(min(100, raw_conf + 5), 1)
                 if fights: raw_conf = round(max(0, raw_conf - 8), 1)
                 mtf_fights = fights
+                mtf_agrees = agrees
             except Exception as e:
                 logger.debug(f"Multi-timeframe confirmation skipped for {asset}: {e}")
+        conf_after_mtf = raw_conf
 
         # ── 6d. Funding-rate contrarian bias ────────────────────────────────────
         # Extreme perpetual funding rates mean one side of the market is crowded
@@ -349,6 +363,7 @@ class SignalEngine:
                         funding_against = True
             except Exception as e:
                 logger.debug(f"Funding-rate contrarian check skipped for {asset}: {e}")
+        conf_after_funding = raw_conf
 
         # ── 7. Confidence calibration ──────────────────────────────────────────
         final_conf = (self.calibrator.calibrate(raw_conf)
@@ -400,6 +415,26 @@ class SignalEngine:
             "model_versions": {
                 "transformer": transformer_result.get("model", "unknown"),
                 "fusion":      "fusion-gb-v2" if (self.fusion_model and self.fusion_model.is_trained) else "vote-fallback",
+            },
+            # T-078 (2026-08-31): purely additive audit trail -- lets a
+            # stored confidence value (e.g. a suspiciously round 100) be
+            # traced back through every stage that adjusted it, without
+            # needing to re-run the pipeline retroactively. Does not change
+            # final_conf/raw_conf/final_dir or any other computed value.
+            "confidence_trace": {
+                "fusion_confidence":        fusion_conf,
+                "after_event_override":     conf_after_event_override,
+                "after_regime_adjustment":  conf_after_regime,
+                "after_mtf_confirmation":   conf_after_mtf,
+                "after_funding_bias":       conf_after_funding,  # == raw_conf
+                "regime":                   regime,
+                "regime_modifier":          regime_modifier,
+                "mtf_trend_alignment":      trend_alignment,
+                "mtf_agrees":               mtf_agrees,
+                "mtf_fights":               mtf_fights,
+                "funding_rate":             funding_rate,
+                "funding_against":          funding_against,
+                "calibrated":               bool(self.calibrator and self.calibrator.is_fitted),
             },
         }
 

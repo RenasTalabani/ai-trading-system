@@ -66,6 +66,10 @@ async function processAsset(asset) {
       },
       reason: prediction.reason,
       sources: prediction.sources,
+      // T-078: audit trail for how `confidence` above was derived --
+      // undefined (not persisted) on an older ai-service build that
+      // doesn't send this field yet, same fallback pattern as `decision`.
+      confidenceTrace: prediction.confidence_trace,
     });
 
     logger.info(`[SignalJob] NEW SIGNAL: ${asset} ${direction} | Confidence: ${confidence}%`);

@@ -39,6 +39,20 @@ const signalSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // T-078 (2026-08-31): audit trail for how `confidence` (raw_confidence
+    // from ai-service, see signalJob.js) ended up at its stored value --
+    // records each sequential adjustment stage's output (event override,
+    // regime modifier, multi-timeframe confirmation, funding-rate
+    // contrarian bias) plus the inputs that drove each one. Closes a real
+    // gap: a stored confidence landing on a suspiciously round number
+    // (e.g. exactly 100) previously couldn't be traced back to why without
+    // re-running the whole pipeline retroactively, which isn't possible
+    // after the fact. Purely additive -- no default, so pre-existing
+    // Signal documents (created before this field existed) are simply
+    // undefined on it, same convention as `decision` above.
+    confidenceTrace: {
+      type: mongoose.Schema.Types.Mixed,
+    },
     sources: {
       market: {
         score: { type: Number, default: 0 },
