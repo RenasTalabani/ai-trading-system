@@ -11,10 +11,42 @@ const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 exports.actionReport = async (req, res) => {
   try {
     const cached = getGlobalCache();
-    if (!cached?.result?.best) {
+    // T-083 (2026-08-31): these were previously the same 503 "warming up"
+    // branch, but they're two different states. `cached` being null/
+    // undefined means no global scan has EVER completed since this
+    // instance booted -- genuinely transient, resolves within one scan
+    // cycle. `cached` existing but `cached.result.best` being null means a
+    // scan DID complete and found zero assets clearing the confidence/
+    // quality filter (globalAnalyzer.js's MIN_CONFIDENCE/MIN_FUSED_SCORE
+    // thresholds, or the current RL-adaptive macro weight -- see T-041) --
+    // a legitimate outcome of real market conditions that can persist for
+    // hours, not a "retry in 30 seconds" situation. Telling the client to
+    // retry in 30s forever, on every request, produced an unhandled
+    // DioException on the mobile Radar screen (reported live 2026-08-31)
+    // since brainActionProvider has no 503-specific handling -- collapsing
+    // "never scanned" into a permanent-503 loop made that unavoidable.
+    // Fixed by returning a normal 200 with a null-signal payload instead,
+    // matching the "no strong recommendation" pattern guideController.js
+    // already uses (T-079) for the same underlying situation.
+    if (!cached) {
       return res.status(503).json({
         success: false,
         message: 'AI Brain is warming up — retry in 30 seconds',
+      });
+    }
+    if (!cached.result?.best) {
+      return res.json({
+        success: true,
+        generatedAt: cached.scannedAt,
+        action: {
+          bestAsset: '', displayName: '', assetClass: 'crypto',
+          action: 'HOLD', timeframe: '4H', confidence: 0,
+          reason: 'No strong recommendation right now — no asset currently '
+                  + 'clears the AI Brain\'s confidence/quality filter. This '
+                  + 'can happen during genuinely low-conviction market '
+                  + 'conditions and may last a while; it is not an error.',
+          topPicks: [],
+        },
       });
     }
 
@@ -478,7 +510,10 @@ async function _buildAnswer(intent, q) {
   const cached = getGlobalCache();
 
   if (intent === 'action' || intent === 'picks') {
-    if (!cached?.result?.best) return { type: 'text', text: 'The AI Brain is still warming up. Try again in 30 seconds.' };
+    // T-083 (2026-08-31): same "never scanned" vs "scanned, nothing
+    // qualifies" distinction as actionReport() above -- see its comment.
+    if (!cached) return { type: 'text', text: 'The AI Brain is still warming up. Try again in 30 seconds.' };
+    if (!cached.result?.best) return { type: 'text', text: 'No strong recommendation right now — no asset currently clears the AI Brain\'s confidence/quality filter. This can happen during low-conviction market conditions.' };
     const best = cached.result.best;
     const top  = (cached.result.top_opportunities || []).slice(0, 5);
     return {

@@ -7,10 +7,23 @@ const logger                       = require('../config/logger');
 exports.advice = async (req, res) => {
   try {
     const cached = getGlobalCache();
-    if (!cached?.result?.best) {
+    // T-083 (2026-08-31): "never scanned yet" vs "scanned, nothing
+    // qualifies" -- see the identical fix + comment in
+    // brainController.js's actionReport() for the full rationale.
+    if (!cached) {
       return res.status(503).json({
         success: false,
         message: 'AI brain is warming up — retry in 30 seconds',
+      });
+    }
+    if (!cached.result?.best) {
+      return res.json({
+        success: true,
+        advice: null,
+        top_picks: [],
+        last_decision_id: null,
+        message: 'No strong recommendation right now — no asset currently '
+                 + 'clears the AI Brain\'s confidence/quality filter.',
       });
     }
 
