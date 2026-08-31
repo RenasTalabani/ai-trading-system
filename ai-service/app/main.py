@@ -27,6 +27,23 @@ logger = logging.getLogger("ai-service")
 
 async def auto_train_pipeline():
     """Full training pipeline on startup when no saved models found."""
+    # T-081 (2026-08-31): transformer_model.train()/lstm_model.train() are
+    # real, synchronous, CPU-bound training loops (PyTorch, up to 30
+    # epochs) -- calling them directly here, un-awaited, blocked the
+    # entire asyncio event loop for their full duration, including
+    # trivial handlers like /health. Confirmed live: a fresh container's
+    # cold-start auto-training made every request time out for 90+
+    # seconds until Railway's edge gave up, reproducibly, on every fresh
+    # deploy -- not a one-time cost, since this container had zero cached
+    # models and always runs this path on first boot. Same class of bug
+    # T-076 already fixed for FinBERT's model load, just a different call
+    # site. Fixed the same way: run the blocking call in the default
+    # executor thread pool so the event loop stays free the whole time.
+    # trainer.train_multi_asset() (RF model, awaited below) already
+    # internally makes an equivalent blocking call to
+    # market_model.train() -- fixed at its source in trainer.py rather
+    # than here, so every caller of it benefits, not just this one.
+    loop = asyncio.get_event_loop()
     try:
         # RF model
         if not market_model.is_trained:
@@ -41,7 +58,7 @@ async def auto_train_pipeline():
             dp = DataProcessor()
             df = await dp.fetch_market_data("BTCUSDT", "1h", limit=1000)
             if df is not None and len(df) >= 100:
-                result = transformer_model.train(df, epochs=30)
+                result = await loop.run_in_executor(None, lambda: transformer_model.train(df, epochs=30))
                 logger.info(f"Transformer training done: {result}")
                 if result.get("success") and model_registry:
                     model_registry.register(
@@ -63,7 +80,7 @@ async def auto_train_pipeline():
             dp = DataProcessor()
             df = await dp.fetch_market_data("BTCUSDT", "1h", limit=1000)
             if df is not None and len(df) >= 80:
-                result = lstm_model.train(df, epochs=20)
+                result = await loop.run_in_executor(None, lambda: lstm_model.train(df, epochs=20))
                 logger.info(f"LSTM training done: {result}")
 
     except Exception as e:

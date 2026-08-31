@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -42,7 +43,12 @@ class ModelTrainer:
             return {"success": False, "message": msg}
 
         logger.info(f"Training on {len(df)} candles for {asset}/{interval}")
-        metrics = self.market_model.train(df)
+        # T-081: market_model.train() is a synchronous, CPU-bound sklearn
+        # call -- run it off the event loop so it can never block other
+        # requests (same fix as main.py's auto_train_pipeline(), applied
+        # at the source so every caller of this method benefits).
+        loop = asyncio.get_event_loop()
+        metrics = await loop.run_in_executor(None, lambda: self.market_model.train(df))
 
         return {
             "success": True,
@@ -69,7 +75,10 @@ class ModelTrainer:
         combined.dropna(inplace=True)
         logger.info(f"Combined training set: {len(combined)} candles from {len(all_frames)} assets")
 
-        metrics = self.market_model.train(combined)
+        # T-081: same fix as train() above -- keep this synchronous,
+        # CPU-bound call off the event loop.
+        loop = asyncio.get_event_loop()
+        metrics = await loop.run_in_executor(None, lambda: self.market_model.train(combined))
         return {
             "success": True,
             "assets": assets,
