@@ -26,7 +26,12 @@ describe('fetchSocialAnalysis', () => {
   test('gets /api/social/analysis from the configured AI_SERVICE_URL and returns the body', async () => {
     axios.get = async (url, opts) => {
       expect(url).toBe('http://ai-service.test/api/social/analysis');
-      expect(opts).toEqual({ timeout: 20000 });
+      // T-089 (2026-09-01): raised from 20000 -- this endpoint calls
+      // ai-service's social_analyzer.refresh() with no timeout guard of
+      // its own, and that call was confirmed live to take 35s+ under the
+      // current memory-constrained container (same root cause as T-086/
+      // T-088). 20s was cutting it off before it could ever succeed.
+      expect(opts).toEqual({ timeout: 90000 });
       return { data: { overall_sentiment: 'bullish', sample_size: 42 } };
     };
     const result = await fetchSocialAnalysis();
@@ -43,7 +48,10 @@ describe('fetchSocialAlerts', () => {
   test('gets /api/social/alerts from the configured AI_SERVICE_URL and returns the body', async () => {
     axios.get = async (url, opts) => {
       expect(url).toBe('http://ai-service.test/api/social/alerts');
-      expect(opts).toEqual({ timeout: 10000 });
+      // T-089 (2026-09-01): same reasoning as fetchSocialAnalysis above --
+      // this endpoint hits the identical unbounded social_analyzer.refresh()
+      // call, just via a different route.
+      expect(opts).toEqual({ timeout: 90000 });
       return { data: { alerts: [] } };
     };
     const result = await fetchSocialAlerts();

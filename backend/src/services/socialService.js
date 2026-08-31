@@ -23,9 +23,21 @@ function detectRelatedAssets(text) {
     .map(([a]) => a);
 }
 
+// T-089 (2026-09-01): both endpoints below call ai-service's
+// social_analyzer.refresh() directly with no timeout guard of its own
+// (see ai-service/app/api/routes.py's /social/analysis and /social/alerts)
+// -- the same underlying call unified_analyzer.py's _safe() wraps at 35s
+// (T-086) after finding it can genuinely take that long under the
+// current memory-constrained container. 20s/10s here were both too
+// tight for that same real-world latency -- confirmed live: rhythmic
+// "[SocialService] ... failed" errors from socialJob's cron cycle.
+// Raised to 90s, matching this session's established budget for calls
+// into this same slow pipeline (T-088's /api/predict override).
+const SOCIAL_TIMEOUT_MS = 90_000;
+
 async function fetchSocialAnalysis() {
   try {
-    const resp = await axios.get(`${process.env.AI_SERVICE_URL}/api/social/analysis`, { timeout: 20000 });
+    const resp = await axios.get(`${process.env.AI_SERVICE_URL}/api/social/analysis`, { timeout: SOCIAL_TIMEOUT_MS });
     return resp.data;
   } catch (err) {
     logger.error('[SocialService] AI service social analysis failed:', err.message);
@@ -35,7 +47,7 @@ async function fetchSocialAnalysis() {
 
 async function fetchSocialAlerts() {
   try {
-    const resp = await axios.get(`${process.env.AI_SERVICE_URL}/api/social/alerts`, { timeout: 10000 });
+    const resp = await axios.get(`${process.env.AI_SERVICE_URL}/api/social/alerts`, { timeout: SOCIAL_TIMEOUT_MS });
     return resp.data;
   } catch (err) {
     logger.error('[SocialService] Social alerts fetch failed:', err.message);
