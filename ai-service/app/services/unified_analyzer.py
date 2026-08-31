@@ -86,11 +86,31 @@ class UnifiedAnalyzer:
                 logger.warning(f"[Unified] {asset} {label} timeout/error after {elapsed:.1f}s (budget {timeout}s): {e}")
                 return None
 
+        # T-086 (2026-08-31): budgets below were 15/20/12/12s. Live
+        # instrumentation (see the log lines in _safe()) showed Strategy
+        # consistently finishing in 0.7-2.3s -- comfortably inside its
+        # budget, never the problem -- while OrderBlock, News, and Social
+        # ALL timed out on EVERY asset in a real scan, clustered tightly at
+        # ~23-27.5s (their timestamps land within milliseconds of each
+        # other across a dozen concurrent asset calls, consistent with
+        # News/Social's refresh() being a shared/batched fetch all callers
+        # wait on together, not 12 independent slow calls -- so this isn't
+        # "gets worse with more tracked assets"). That meant OB(40%) +
+        # News(15%) + Social(10%) -- 65% of the fusion weight -- defaulted
+        # to a neutral HOLD/50 vote on literally every scored asset, which
+        # is mechanically why nothing has cleared global_analyzer.py's
+        # MIN_CONFIDENCE/MIN_FUSED_SCORE gates: only Strategy's 35% carried
+        # any real signal, and _action_to_score flattens any HOLD vote to
+        # 50 regardless of confidence, so even a real Strategy SELL lean
+        # only ever nudged the fused score into the low-to-mid 40s. Raised
+        # to comfortably clear the observed ~27.5s worst case with margin;
+        # global_analyzer.py's outer per-asset wrapper (_score_crypto) is
+        # raised to match in the same commit.
         results = await asyncio.gather(
             _safe(self._strategy.analyze_multi([asset], strat_tf), timeout=15, label='strategy'),
-            _safe(self._ob.analyze(asset, timeframe), timeout=20, label='orderblock'),
-            _safe(self._news.refresh(), timeout=12, label='news'),
-            _safe(self._social.refresh(), timeout=12, label='social'),
+            _safe(self._ob.analyze(asset, timeframe), timeout=40, label='orderblock'),
+            _safe(self._news.refresh(), timeout=35, label='news'),
+            _safe(self._social.refresh(), timeout=35, label='social'),
         )
 
         strat_recs, ob_result, news_result, social_result = results

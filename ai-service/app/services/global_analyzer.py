@@ -199,9 +199,16 @@ class GlobalAnalyzer:
                             capital: float,
                             macro_sentiment: str) -> dict[str, Any]:
         try:
+            # T-086 (2026-08-31): raised from 30s to match unified_analyzer
+            # .py's own raised inner budgets (OB/news/social now 35-40s each,
+            # run in parallel via asyncio.gather there) -- 30s was cutting
+            # analyze() off before OB/news/social's real ~23-27.5s latency
+            # could resolve, forcing every one of them to fall back to a
+            # neutral vote. See unified_analyzer.py's T-086 comment for the
+            # full evidence.
             result = await asyncio.wait_for(
                 self._unified.analyze(asset, timeframe, capital),
-                timeout=30,
+                timeout=45,
             )
             if not result.get("success"):
                 return {}
