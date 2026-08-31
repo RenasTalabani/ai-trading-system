@@ -130,6 +130,14 @@ class PerformanceReport {
   final List<EquityPoint>    equityCurve;
   final List<RecentDecision> recentDecisions;
   final String? message;
+  // T-085 (2026-08-31): the balance above is a full replay of every closed
+  // AIDecision, so it's frozen for as long as nothing new closes -- found
+  // live in production showing the exact same number for ~4 months with no
+  // way to tell from the UI. `stale`/`lastDecisionAt` let the screen say so
+  // instead of silently looking broken. See virtual_performance_screen.dart
+  // for where this renders.
+  final bool      stale;
+  final DateTime? lastDecisionAt;
 
   const PerformanceReport({
     required this.startingBalance, required this.currentBalance,
@@ -139,6 +147,7 @@ class PerformanceReport {
     required this.openTrades, required this.winRate, required this.accuracy,
     required this.equityCurve, required this.recentDecisions,
     this.avgProfitPct, this.message,
+    this.stale = false, this.lastDecisionAt,
   });
 
   factory PerformanceReport.fromJson(Map<String, dynamic> j) => PerformanceReport(
@@ -156,6 +165,9 @@ class PerformanceReport {
     accuracy:         (j['accuracy']         as num?)?.toInt()    ?? 0,
     avgProfitPct:     (j['avgProfitPct']     as num?)?.toDouble(),
     message:          j['message']?.toString(),
+    stale:            j['stale'] as bool?    ?? false,
+    lastDecisionAt:   j['lastDecisionAt'] != null
+        ? DateTime.tryParse(j['lastDecisionAt'].toString()) : null,
     equityCurve:      (j['equityCurve'] as List? ?? [])
         .map((p) => EquityPoint.fromJson(p as Map<String, dynamic>))
         .toList(),

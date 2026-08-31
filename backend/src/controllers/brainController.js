@@ -123,6 +123,23 @@ exports.actionReport = async (req, res) => {
 
 // ── GET /api/v1/brain/report/performance?balance=500 ─────────────────────────
 // Report 2: "If You Followed AI" — full simulation with periods + history
+// T-085 (2026-08-31): the Portfolio screen's "If you followed every AI
+// decision" balance is a full replay of every AIDecision ever closed --
+// which means it's mathematically frozen for as long as no new decision
+// closes, with nothing in the response to say so. Found live in
+// production: the balance had been showing the exact same $304.58 for
+// nearly four months, because AIDecision.find() turned up nothing created
+// after 2026-05-06 -- storeGlobalDecision() (globalScanJob.js) only fires
+// when a scan's `best` pick is non-null, and the confidence/fused-score
+// filter in global_analyzer.py has been blocking effectively every asset
+// (see the T-083/T-084 commits' evidence trail, and global_analyzer.py's
+// own T-041 comment on the RL macro-weight drift behind it -- an explicit
+// owner-reviewed decision, not touched here). Rather than silently
+// replaying ancient data as if it were current, this now reports how
+// stale it is so the UI can be honest about it instead of just looking
+// broken.
+const DECISION_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24h
+
 exports.performanceReport = async (req, res) => {
   try {
     const startingBalance = Math.max(10, Math.min(1_000_000,
@@ -134,6 +151,9 @@ exports.performanceReport = async (req, res) => {
     }).sort({ createdAt: 1 }).lean();
 
     const open = await AIDecision.countDocuments({ result: 'OPEN' });
+    const mostRecent = await AIDecision.findOne({}).sort({ createdAt: -1 }).select('createdAt').lean();
+    const lastDecisionAt = mostRecent?.createdAt || null;
+    const stale = !lastDecisionAt || (Date.now() - new Date(lastDecisionAt).getTime()) > DECISION_STALE_THRESHOLD_MS;
 
     if (closed.length === 0) {
       return res.json({
@@ -152,6 +172,8 @@ exports.performanceReport = async (req, res) => {
         accuracy:          0,
         equityCurve:       [],
         recentDecisions:   [],
+        stale,
+        lastDecisionAt,
         message:           'No evaluated decisions yet — results appear after the first completed trade',
       });
     }
@@ -233,6 +255,12 @@ exports.performanceReport = async (req, res) => {
         profitPct:   d.profitPct || null,
         createdAt:   d.createdAt,
       })),
+      stale,
+      lastDecisionAt,
+      message: stale
+        ? `No new AI decisions since ${new Date(lastDecisionAt).toISOString().slice(0, 10)} — `
+          + 'showing the last available snapshot, not live performance.'
+        : undefined,
     });
   } catch (err) {
     logger.error('[Brain] performance report error:', err.message);

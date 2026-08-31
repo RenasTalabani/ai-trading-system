@@ -198,6 +198,41 @@ class _PerformanceBody extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(children: [
+        // T-085 (2026-08-31): the hero balance below is a full replay of
+        // every closed AI decision, so it's frozen for as long as nothing
+        // new closes -- this banner makes that honest instead of the
+        // number just silently never moving.
+        if (r.stale) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: AppColors.hold.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.hold.withValues(alpha: 0.35)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.pause_circle_outline,
+                  size: 18, color: AppColors.hold),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  r.lastDecisionAt != null
+                      ? 'No new AI decisions since '
+                        '${r.lastDecisionAt!.toString().split(' ').first} — '
+                        'showing the last available snapshot, not live performance.'
+                      : (r.message ?? 'Showing the last available snapshot, not live performance.'),
+                  style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                      height: 1.3),
+                ),
+              ),
+            ]),
+          ),
+        ],
+
         // ── Hero balance card ─────────────────────────────────────────────
         Container(
           width: double.infinity,

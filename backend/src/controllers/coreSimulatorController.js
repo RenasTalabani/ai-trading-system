@@ -12,6 +12,16 @@ exports.simulate = async (req, res) => {
       profitPct: { $ne: null },
     }).sort({ createdAt: 1 }).lean();
 
+    // T-085 (2026-08-31): same staleness distinction as
+    // brainController.js's performanceReport() -- this is a full replay of
+    // every closed AIDecision, so it's frozen for as long as nothing new
+    // closes. See that function's comment for the full root-cause
+    // evidence trail (nothing had closed in ~4 months in production).
+    const mostRecent = await AIDecision.findOne({}).sort({ createdAt: -1 }).select('createdAt').lean();
+    const lastDecisionAt = mostRecent?.createdAt || null;
+    const STALE_MS = 24 * 60 * 60 * 1000;
+    const stale = !lastDecisionAt || (Date.now() - new Date(lastDecisionAt).getTime()) > STALE_MS;
+
     if (closed.length === 0) {
       return res.json({
         success: true,
@@ -23,6 +33,8 @@ exports.simulate = async (req, res) => {
         total_trades:  0,
         wins:          0,
         losses:        0,
+        stale,
+        last_decision_at: lastDecisionAt,
         message:       'No evaluated decisions yet — results appear after 1 hour',
       });
     }
@@ -59,6 +71,11 @@ exports.simulate = async (req, res) => {
       wins,
       losses,
       equity_curve:   equityCurve,
+      stale,
+      last_decision_at: lastDecisionAt,
+      message: stale
+        ? `No new AI decisions since ${new Date(lastDecisionAt).toISOString().slice(0, 10)} — showing the last available snapshot, not live performance.`
+        : undefined,
     });
   } catch (err) {
     logger.error('[CoreSimulator] error:', err.message);

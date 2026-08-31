@@ -44,10 +44,30 @@ async function evaluateOpenDecisions() {
 
   const bulk = AIDecision.collection.initializeUnorderedBulkOp();
   let evaluated = 0;
+  let skipped   = 0;
 
   for (const dec of expired) {
     const currentPrice = prices[dec.asset];
-    if (!currentPrice || !dec.entryPrice) continue;
+    // T-085 (2026-08-31): this used to `continue` here with zero logging --
+    // found live in production that two decisions (XAUUSD/XAGUSD, both
+    // multi-asset symbols priced via ai-service's yfinance-backed
+    // collector, which is meaningfully less reliable than the crypto/
+    // Binance path) sat OPEN, silently re-skipped every 15 minutes, for
+    // three weeks straight with zero trace in the logs -- the only reason
+    // this was ever noticed was a user staring at a frozen portfolio
+    // number. A single skip is normal (the price API can have a bad
+    // moment); skips that never resolve are the actual problem, and there
+    // was no way to tell the two apart from the logs before this. Not
+    // retried harder here on purpose -- the 15-minute cron already
+    // provides the retry; this only makes a stuck one visible instead of
+    // silent.
+    if (!currentPrice || !dec.entryPrice) {
+      skipped++;
+      logger.warn(`[DecisionTracking] Skipping ${dec.asset} (id ${dec._id}): ` +
+        `${!currentPrice ? 'no live price available' : 'entryPrice missing'} ` +
+        `-- created ${dec.createdAt?.toISOString?.() || dec.createdAt}, will retry next cycle`);
+      continue;
+    }
 
     const returnPct    = (currentPrice - dec.entryPrice) / dec.entryPrice * 100;
     const signedReturn = dec.action === 'SELL' ? -returnPct : returnPct;
