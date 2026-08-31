@@ -125,11 +125,29 @@ class NewsAnalyzer:
         # not change what gets computed or its outputs -- only that the
         # per-asset passes now run concurrently via asyncio.gather instead of
         # one after another.
+        #
+        # T-086 (2026-08-31): unbounded concurrency here traded that hang for
+        # a different one. Confirmed live: `railway metrics` showed CPU at
+        # 8.7 vCPU against an 8.0 vCPU limit and memory at 90% during a real
+        # scan, at the exact moment News/Social/OrderBlock (all running
+        # concurrently across ~13 assets, each independently entering this
+        # per-asset gather) were hanging past 35-40s timeouts in
+        # unified_analyzer.py -- ~15 concurrent FinBERT forward passes
+        # (each itself able to use multiple cores via PyTorch's intra-op
+        # parallelism) oversubscribing an 8-core container starves the event
+        # loop for everything else scheduled on it, not just this call.
+        # Bounded to 3 concurrent FinBERT passes -- enough to keep this
+        # meaningfully faster than the old fully-sequential version, low
+        # enough to leave real headroom for Strategy/OB/Social's own CPU
+        # work happening at the same time across the rest of a scan.
+        _finbert_limiter = asyncio.Semaphore(3)
+
         async def _score_asset(asset: str):
             kws = ASSET_KEYWORDS[asset]
             relevant = [a.title for a in articles if any(k in a.title.lower() for k in kws)]
             if relevant:
-                asset_result = await loop.run_in_executor(None, self.model.analyze, relevant)
+                async with _finbert_limiter:
+                    asset_result = await loop.run_in_executor(None, self.model.analyze, relevant)
                 return asset, {
                     "market_score": asset_result["market_score"],
                     "sentiment": asset_result["overall_sentiment"],
