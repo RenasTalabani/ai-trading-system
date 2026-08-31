@@ -60,19 +60,37 @@ class UnifiedAnalyzer:
         base      = asset.replace('USDT', '').replace('BUSD', '')
         strat_tf  = _TF_MAP.get(timeframe, '7d')
 
-        # ── Run all 4 engines in parallel (15s timeout each) ─────────────────
-        async def _safe(coro, timeout=15):
+        # T-086 (2026-08-31): a timed-out engine here silently falls back to
+        # a neutral HOLD/50 vote (see the parsing below), and OB+Strategy
+        # alone carry 75% of the fusion weight -- so a routine OB or
+        # Strategy timeout doesn't just lose one signal, it drags the whole
+        # fused score toward 50 regardless of what the market is actually
+        # doing, which then can never clear global_analyzer.py's
+        # MIN_CONFIDENCE/MIN_FUSED_SCORE gates (both effectively require the
+        # *original* fused score to reach ~65-70, not a macro-adjusted one --
+        # rl_score/macro weighting is computed but never actually gates
+        # anything, contrary to what earlier comments in that file assumed).
+        # Timing instrumentation added here (not just on timeout, so a
+        # "successful but slow" call is visible too) to find out whether
+        # these budgets are actually too tight for how long the real calls
+        # take, before touching any threshold.
+        async def _safe(coro, timeout=15, label=''):
+            started = asyncio.get_event_loop().time()
             try:
-                return await asyncio.wait_for(coro, timeout=timeout)
+                result = await asyncio.wait_for(coro, timeout=timeout)
+                elapsed = asyncio.get_event_loop().time() - started
+                logger.info(f"[Unified] {asset} {label} ok in {elapsed:.1f}s (budget {timeout}s)")
+                return result
             except Exception as e:
-                logger.warning(f"[Unified] engine timeout/error: {e}")
+                elapsed = asyncio.get_event_loop().time() - started
+                logger.warning(f"[Unified] {asset} {label} timeout/error after {elapsed:.1f}s (budget {timeout}s): {e}")
                 return None
 
         results = await asyncio.gather(
-            _safe(self._strategy.analyze_multi([asset], strat_tf), timeout=15),
-            _safe(self._ob.analyze(asset, timeframe), timeout=20),
-            _safe(self._news.refresh(), timeout=12),
-            _safe(self._social.refresh(), timeout=12),
+            _safe(self._strategy.analyze_multi([asset], strat_tf), timeout=15, label='strategy'),
+            _safe(self._ob.analyze(asset, timeframe), timeout=20, label='orderblock'),
+            _safe(self._news.refresh(), timeout=12, label='news'),
+            _safe(self._social.refresh(), timeout=12, label='social'),
         )
 
         strat_recs, ob_result, news_result, social_result = results
@@ -141,6 +159,11 @@ class UnifiedAnalyzer:
             social_score * 0.10
         )
         fused_action, fused_conf = _score_to_action(fused_score)
+        logger.info(
+            f"[Unified] {asset} fused={fused_score:.1f} -> {fused_action}@{fused_conf} "
+            f"(ob={ob_score:.1f}[{ob_action}] strat={strat_score:.1f}[{strat_action}] "
+            f"news={news_score:.1f} social={social_score:.1f})"
+        )
 
         # T-066: derived WAIT/AVOID label, same convention as SignalEngine's
         # _decision_label() (T-065) -- reused rather than reimplemented, so
