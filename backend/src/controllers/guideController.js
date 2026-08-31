@@ -27,6 +27,24 @@ const logger = require('../config/logger');
 // need a separate live-price lookup, same list virtualTrackingJob.js uses.
 const EXTENDED_PRICE_ASSETS = ['XAUUSD'];
 
+// T-079 (2026-08-31): resolveSuggestion()'s Signal-fallback branch used to
+// pick the highest-confidence `status:'active'` signal with no age check at
+// all -- "active" only means not yet past its own 24h expiresAt (swept
+// hourly), so a several-hours-old high-confidence signal could (and did,
+// confirmed live) keep winning over much fresher lower-confidence ones for
+// its entire lifetime. Owner-reviewed default: prefer a signal from the
+// last SIGNAL_PREFERRED_WINDOW_MS; if none qualifies, widen to
+// SIGNAL_FALLBACK_WINDOW_MS and flag the result as an older signal so the
+// frontend can show that honestly; if nothing qualifies even within the
+// wider window, resolveSuggestion() returns null (same "no strong
+// recommendation" empty state getSuggestion() already has for "nothing at
+// all") instead of forcing a stale pick just to always have something to
+// show. Does not touch the global-scan branch above -- that pool is
+// wholesale-replaced every 30 min by globalScanJob, not an aging set of
+// candidates, so the same staleness failure mode doesn't apply there.
+const SIGNAL_PREFERRED_WINDOW_MS = 2 * 60 * 60 * 1000; // 2h
+const SIGNAL_FALLBACK_WINDOW_MS  = 6 * 60 * 60 * 1000; // 6h
+
 // The dollar loss if this position/suggestion hits its stop-loss exactly --
 // the honest, concrete "how much could I lose" number, not a guess. Returns
 // null when there's no stop-loss set, since the downside is then genuinely
@@ -126,15 +144,38 @@ async function resolveSuggestion() {
       why:         plainWhyFromGlobalBest(best),
       generatedAt: cached.scannedAt,
       signalId:    null, // sourced from the global-scan cache, not a persisted Signal — see approve() (T-061)
+      // T-079: this pool is wholesale-replaced every 30 min by
+      // globalScanJob, not an aging set of candidates -- always fresh by
+      // construction, so this is always false here (present for a
+      // consistent response shape regardless of source, not computed).
+      isOlderSignal: false,
     };
   }
 
-  const sig = await Signal.findOne({
+  const baseQuery = {
     status: 'active',
     direction: { $in: ['BUY', 'SELL'] },
     asset: { $nin: openAssets },
     'price.entry': { $exists: true },
+  };
+  const now = Date.now();
+
+  // T-079: preferred window first (recent + confident); only widen to the
+  // fallback window if nothing qualifies within it. Never falls further
+  // than the fallback window -- see the constants' comment above.
+  let sig = await Signal.findOne({
+    ...baseQuery,
+    createdAt: { $gte: new Date(now - SIGNAL_PREFERRED_WINDOW_MS) },
   }).sort({ confidence: -1 });
+
+  let isOlderSignal = false;
+  if (!sig) {
+    sig = await Signal.findOne({
+      ...baseQuery,
+      createdAt: { $gte: new Date(now - SIGNAL_FALLBACK_WINDOW_MS) },
+    }).sort({ confidence: -1 });
+    isOlderSignal = !!sig;
+  }
 
   if (sig) {
     return {
@@ -156,6 +197,7 @@ async function resolveSuggestion() {
       why:         plainWhyFromSignal(sig),
       generatedAt: sig.createdAt,
       signalId:    sig._id, // T-061: threaded through to approve() so the resulting trade is traceable
+      isOlderSignal, // T-079: true only when served from the wider fallback window
     };
   }
 
@@ -364,6 +406,11 @@ exports.getSuggestion = async (req, res) => {
       return res.json({
         success: true,
         available: false,
+        // T-079: this now also covers "signals exist, but nothing recent
+        // enough to trust" (see resolveSuggestion()'s windowing) -- kept
+        // to the same honest, non-alarming tone rather than a separate
+        // message, since both cases mean the same thing to the user:
+        // there's nothing worth acting on right now.
         message: 'The AI is still studying the markets. Check back in a few minutes.',
       });
     }
@@ -391,6 +438,10 @@ exports.getSuggestion = async (req, res) => {
       riskLevel: riskLevelFor(suggestion.confidence),
       confidenceWords: confidenceWordsFor(suggestion.confidence),
       generatedAt: suggestion.generatedAt,
+      // T-079: true when this came from the wider (2-6h) fallback window --
+      // lets the frontend show something like "using an older signal"
+      // instead of presenting it identically to a fresh one.
+      isOlderSignal: suggestion.isOlderSignal,
     });
   } catch (err) {
     logger.error(`[Guide] getSuggestion failed: ${err.stack}`);
