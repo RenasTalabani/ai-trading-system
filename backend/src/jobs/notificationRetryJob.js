@@ -79,7 +79,22 @@ async function retryFailedNotifications() {
           d.sentAt = now;
           recovered++;
         } else {
-          d.status = d.attempts >= MAX_ATTEMPTS ? 'failed' : 'failed';
+          // T-082 (2026-08-31): both branches of this used to evaluate to
+          // 'failed' -- a dead ternary that looked like it should
+          // distinguish "still eligible for another retry" from
+          // "permanently exhausted", but the Notification schema's
+          // delivery.status enum (['sent','failed','pending']) has no
+          // third value for that. Simplified to what it actually always
+          // did -- zero behavior change, no schema change. Future
+          // retry-eligibility is (and was) already correctly gated
+          // separately, by `attempts` against MAX_ATTEMPTS, both in
+          // isRetryDue() above and in the query in
+          // retryFailedNotifications() -- this field was never actually
+          // used to decide that. Distinguishing "retrying" from
+          // "exhausted" in delivery.status itself would need a real
+          // schema change (a new enum value), not just this line -- a
+          // separate, deliberate decision, not bundled into this cleanup.
+          d.status = 'failed';
         }
 
         changed = true;
