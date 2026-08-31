@@ -21,6 +21,15 @@ class GuideScreen extends ConsumerWidget {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.background,
+        leadingWidth: 52,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.asset('assets/images/reno-mark.png',
+                width: 28, height: 28, fit: BoxFit.cover),
+          ),
+        ),
         title: const Text('What Should I Do?',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                 color: AppColors.textPrimary)),

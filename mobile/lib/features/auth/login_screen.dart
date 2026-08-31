@@ -148,13 +148,10 @@ class _Logo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(children: [
-      Container(
-        width: 48, height: 48,
-        decoration: BoxDecoration(
-          color: AppColors.primary,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: const Icon(Icons.auto_graph, color: Colors.white, size: 28),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.asset('assets/images/reno-mark.png',
+            width: 48, height: 48, fit: BoxFit.cover),
       ),
       const SizedBox(width: 12),
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
