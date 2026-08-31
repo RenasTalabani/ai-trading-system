@@ -530,7 +530,16 @@ class _CreateAlertSheetState extends ConsumerState<_CreateAlertSheet> {
 
   Future<void> _save() async {
     final price = double.tryParse(_priceCtrl.text);
-    if (price == null || price <= 0) return;
+    if (price == null || price <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid target price'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
 
     setState(() => _saving = true);
     final ok = await ref.read(priceAlertsProvider.notifier).create(
@@ -540,17 +549,35 @@ class _CreateAlertSheetState extends ConsumerState<_CreateAlertSheet> {
       direction:    _direction,
       note:         _noteCtrl.text.trim(),
     );
-    if (mounted) {
+    if (!mounted) return;
+
+    // T-090 (2026-09-01): this used to Navigator.pop() unconditionally
+    // here, before ever checking `ok` -- create() swallows its own
+    // errors into a plain `false` (see price_alerts_provider.dart), so a
+    // failed save (network error, server rejection) closed the sheet
+    // with zero feedback. The user had no way to tell "it worked" from
+    // "it silently didn't" short of manually checking the Price Alerts
+    // tab. Now only pops on success; a failure keeps the sheet open
+    // (nothing was lost -- the typed price/note are still there) and
+    // shows what actually happened.
+    if (ok) {
       Navigator.pop(context);
-      if (ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Alert set for $_selectedDisplay at \$$price'),
-            backgroundColor: AppColors.buy,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Alert set for $_selectedDisplay at \$$price'),
+          backgroundColor: AppColors.buy,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not create the alert — check your connection and try again'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
