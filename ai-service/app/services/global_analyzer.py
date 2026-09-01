@@ -140,8 +140,31 @@ class GlobalAnalyzer:
 
         raw = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # RENO Phase 1 (2026-09-01): this used to hard-exclude (via
+        # `continue`) any candidate below MIN_CONFIDENCE/MIN_FUSED_SCORE
+        # before it ever reached `scored` -- confirmed live and documented
+        # in guideController.js's own comments to reject nearly every
+        # candidate in practice (0 qualifying picks across 10+ consecutive
+        # scan cycles observed in normal operation), which is why Global
+        # Scan / the "AI Brain" pick / Guide's global-scan branch usually
+        # had nothing to show at all rather than an honestly-ranked list.
+        #
+        # This does NOT relax what's allowed to auto-trade real (paper)
+        # capital: aiWorkerService.js's runAIWorkerCycle() re-applies its
+        # own independent CONFIDENCE_THRESHOLD/MIN_FUSED_SCORE/
+        # MIN_QUALITY_SCORE gate per-opportunity before opening any trade
+        # (confirmed by reading that loop directly) -- that gate is
+        # untouched by this change. What changes here is purely what gets
+        # *ranked and shown* as `best`/`top_opportunities`: every
+        # non-junk, non-macro-blocked candidate is now included and
+        # sorted, each carrying an honest `meets_bar` flag (the original
+        # confidence>=70 AND fused_score>=65 combination) so any caller
+        # that wants "only the ones that would qualify for auto-trading"
+        # can still filter on that -- instead of the scan silently
+        # returning nothing at all whenever the bar isn't cleared.
         scored: list[dict] = []
-        blocked = 0
+        below_bar = 0
+        macro_blocked = 0
         for r in raw:
             if isinstance(r, Exception):
                 logger.warning(f"[Global] scorer error: {r}")
@@ -149,27 +172,34 @@ class GlobalAnalyzer:
             if not isinstance(r, dict) or r.get("fused_score", 0) <= 0:
                 continue
 
-            # ── Phase 18 confidence + macro filter ────────────────────────
-            if r.get("confidence", 0) < MIN_CONFIDENCE:
-                blocked += 1
-                continue
-            if r.get("fused_score", 0) < MIN_FUSED_SCORE:
-                blocked += 1
-                continue
             action = r.get("action", "HOLD")
+            # Macro direction blocks stay a hard exclusion -- these are a
+            # safety/direction check (don't surface a BUY into a
+            # strong-bear macro regime), not a quality-ranking threshold,
+            # and are unrelated to the near-zero-results problem above.
             if macro_sentiment in _STRONG_BEAR_BLOCKS_BUY  and action == "BUY":
-                blocked += 1
+                macro_blocked += 1
                 logger.info(f"[Filter] {r['asset']} BUY blocked — strong_bear macro")
                 continue
             if macro_sentiment in _STRONG_BULL_BLOCKS_SELL and action == "SELL":
-                blocked += 1
+                macro_blocked += 1
                 logger.info(f"[Filter] {r['asset']} SELL blocked — strong_bull macro")
                 continue
 
+            meets_bar = (
+                r.get("confidence", 0)  >= MIN_CONFIDENCE
+                and r.get("fused_score", 0) >= MIN_FUSED_SCORE
+            )
+            if not meets_bar:
+                below_bar += 1
+            r["meets_bar"] = meets_bar
+
             scored.append(r)
 
-        if blocked:
-            logger.info(f"[Global] {blocked} low-quality/macro-blocked signals filtered")
+        if macro_blocked:
+            logger.info(f"[Global] {macro_blocked} signals macro-blocked")
+        if below_bar:
+            logger.info(f"[Global] {below_bar} signals below the confidence/score bar (still ranked, not hidden)")
 
         scored.sort(key=lambda x: x.get("quality_score", x.get("fused_score", 50)),
                     reverse=True)
@@ -179,12 +209,14 @@ class GlobalAnalyzer:
             item["rank"] = i + 1
 
         weights = _rl_engine.get_weights()
+        meets_bar_count = sum(1 for x in scored if x.get("meets_bar"))
 
         return {
             "success":           True,
-            "scanned":           len(scored) + blocked,
-            "passed_filter":     len(scored),
-            "blocked":           blocked,
+            "scanned":           len(scored) + macro_blocked,
+            "passed_filter":     meets_bar_count,
+            "blocked":           macro_blocked,
+            "below_bar":         below_bar,
             "capital":           capital,
             "timeframe":         timeframe,
             "macro_sentiment":   macro_sentiment,
