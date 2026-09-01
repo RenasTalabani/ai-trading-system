@@ -410,6 +410,68 @@ describe('checkOpenTrades — TP/SL/liquidation closing logic', () => {
   });
 });
 
+describe('getTrackRecordByAsset — Phase 2, step 3 (2026-09-01): per-asset real track record', () => {
+  function closedTrade(asset, result, pnl) {
+    return { asset, status: result === 'win' ? 'closed_profit' : 'closed_loss', result, pnl };
+  }
+
+  test('returns an empty breakdown when there are no closed trades', async () => {
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) return { lean: async () => [] };
+      return { sort: () => [] };
+    };
+    const result = await svc.getTrackRecordByAsset('all');
+    expect(result.perAsset).toEqual([]);
+  });
+
+  test('computes correct win rate, total P&L, and average P&L per asset, sorted by trade count', async () => {
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) {
+        return {
+          lean: async () => [
+            closedTrade('BTCUSDT', 'win', 10),
+            closedTrade('BTCUSDT', 'win', 20),
+            closedTrade('BTCUSDT', 'loss', -5),
+            closedTrade('XAUUSD',  'win', 50),
+          ],
+        };
+      }
+      return { sort: () => [] };
+    };
+    const result = await svc.getTrackRecordByAsset('all');
+
+    const btc = result.perAsset.find(a => a.asset === 'BTCUSDT');
+    expect(btc.totalTrades).toBe(3);
+    expect(btc.wins).toBe(2);
+    expect(btc.losses).toBe(1);
+    expect(btc.winRate).toBeCloseTo(66.7, 1);
+    expect(btc.totalPnl).toBe(25);
+    expect(btc.avgPnl).toBeCloseTo(8.33, 2);
+
+    const gold = result.perAsset.find(a => a.asset === 'XAUUSD');
+    expect(gold.totalTrades).toBe(1);
+    expect(gold.winRate).toBe(100);
+    expect(gold.totalPnl).toBe(50);
+
+    // Sorted by trade count descending — BTCUSDT (3) before XAUUSD (1).
+    expect(result.perAsset[0].asset).toBe('BTCUSDT');
+  });
+
+  test('never counts a trade with no real result field toward wins or losses (honest, not silently guessed)', async () => {
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) {
+        return { lean: async () => [{ asset: 'X', status: 'closed_profit', pnl: 5 }] }; // no `result` field
+      }
+      return { sort: () => [] };
+    };
+    const result = await svc.getTrackRecordByAsset('all');
+    const x = result.perAsset.find(a => a.asset === 'X');
+    expect(x.totalTrades).toBe(1);
+    expect(x.wins).toBe(0);
+    expect(x.losses).toBe(0);
+  });
+});
+
 describe('closePositionNow — the Guide screen\'s "Sell Now" button', () => {
   test('closes a BUY position at the current price and records a profit', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);

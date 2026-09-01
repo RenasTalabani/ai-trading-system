@@ -39,7 +39,7 @@ const VirtualTrade        = require('../models/VirtualTrade');
 
 const { getAllCachedPrices, TRACKED_ASSETS } = require('./binanceService');
 const aiService = require('./aiService');
-const { getSummary, approveSuggestion } = require('./virtualTrackingService');
+const { getSummary, approveSuggestion, getTrackRecordByAsset } = require('./virtualTrackingService');
 const { resolveSuggestion, buildPositionGuidance } = require('../controllers/guideController');
 const AIDecision = require('../models/AIDecision');
 
@@ -87,6 +87,16 @@ const TOOLS = [
     name: 'get_portfolio_summary',
     description: 'Get real, current account-level numbers: balance, total real P&L, win rate, number of open/closed trades.',
     input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_track_record',
+    description: 'Get the account\'s real, closed-trade track record -- win rate, trade count, and total/average P&L, broken down per asset (or for one specific asset). Use this for "how are we doing on X" / "what\'s my win rate" / "which assets have been best/worst" type questions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        asset: { type: 'string', description: 'Optional -- filter to one asset, e.g. "BTCUSDT" or "XAUUSD". Omit for a full breakdown across every traded asset.' },
+      },
+    },
   },
 ];
 
@@ -142,11 +152,30 @@ async function _execGetPortfolioSummary() {
   return await getSummary('all');
 }
 
+// Phase 2, step 3 (2026-09-01) -- "measurable track record" tool. A thin
+// pass-through to getTrackRecordByAsset() (virtualTrackingService.js),
+// which itself is a real aggregation over the same closed-trade query
+// getSummary() already uses -- no new numbers invented here, just grouped
+// and optionally filtered to one asset.
+async function _execGetTrackRecord(input = {}) {
+  const { perAsset } = await getTrackRecordByAsset('all');
+  if (perAsset.length === 0) {
+    return { message: 'No closed trades yet -- nothing to report a track record on.' };
+  }
+  if (input.asset) {
+    const asset = String(input.asset).toUpperCase();
+    const found = perAsset.find(a => a.asset === asset);
+    return found || { message: `No closed trades for ${asset} yet.` };
+  }
+  return { perAsset };
+}
+
 const TOOL_EXECUTORS = {
   get_suggestion:            _execGetSuggestion,
   get_open_positions:        _execGetOpenPositions,
   get_recent_trade_outcomes: _execGetRecentTradeOutcomes,
   get_portfolio_summary:     _execGetPortfolioSummary,
+  get_track_record:          _execGetTrackRecord,
 };
 
 // ── Thread helpers ───────────────────────────────────────────────────────────

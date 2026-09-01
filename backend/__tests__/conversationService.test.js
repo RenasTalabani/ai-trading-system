@@ -287,6 +287,80 @@ describe('conversationService', () => {
     });
   });
 
+  describe('get_track_record — Phase 2, step 3 (2026-09-01)', () => {
+    it('reports the honest "no closed trades" message when the account has none', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.find = (query) => {
+        if (query.status && query.status.$in) return { lean: async () => [] };
+        return { sort: () => OPEN_TRADES };
+      };
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.TOOL_EXECUTORS.get_track_record({});
+
+      expect(result.message).toMatch(/no closed trades/i);
+    });
+
+    it('returns a real, unmodified per-asset breakdown sourced from virtualTrackingService.getTrackRecordByAsset', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.find = (query) => {
+        if (query.status && query.status.$in) {
+          return {
+            lean: async () => [
+              { asset: 'BTCUSDT', status: 'closed_profit', result: 'win',  pnl: 10 },
+              { asset: 'BTCUSDT', status: 'closed_loss',   result: 'loss', pnl: -4 },
+              { asset: 'XAUUSD',  status: 'closed_profit', result: 'win',  pnl: 50 },
+            ],
+          };
+        }
+        return { sort: () => OPEN_TRADES };
+      };
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.TOOL_EXECUTORS.get_track_record({});
+
+      const btc = result.perAsset.find(a => a.asset === 'BTCUSDT');
+      expect(btc.totalTrades).toBe(2);
+      expect(btc.totalPnl).toBe(6);
+      const gold = result.perAsset.find(a => a.asset === 'XAUUSD');
+      expect(gold.winRate).toBe(100);
+    });
+
+    it('filters to a single asset when asked, and reports honestly when that asset has no closed trades', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.find = (query) => {
+        if (query.status && query.status.$in) {
+          return { lean: async () => [{ asset: 'BTCUSDT', status: 'closed_profit', result: 'win', pnl: 10 }] };
+        }
+        return { sort: () => OPEN_TRADES };
+      };
+
+      const svc = require('../src/services/conversationService');
+
+      const found = await svc.TOOL_EXECUTORS.get_track_record({ asset: 'btcusdt' });
+      expect(found.asset).toBe('BTCUSDT');
+      expect(found.totalTrades).toBe(1);
+
+      const notFound = await svc.TOOL_EXECUTORS.get_track_record({ asset: 'ETHUSDT' });
+      expect(notFound.message).toMatch(/no closed trades for ETHUSDT/i);
+    });
+  });
+
   describe('getThread', () => {
     it('creates a thread on first access and returns it with an empty message list', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';

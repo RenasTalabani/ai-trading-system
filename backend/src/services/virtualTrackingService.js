@@ -776,6 +776,49 @@ async function getSummary(range = 'all') {
   };
 }
 
+// ─── Track record, broken down per asset ──────────────────────────────────────
+// Phase 2, step 3 (2026-09-01) — the "measurable track record" piece of the
+// original future_trade_memory_design: win rate, trade count, and total/
+// average P&L per asset, sourced from the exact same real, closed-trade
+// query getSummary() already uses (status in closed_profit/closed_loss —
+// cancelled trades excluded for the same reason documented in DATA-001
+// above: a cancelled trade never reached a real market outcome). Read-only,
+// no new writes, no change to any existing return shape.
+async function getTrackRecordByAsset(range = 'all') {
+  const since      = rangeStart(range);
+  const dateFilter = since ? { closedAt: { $gte: since } } : {};
+
+  const closedTrades = await VirtualTrade.find({
+    status: { $in: ['closed_profit', 'closed_loss'] }, ...dateFilter,
+  }).lean();
+
+  const byAsset = {};
+  for (const t of closedTrades) {
+    if (!byAsset[t.asset]) {
+      byAsset[t.asset] = { asset: t.asset, totalTrades: 0, wins: 0, losses: 0, totalPnl: 0 };
+    }
+    const a = byAsset[t.asset];
+    a.totalTrades += 1;
+    if (t.result === 'win')  a.wins += 1;
+    if (t.result === 'loss') a.losses += 1;
+    a.totalPnl += (t.pnl ?? 0);
+  }
+
+  const perAsset = Object.values(byAsset)
+    .map(a => ({
+      asset:       a.asset,
+      totalTrades: a.totalTrades,
+      wins:        a.wins,
+      losses:      a.losses,
+      winRate:     a.totalTrades > 0 ? parseFloat(((a.wins / a.totalTrades) * 100).toFixed(1)) : 0,
+      totalPnl:    parseFloat(a.totalPnl.toFixed(2)),
+      avgPnl:      a.totalTrades > 0 ? parseFloat((a.totalPnl / a.totalTrades).toFixed(2)) : 0,
+    }))
+    .sort((x, y) => y.totalTrades - x.totalTrades);
+
+  return { range, perAsset };
+}
+
 // ─── Legacy getPerformance (unchanged surface, now delegates) ─────────────────
 
 async function getPerformance() {
@@ -873,4 +916,5 @@ module.exports = {
   resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
   enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
   approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
+  getTrackRecordByAsset,
 };
