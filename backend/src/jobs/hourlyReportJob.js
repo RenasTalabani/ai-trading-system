@@ -93,7 +93,19 @@ async function generateHourlyReport() {
     try {
       const cached = getGlobalCache();
       const sd = cached?.result?.best;
-      if (sd) bestOpportunity = {
+      // AUDIT-02 (2026-09-01, production audit): RENO-001 (ai-service)
+      // means `sd` is now non-null almost every scan regardless of
+      // whether it clears the real confidence/fused-score bar. Without
+      // this check, a below-bar candidate would drive the "🟢 AI Brain —
+      // BUY <asset>" PUSH NOTIFICATION below (and the stored AIReport) as
+      // if it were a confirmed pick -- the single highest-stakes instance
+      // of exactly what this audit's Priority 3 forbids, since a push
+      // notification is the most prominent surface in the app. Leaving
+      // bestOpportunity null here correctly falls through to the
+      // existing `|| best.action` etc. fallback below (the top active
+      // Signal), the same established pattern guideController.js and
+      // brainController.js use.
+      if (sd && sd.meets_bar !== false) bestOpportunity = {
         asset:          sd.asset,
         action:         sd.action,
         confidence:     sd.confidence,

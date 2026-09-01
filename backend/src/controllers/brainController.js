@@ -6,6 +6,27 @@ const logger     = require('../config/logger');
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
+// AUDIT-02 (2026-09-01, production audit): RENO-001 (ai-service,
+// global_analyzer.py) stopped hard-excluding candidates below the real
+// confidence/fused-score bar from `scored`/`best`/`top_opportunities` --
+// every non-junk, non-macro-blocked candidate is now ranked and returned,
+// each carrying an honest `meets_bar` boolean (the original
+// confidence>=70 AND fused_score>=65 combination). That means
+// `cached.result.best` is now non-null almost every scan, REGARDLESS of
+// whether it actually clears the real quality bar -- every place in this
+// file (and coreController.js, guideController.js) that used to treat
+// "best is non-null" as "there is a confirmed, qualifying pick" needs to
+// additionally check meets_bar, or a below-bar candidate gets presented
+// as if it were a real recommendation -- exactly what this same audit's
+// Priority 3 explicitly forbids ("never present a blocked opportunity as
+// a confirmed trade"). `meets_bar !== false` (not `=== true`) treats a
+// best computed by an OLDER ai-service deploy (before this field
+// existed) as trusted, for safe rollout ordering -- only an explicit
+// `false` disqualifies it.
+function bestMeetsBar(best) {
+  return !!best && best.meets_bar !== false;
+}
+
 // ── GET /api/v1/brain/report/action ──────────────────────────────────────────
 // Report 1: "What To Do" — best asset + full trade plan from all sources
 exports.actionReport = async (req, res) => {
@@ -34,7 +55,24 @@ exports.actionReport = async (req, res) => {
         message: 'AI Brain is warming up — retry in 30 seconds',
       });
     }
-    if (!cached.result?.best) {
+    if (!bestMeetsBar(cached.result?.best)) {
+      // AUDIT-02: below-bar candidates are real, computed, honest data
+      // (RENO-001) -- surfaced here as a clearly-labeled watch list
+      // instead of just discarding them, per this audit's Priority 3.
+      // Never includes a fabricated Entry/SL/TP -- every field here is
+      // whatever ai-service actually computed, or omitted.
+      const watchList = (cached.result?.top_opportunities || [])
+        .filter((o) => o && o.asset)
+        .slice(0, 5)
+        .map((o) => ({
+          asset:       o.asset,
+          displayName: o.display_name || o.asset,
+          action:      o.action,
+          confidence:  o.confidence,
+          assetClass:  o.asset_class || 'crypto',
+          meetsBar:    o.meets_bar !== false,
+          reason:      o.reason || null,
+        }));
       return res.json({
         success: true,
         generatedAt: cached.scannedAt,
@@ -47,6 +85,13 @@ exports.actionReport = async (req, res) => {
                   + 'conditions and may last a while; it is not an error.',
           topPicks: [],
         },
+        // AUDIT-02: candidates the AI actually scored but that do NOT
+        // clear the trading-quality bar -- WATCH tier only, never an
+        // APPROVED_TRADING_OPPORTUNITY. `meetsBar` is always false or
+        // absent for every entry here by construction (this branch only
+        // runs when the top pick itself didn't meet it), included per
+        // entry anyway so a consumer never has to assume.
+        watchList,
       });
     }
 
@@ -541,7 +586,7 @@ async function _buildAnswer(intent, q) {
     // T-083 (2026-08-31): same "never scanned" vs "scanned, nothing
     // qualifies" distinction as actionReport() above -- see its comment.
     if (!cached) return { type: 'text', text: 'The AI Brain is still warming up. Try again in 30 seconds.' };
-    if (!cached.result?.best) return { type: 'text', text: 'No strong recommendation right now — no asset currently clears the AI Brain\'s confidence/quality filter. This can happen during low-conviction market conditions.' };
+    if (!bestMeetsBar(cached.result?.best)) return { type: 'text', text: 'No strong recommendation right now — no asset currently clears the AI Brain\'s confidence/quality filter. This can happen during low-conviction market conditions.' };
     const best = cached.result.best;
     const top  = (cached.result.top_opportunities || []).slice(0, 5);
     return {
@@ -564,9 +609,17 @@ async function _buildAnswer(intent, q) {
     const closed  = recent.filter(d => d.result !== 'OPEN');
     const wins    = closed.filter(d => d.result === 'WIN').length;
     const wr      = closed.length > 0 ? Math.round((wins / closed.length) * 100) : null;
+    // AUDIT-02: only surface `best`/a top-opportunities entry as "Current
+    // signal" here when it actually meets the trading-quality bar --
+    // otherwise this reads as a confirmed recommendation for a specific
+    // asset the user just asked about, which is exactly what RENO-001's
+    // now-always-present `best` risks if callers don't check meets_bar.
     let brainSignal = null;
-    if (cached?.result?.best?.asset === symbol) brainSignal = cached.result.best;
-    if (!brainSignal) brainSignal = (cached?.result?.top_opportunities || []).find(o => o.asset === symbol);
+    if (cached?.result?.best?.asset === symbol && bestMeetsBar(cached.result.best)) brainSignal = cached.result.best;
+    if (!brainSignal) {
+      brainSignal = (cached?.result?.top_opportunities || [])
+        .find((o) => o.asset === symbol && o.meets_bar !== false);
+    }
     // T-057: was `relevantAssets` — not a field on the NewsData schema (the
     // real field, used everywhere else in the codebase, is `relatedAssets`)
     // — so this always matched zero documents.
@@ -634,8 +687,12 @@ async function _buildAnswer(intent, q) {
   }
 
   if (intent === 'risk') {
-    const best = cached?.result?.best;
-    if (!best) return { type: 'text', text: 'Load the Brain report first to see risk levels.' };
+    // AUDIT-02: presenting concrete Entry/SL/TP/R:R here is exactly the
+    // "confirmed trade" framing this audit forbids for a candidate that
+    // doesn't actually meet the bar -- fall through to the same
+    // no-recommendation message as everywhere else instead.
+    const best = bestMeetsBar(cached?.result?.best) ? cached.result.best : null;
+    if (!best) return { type: 'text', text: 'No confirmed high-quality trade right now — nothing currently clears the AI Brain\'s confidence/quality filter to show risk levels for.' };
     return { type: 'risk', text: 'For **' + best.action + ' ' + (best.display_name || best.asset) + '**: Entry **$' + best.current_price + '**, SL **$' + best.stop_loss + '**, TP **$' + best.take_profit + '**, R:R **' + (best.risk_reward || 'N/A') + '**. Never risk more than 1-3% of capital per trade.', data: { action: best.action, entryPrice: best.current_price, stopLoss: best.stop_loss, takeProfit: best.take_profit, riskReward: best.risk_reward } };
   }
 

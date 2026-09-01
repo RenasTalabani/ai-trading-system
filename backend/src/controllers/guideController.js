@@ -122,7 +122,20 @@ async function resolveSuggestion() {
 
   const cached = getGlobalCache();
   const best = cached?.result?.best;
-  if (best?.current_price && !openAssets.includes(best.asset)) {
+  // AUDIT-02 (2026-09-01, production audit): RENO-001 (ai-service) means
+  // `best` is now non-null almost every scan regardless of whether it
+  // clears the real confidence/fused-score bar (every non-junk,
+  // non-macro-blocked candidate is ranked and returned, carrying an
+  // honest `meets_bar` flag, instead of being hard-excluded). Without
+  // this check, this branch would now win on nearly every call even when
+  // `best` is a below-bar candidate -- silently defeating the exact
+  // fallback-to-Signal-pipeline behavior this function's header comment
+  // above describes as "the entire point of it," and presenting a
+  // non-qualifying pick as Guide's one concrete suggestion. Only an
+  // explicit `meets_bar === false` disqualifies it, so a best computed by
+  // an older ai-service deploy with no such field stays trusted.
+  const bestMeetsBar = best && best.meets_bar !== false;
+  if (bestMeetsBar && best?.current_price && !openAssets.includes(best.asset)) {
     return {
       asset:       best.asset,
       displayName: best.display_name || best.asset,

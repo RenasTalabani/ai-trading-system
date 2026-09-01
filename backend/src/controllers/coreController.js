@@ -2,6 +2,16 @@ const { getCache: getGlobalCache } = require('../jobs/globalScanJob');
 const AIDecision                   = require('../models/AIDecision');
 const logger                       = require('../config/logger');
 
+// AUDIT-02 (2026-09-01, production audit): see the identical helper +
+// comment in brainController.js -- RENO-001 (ai-service) means
+// `cached.result.best` is now non-null almost every scan regardless of
+// whether it clears the real quality bar; only an explicit
+// `meets_bar === false` disqualifies it (a best from an older ai-service
+// deploy, with no such field, stays trusted).
+function bestMeetsBar(best) {
+  return !!best && best.meets_bar !== false;
+}
+
 // GET /api/v1/core/advice
 // Returns the single best AI decision right now from the global scan cache.
 exports.advice = async (req, res) => {
@@ -16,11 +26,24 @@ exports.advice = async (req, res) => {
         message: 'AI brain is warming up — retry in 30 seconds',
       });
     }
-    if (!cached.result?.best) {
+    if (!bestMeetsBar(cached.result?.best)) {
+      // AUDIT-02: below-bar candidates (RENO-001) surfaced honestly, same
+      // watch-list shape as brainController.js's actionReport() -- never
+      // presented as `advice` (that stays null), never a fabricated
+      // Entry/SL/TP.
+      const watch_list = (cached.result?.top_opportunities || [])
+        .filter((o) => o && o.asset)
+        .slice(0, 5)
+        .map((o) => ({
+          asset: o.asset, display_name: o.display_name || o.asset,
+          decision: o.action, confidence: o.confidence,
+          meets_bar: o.meets_bar !== false, reason: o.reason || null,
+        }));
       return res.json({
         success: true,
         advice: null,
         top_picks: [],
+        watch_list,
         last_decision_id: null,
         message: 'No strong recommendation right now — no asset currently '
                  + 'clears the AI Brain\'s confidence/quality filter.',
