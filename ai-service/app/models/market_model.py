@@ -81,7 +81,15 @@ class MarketModel:
         self.is_trained = True
 
         y_pred = self.model.predict(X_test)
-        report = classification_report(y_test, y_pred, target_names=["HOLD", "BUY", "SELL"], output_dict=True)
+        # T-091 (2026-09-01): same fix as fusion_model.py's train() -- a
+        # fixed 3-name target_names with no matching `labels` param throws
+        # when this split's y_test/y_pred don't happen to contain all 3
+        # classes. Passing `labels` explicitly makes sklearn score all 3
+        # regardless of which are actually present (absent ones score 0).
+        report = classification_report(
+            y_test, y_pred, labels=[0, 1, 2],
+            target_names=["HOLD", "BUY", "SELL"], output_dict=True, zero_division=0,
+        )
 
         joblib.dump(self.model, MODEL_FILE)
         joblib.dump(self.scaler, SCALER_FILE)

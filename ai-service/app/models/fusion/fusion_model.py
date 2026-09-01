@@ -140,8 +140,29 @@ class FusionModel:
         self.is_trained = True
 
         y_pred = self.model.predict(X_test)
-        report = classification_report(y_test, y_pred,
-                                       target_names=["HOLD", "BUY", "SELL"], output_dict=True)
+        # T-091 (2026-09-01): classification_report() with a fixed 3-name
+        # target_names but no matching `labels` param throws
+        # ValueError("Number of classes, N, does not match size of
+        # target_names, 3") whenever this particular train/test split's
+        # y_test/y_pred don't happen to contain all 3 classes -- plausible
+        # any time the accumulated label set skews toward one action, and
+        # confirmed live in production the same night this pipeline
+        # started accumulating real examples again after ~4 months mostly
+        # idle (see T-085). Worse than just a failed report: self.model
+        # was already .fit() and self.is_trained already set True above,
+        # but the exception happens before the model/scaler get saved to
+        # disk and before this function returns -- so the caller
+        # (feedback_loop.py's _maybe_train_fusion()) never marks these
+        # examples used, and retries the same expensive GradientBoosting
+        # fit on largely the same batch every 30 minutes, forever, on an
+        # already memory-constrained container. Fixed by passing `labels`
+        # explicitly so sklearn scores all 3 classes regardless of which
+        # are actually present in this split (absent ones score 0, per
+        # zero_division=0, instead of raising).
+        report = classification_report(
+            y_test, y_pred, labels=[0, 1, 2],
+            target_names=["HOLD", "BUY", "SELL"], output_dict=True, zero_division=0,
+        )
 
         joblib.dump(self.model,  self._model_file())
         joblib.dump(self.scaler, self._scaler_file())
