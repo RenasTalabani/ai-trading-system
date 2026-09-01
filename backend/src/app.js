@@ -32,6 +32,7 @@ const coreRoutes       = require('./routes/core');
 const priceAlertRoutes = require('./routes/priceAlerts');
 const brainRoutes      = require('./routes/brain');
 const guideRoutes      = require('./routes/guide');
+const conversationRoutes = require('./routes/conversation');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
 const { buildCorsOptions } = require('./config/corsConfig');
@@ -100,6 +101,7 @@ app.use(`${API}/core`,          coreRoutes);
 app.use(`${API}/price-alerts`,  priceAlertRoutes);
 app.use(`${API}/brain`,         brainRoutes);
 app.use(`${API}/guide`,         guideRoutes);
+app.use(`${API}/conversation`,  conversationRoutes);
 
 // 404 + error handler
 app.use(notFound);
