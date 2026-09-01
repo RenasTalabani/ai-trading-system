@@ -199,21 +199,34 @@ class _WatchlistTile extends ConsumerWidget {
             child: SparklineChart(asset: asset, width: 64, height: 32),
           ),
           const SizedBox(width: 10),
-          tickerAsync.when(
-            loading: () => const SizedBox(width: 80,
+          // Bug fix (2026-09-01): assetTickerProvider now refetches on a
+          // periodic clock (see watchlist_provider.dart) so prices no longer
+          // sit stuck. That refetch briefly puts the provider back into a
+          // "loading" AsyncValue, but Riverpod keeps the last good value
+          // reachable via valueOrNull the whole time -- so prefer that over
+          // tickerAsync.when()'s loading branch, otherwise the price would
+          // flash to a spinner every 20s instead of just updating in place.
+          // Only show the spinner the very first time, before any data has
+          // ever arrived for this asset.
+          Builder(builder: (_) {
+            final t = tickerAsync.valueOrNull;
+            if (t != null) {
+              return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text(_fmtPrice(t.price),
+                    style: const TextStyle(color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w700, fontSize: 16)),
+                const SizedBox(height: 2),
+                _ChangeBadge(pct: t.changePercent),
+              ]);
+            }
+            if (tickerAsync.hasError) {
+              return const Text('—', style: TextStyle(color: AppColors.textMuted));
+            }
+            return const SizedBox(width: 80,
                 child: Center(child: SizedBox(width: 16, height: 16,
                     child: CircularProgressIndicator(strokeWidth: 1.5,
-                        color: AppColors.textMuted)))),
-            error: (_, __) => const Text('—',
-                style: TextStyle(color: AppColors.textMuted)),
-            data: (t) => Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text(_fmtPrice(t.price),
-                  style: const TextStyle(color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w700, fontSize: 16)),
-              const SizedBox(height: 2),
-              _ChangeBadge(pct: t.changePercent),
-            ]),
-          ),
+                        color: AppColors.textMuted))));
+          }),
           if (signal != null) ...[
             const SizedBox(width: 10),
             _SignalBadge(action: signal!, confidence: signalConf ?? 0),

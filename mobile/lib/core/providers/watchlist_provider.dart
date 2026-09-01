@@ -40,17 +40,31 @@ class AssetTicker {
   bool get isUp => changePercent >= 0;
 }
 
-// Per-asset ticker provider (auto-refreshes on watch)
+// Bug fix (2026-09-01, reported from a real device: watchlist prices stuck
+// at +0.00%). These were FutureProvider.autoDispose.family providers that
+// only ever fetched once per family key while something kept watching them
+// -- there was no periodic refresh anywhere, unlike guide_provider.dart /
+// positions_guidance_provider.dart which already poll internally. This
+// ticker clock is watched by both providers below so they refetch on a
+// fixed cadence regardless of WebSocket health, without requiring every
+// screen that reads them to know about polling.
+final _watchlistTickerClock = StreamProvider<int>((ref) {
+  return Stream.periodic(const Duration(seconds: 20), (i) => i);
+});
+
+// Per-asset ticker provider (auto-refreshes on watch, and now on a 20s clock)
 final assetTickerProvider =
     FutureProvider.autoDispose.family<AssetTicker, String>((ref, asset) async {
+  ref.watch(_watchlistTickerClock);
   if (asset.isEmpty) throw Exception('empty asset');
   final resp = await ApiService.dio.get('market/ticker/$asset');
   return AssetTicker.fromJson(resp.data as Map<String, dynamic>);
 });
 
-// Batch ticker provider for an entire watchlist
+// Batch ticker provider for an entire watchlist (also on the 20s clock)
 final batchTickerProvider =
     FutureProvider.autoDispose.family<List<AssetTicker>, List<String>>((ref, assets) async {
+  ref.watch(_watchlistTickerClock);
   if (assets.isEmpty) return [];
   try {
     final resp = await ApiService.dio.post('market/tickers',

@@ -7,6 +7,7 @@ import 'core/services/websocket_service.dart';
 import 'core/services/push_notification_service.dart';
 import 'core/services/api_service.dart';
 import 'core/providers/auth_provider.dart';
+import 'core/providers/prices_provider.dart';
 import 'router.dart';
 
 void main() async {
@@ -35,11 +36,48 @@ void main() async {
   runApp(const ProviderScope(child: TradingApp()));
 }
 
-class TradingApp extends ConsumerWidget {
+// Bug fix (2026-09-01, reported from a real device: prices/positions going
+// stuck after the app sits in the background). TradingApp used to be a
+// stateless ConsumerWidget with no app-lifecycle awareness at all -- once
+// the OS suspended the app, the WebSocket could die silently and nothing
+// ever reconnected it or forced a fresh fetch when the user came back.
+// Converting to ConsumerStatefulWidget + WidgetsBindingObserver lets us
+// reconnect the socket and force an immediate price refresh the moment the
+// app resumes, instead of waiting on prices_provider's 30s poll or a WS
+// message that may never arrive. connect() is a safe no-op if already
+// connected/connecting (see websocket_service.dart), so this never opens a
+// duplicate socket.
+class TradingApp extends ConsumerStatefulWidget {
   const TradingApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TradingApp> createState() => _TradingAppState();
+}
+
+class _TradingAppState extends ConsumerState<TradingApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      WebSocketService.instance.connect();
+      ref.read(pricesProvider.notifier).refresh();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
 
     // Wire notification tap navigation to GoRouter
