@@ -22,11 +22,13 @@
  * a clear "not set up yet" reply instead of crashing, and the user's
  * message is still saved so history isn't lost once it's configured.
  *
- * MODEL ID CAVEAT: `ANTHROPIC_MODEL` below is a best-guess default, not
- * a confirmed-current one — this was written with a knowledge cutoff
- * that predates today. Check https://docs.anthropic.com/en/docs/about-claude/models
- * for the current model id before relying on the default; override via
- * the ANTHROPIC_MODEL env var either way.
+ * MODEL ID (2026-09-01): verified, not guessed — cross-checked against
+ * Anthropic's own docs (platform.claude.com/docs/en/models/overview,
+ * fetched live) AND corroborated independently by this very session's
+ * own model identifier (claude-sonnet-5, matching that doc's naming
+ * scheme exactly). Default below is the Haiku-tier id from that same
+ * page: claude-haiku-4-5-20251001. Override via ANTHROPIC_MODEL if a
+ * different tier (e.g. claude-sonnet-5) is preferred for cost/quality.
  */
 const axios = require('axios');
 const logger = require('../config/logger');
@@ -41,7 +43,7 @@ const { getSummary } = require('./virtualTrackingService');
 const { resolveSuggestion, buildPositionGuidance } = require('../controllers/guideController');
 
 const ANTHROPIC_KEY   = process.env.ANTHROPIC_API_KEY || null;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest'; // see MODEL ID CAVEAT above
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001'; // verified 2026-09-01, see MODEL ID note above
 const ANTHROPIC_URL   = 'https://api.anthropic.com/v1/messages';
 const MAX_TOOL_ROUNDS = 4; // hard cap so a confused tool-call loop can't run away
 
