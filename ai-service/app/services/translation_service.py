@@ -48,6 +48,30 @@ class TranslationService:
         self._tokenizer = None
         self._model = None
         self._load_failed = False
+        # T-093 (2026-09-01, production incident): unlike news_analyzer.py's
+        # FinBERT scoring (bounded to 3 concurrent calls by a semaphore
+        # since T-086, plus a refresh_lock that only lets ONE caller
+        # actually run at a time), every `translate_async()` call here ran
+        # fully unbounded -- telegram_collector.py fetches its ~3
+        # configured non-English channels concurrently via asyncio.gather,
+        # each channel's own post loop calling this independently. Worst
+        # case, up to 3 concurrent NLLB-200 .generate() calls (a genuinely
+        # heavier seq2seq model than FinBERT-base) were in flight at once,
+        # each spawning its own native OpenMP thread team -- see run.py's
+        # T-093 comment for the full incident/root-cause writeup and the
+        # process-wide OMP_NUM_THREADS cap that's the other half of this
+        # fix. Deliberately an INSTANCE attribute, not a module-level
+        # singleton like news_analyzer.py's _finbert_limiter -- an
+        # asyncio.Semaphore binds to whatever event loop first uses it, and
+        # a module-level one construced at import time (or first used by
+        # one test's loop) breaks with "bound to a different event loop"
+        # the moment a second, different loop touches it (caught by this
+        # fix's own regression test before ever reaching production).
+        # Production only ever constructs one TranslationService via
+        # get_translation_service()'s lazy singleton below, so this is
+        # still effectively one shared limiter for the process -- just
+        # bound safely, on first real use, to that process's one loop.
+        self._translate_limiter = asyncio.Semaphore(2)
 
     def _ensure_loaded(self):
         if self._model is not None or self._load_failed:
@@ -103,10 +127,11 @@ class TranslationService:
             return text
         loop = asyncio.get_event_loop()
         try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, self.translate, text, src_lang, max_chars),
-                timeout=TRANSLATE_TIMEOUT_SECONDS,
-            )
+            async with self._translate_limiter:
+                return await asyncio.wait_for(
+                    loop.run_in_executor(None, self.translate, text, src_lang, max_chars),
+                    timeout=TRANSLATE_TIMEOUT_SECONDS,
+                )
         except asyncio.TimeoutError:
             logger.warning(f"Translation timed out after {TRANSLATE_TIMEOUT_SECONDS}s ({src_lang}->en) — using original text.")
             return text
