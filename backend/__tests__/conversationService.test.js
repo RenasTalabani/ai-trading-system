@@ -113,6 +113,76 @@ describe('conversationService', () => {
     });
   });
 
+
+    it('get_suggestion returns the honest "no strong recommendation" message when nothing qualifies (no global-scan cache, no active signal)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.distinct = async () => [];
+      const Signal = require('../src/models/Signal');
+      Signal.findOne = () => ({ sort: async () => null });
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.TOOL_EXECUTORS.get_suggestion();
+
+      expect(result.message).toMatch(/no strong recommendation/i);
+    });
+
+    it('get_suggestion returns a real signal-sourced suggestion end to end when one exists, unmodified from resolveSuggestion', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.distinct = async () => [];
+      const Signal = require('../src/models/Signal');
+      const fakeSignal = {
+        asset: 'ETHUSDT', direction: 'BUY', confidence: 82,
+        price: { entry: 3000, stopLoss: 2900, takeProfit: 3200 },
+        createdAt: new Date(), sources: {},
+      };
+      Signal.findOne = () => ({ sort: async () => fakeSignal });
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.TOOL_EXECUTORS.get_suggestion();
+
+      expect(result.asset).toBe('ETHUSDT');
+      expect(result.action).toBe('BUY');
+      expect(result.confidence).toBe(82);
+      expect(result.entryPrice).toBe(3000);
+    });
+
+    it('get_portfolio_summary returns real, unmodified numbers from virtualTrackingService.getSummary', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      const VirtualPortfolio = require('../src/models/VirtualPortfolio');
+      VirtualPortfolio.findOne = async () => ({
+        startingBalance: 500, currentBalance: 587.34, riskPerTradePct: 5,
+        maxDrawdown: 4.2, peakBalance: 610, bestTrade: null, worstTrade: null,
+        balanceHistory: [], startedAt: null, updatedAt: null,
+      });
+      VirtualTrade.find = (query) => {
+        if (query.status && query.status.$in) return { lean: async () => [] };
+        return { sort: () => OPEN_TRADES };
+      };
+      VirtualTrade.countDocuments = async () => 2;
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.TOOL_EXECUTORS.get_portfolio_summary();
+
+      expect(result.currentBalance).toBe(587.34);
+      expect(result.startingBalance).toBe(500);
+      expect(result.openTrades).toBe(2);
+    });
+
   describe('getThread', () => {
     it('creates a thread on first access and returns it with an empty message list', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
