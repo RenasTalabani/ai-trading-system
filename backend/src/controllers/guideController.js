@@ -143,6 +143,11 @@ async function resolveSuggestion() {
       confidence:  best.confidence ?? 0,
       why:         plainWhyFromGlobalBest(best),
       generatedAt: cached.scannedAt,
+      // Phase 3 (2026-09-01): real, sourced from the scan's own config
+      // (globalScanJob.js calls ai-service with timeframe: '1h') --
+      // additive field, nothing here changes for any existing consumer
+      // that doesn't read it.
+      timeframe:   cached.result.timeframe ?? null,
       signalId:    null, // sourced from the global-scan cache, not a persisted Signal — see approve() (T-061)
       // T-079: this pool is wholesale-replaced every 30 min by
       // globalScanJob, not an aging set of candidates -- always fresh by
@@ -198,6 +203,10 @@ async function resolveSuggestion() {
       generatedAt: sig.createdAt,
       signalId:    sig._id, // T-061: threaded through to approve() so the resulting trade is traceable
       isOlderSignal, // T-079: true only when served from the wider fallback window
+      // Phase 3 (2026-09-01): honestly null -- Signal.js carries no
+      // timeframe field (confirmed by reading the schema), unlike the
+      // global-scan branch above which has a real one to thread through.
+      timeframe: null,
     };
   }
 

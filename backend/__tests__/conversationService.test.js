@@ -240,6 +240,10 @@ describe('conversationService', () => {
       VirtualTrade.findOne = async () => null; // no already-open ETHUSDT position
       VirtualTrade.create  = async (doc) => ({ ...doc, _id: 'newtrade1' });
 
+      const TradeThesis = require('../src/models/TradeThesis');
+      const CREATED_THESES = [];
+      TradeThesis.create = async (doc) => { CREATED_THESES.push(doc); return { ...doc, _id: 'thesis1' }; };
+
       const svc = require('../src/services/conversationService');
       const result = await svc.approvePlan('user1');
 
@@ -250,6 +254,56 @@ describe('conversationService', () => {
       expect(result.trade.origin).toBe('conversation_approval');
       expect(result.reply.relatedTradeIds).toEqual(['newtrade1']);
       expect(result.reply.content).toMatch(/bought/i);
+
+      // Phase 3, step 2: a TradeThesis was persisted with real, server-
+      // resolved values -- never anything a client/LLM could have supplied.
+      expect(CREATED_THESES).toHaveLength(1);
+      const thesis = CREATED_THESES[0];
+      expect(thesis.tradeId).toBe('newtrade1');
+      expect(thesis.asset).toBe('ETHUSDT');
+      expect(thesis.entry).toBe(3000);
+      expect(thesis.originalRecommendation).toBe('BUY');
+      expect(thesis.approvedByUser).toBe(true);
+      expect(thesis.invalidationConditions).toMatch(/ETHUSDT/);
+      expect(thesis.supportingMarketFactors.confidence).toBe(82);
+    });
+
+    it('does not lose the approval when persisting the trade thesis fails -- logged and swallowed, trade still reported as opened', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      jest.resetModules();
+      ConversationThread  = require('../src/models/ConversationThread');
+      ConversationMessage = require('../src/models/ConversationMessage');
+      VirtualTrade         = require('../src/models/VirtualTrade');
+      freshMocks();
+      VirtualTrade.distinct = async () => [];
+
+      const Signal = require('../src/models/Signal');
+      const fakeSignal = {
+        _id: 'sig_eth2', asset: 'ETHUSDT', direction: 'BUY', confidence: 82,
+        price: { entry: 3000, stopLoss: 2900, takeProfit: 3200 },
+        createdAt: new Date(), sources: {},
+      };
+      Signal.findOne = () => ({ sort: async () => fakeSignal });
+
+      const VirtualPortfolio = require('../src/models/VirtualPortfolio');
+      VirtualPortfolio.findOne = async () => ({
+        currentBalance: 1000, riskPerTradePct: 5, startedAt: new Date(),
+        save: async () => {}, totalProfit: 0, totalLoss: 0, winCount: 0, lossCount: 0,
+        peakBalance: 1000, maxDrawdown: 0, bestTrade: null, worstTrade: null, balanceHistory: [],
+      });
+      const BudgetSession = require('../src/models/BudgetSession');
+      BudgetSession.findOne = async () => ({ status: 'active' });
+      VirtualTrade.findOne = async () => null;
+      VirtualTrade.create  = async (doc) => ({ ...doc, _id: 'newtrade2' });
+
+      const TradeThesis = require('../src/models/TradeThesis');
+      TradeThesis.create = async () => { throw new Error('simulated write failure'); };
+
+      const svc = require('../src/services/conversationService');
+      const result = await svc.approvePlan('user1');
+
+      expect(result.success).toBe(true);
+      expect(result.trade.asset).toBe('ETHUSDT');
     });
 
     it('reports the real rejection reason (e.g. already-open position) rather than a generic failure', async () => {

@@ -36,6 +36,7 @@ const logger = require('../config/logger');
 const ConversationThread  = require('../models/ConversationThread');
 const ConversationMessage = require('../models/ConversationMessage');
 const VirtualTrade        = require('../models/VirtualTrade');
+const TradeThesis         = require('../models/TradeThesis'); // Phase 3, step 2
 
 const { getAllCachedPrices, TRACKED_ASSETS } = require('./binanceService');
 const aiService = require('./aiService');
@@ -356,6 +357,42 @@ async function approvePlan(userId) {
       aiDecisionId,
       origin:     'conversation_approval',
     });
+
+    // Phase 3, step 2 (2026-09-01): persist the exact plan and reasoning
+    // this trade was approved on -- see TradeThesis.js's own header
+    // comment. Built only from `suggestion` (already server-resolved
+    // above, before any LLM or client input was involved) and `trade`
+    // (the real, just-opened document) -- nothing here is client- or
+    // LLM-supplied. A failure here does not undo the trade that already
+    // opened; it's supplementary memory, logged and swallowed, same
+    // convention as the fire-and-forget push notification below.
+    try {
+      await TradeThesis.create({
+        tradeId:  trade._id,
+        threadId: thread._id,
+        asset:     trade.asset,
+        direction: trade.direction,
+        entry:     trade.entryPrice,
+        investmentAmountUsd: trade.sizeUsd,
+        stopLoss:   trade.stopLoss,
+        takeProfit: trade.takeProfit,
+        timeframe:  suggestion.timeframe ?? null,
+        originalRecommendation: suggestion.action,
+        originalReasoning:      suggestion.why || [],
+        supportingMarketFactors: {
+          confidence:    suggestion.confidence ?? null,
+          decision:      suggestion.decision ?? null,
+          isOlderSignal: suggestion.isOlderSignal ?? false,
+          generatedAt:   suggestion.generatedAt ?? null,
+        },
+        invalidationConditions: `This thesis would be considered invalidated if the AI's active signal on ${suggestion.asset} flips to the opposite direction, or if momentum readings turn sharply against a ${suggestion.action} position.`,
+        expectedConditions: `Expected to keep holding as long as ${suggestion.action === 'BUY' ? 'upward' : 'downward'} momentum continues and no contradicting signal appears.`,
+        approvedByUser: true,
+        approvalTimestamp: new Date(),
+      });
+    } catch (err) {
+      logger.warn(`[Conversation] Failed to persist trade thesis for ${trade._id}: ${err.message}`);
+    }
 
     const verb = trade.direction === 'BUY' ? 'Bought' : 'Sold';
     const content = `Done — ${verb} $${trade.sizeUsd.toFixed(2)} of ${suggestion.displayName || suggestion.asset}. This is a paper trade — I'll keep you posted on it here.`;

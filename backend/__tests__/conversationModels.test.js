@@ -8,6 +8,7 @@
 const mongoose = require('mongoose');
 const ConversationThread  = require('../src/models/ConversationThread');
 const ConversationMessage = require('../src/models/ConversationMessage');
+const TradeThesis         = require('../src/models/TradeThesis');
 
 describe('ConversationThread', () => {
   it('requires userId', () => {
@@ -76,6 +77,72 @@ describe('ConversationMessage', () => {
       threadId, role: 'assistant', content: 'hi',
       toolCalls: [{ args: {}, result: {} }],
     });
+    const err = doc.validateSync();
+    expect(err).toBeDefined();
+  });
+});
+
+describe('TradeThesis', () => {
+  const tradeId  = new mongoose.Types.ObjectId();
+  const threadId = new mongoose.Types.ObjectId();
+
+  function validDoc(overrides = {}) {
+    return new TradeThesis({
+      tradeId, threadId,
+      asset: 'ETHUSDT', direction: 'BUY', entry: 3000, investmentAmountUsd: 50,
+      originalRecommendation: 'BUY', approvalTimestamp: new Date(),
+      ...overrides,
+    });
+  }
+
+  it('requires tradeId, threadId, asset, direction, entry, investmentAmountUsd, originalRecommendation, and approvalTimestamp', () => {
+    const doc = new TradeThesis({});
+    const err = doc.validateSync();
+    expect(err.errors.tradeId).toBeDefined();
+    expect(err.errors.threadId).toBeDefined();
+    expect(err.errors.asset).toBeDefined();
+    expect(err.errors.direction).toBeDefined();
+    expect(err.errors.entry).toBeDefined();
+    expect(err.errors.investmentAmountUsd).toBeDefined();
+    expect(err.errors.originalRecommendation).toBeDefined();
+    expect(err.errors.approvalTimestamp).toBeDefined();
+  });
+
+  it('rejects a direction outside the BUY/SELL enum', () => {
+    const doc = validDoc({ direction: 'HOLD' });
+    const err = doc.validateSync();
+    expect(err.errors.direction).toBeDefined();
+  });
+
+  it('accepts a valid thesis with real defaults: approvedByUser true, empty changeEvents/originalReasoning', () => {
+    const doc = validDoc();
+    expect(doc.validateSync()).toBeUndefined();
+    expect(doc.approvedByUser).toBe(true);
+    expect(doc.changeEvents).toEqual([]);
+    expect(doc.originalReasoning).toEqual([]);
+    expect(doc.stopLoss).toBeNull();
+    expect(doc.takeProfit).toBeNull();
+    expect(doc.timeframe).toBeNull();
+  });
+
+  it('accepts an appended changeEvent without touching the original approved values (append-only history)', () => {
+    const doc = validDoc({ stopLoss: 2900, takeProfit: 3200 });
+    doc.changeEvents.push({
+      previousState: 'HOLD', newState: 'EXIT',
+      reason: "The AI's outlook flipped.", evidence: { rsi: 78 },
+    });
+    const err = doc.validateSync();
+    expect(err).toBeUndefined();
+    expect(doc.changeEvents).toHaveLength(1);
+    expect(doc.changeEvents[0].newState).toBe('EXIT');
+    // Original plan untouched by adding a change event.
+    expect(doc.entry).toBe(3000);
+    expect(doc.stopLoss).toBe(2900);
+  });
+
+  it('rejects a changeEvent missing the required newState or reason', () => {
+    const doc = validDoc();
+    doc.changeEvents.push({ previousState: 'HOLD' });
     const err = doc.validateSync();
     expect(err).toBeDefined();
   });
