@@ -122,9 +122,14 @@ function _esc(text) {
 async function _reply(chatId, text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
+  // Bug fix (2026-09-01, deep audit pass): no timeout -- this is awaited
+  // directly inside the Telegram webhook handler, so a hung Telegram API
+  // response used to mean a hung webhook request/worker with no bound.
+  // Same class of bug as notificationService.js's sendTelegramMessage,
+  // fixed there in this same pass.
   await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
     chat_id:    chatId,
     text,
     parse_mode: 'MarkdownV2',
-  }).catch(err => logger.warn(`Telegram reply failed: ${err.message}`));
+  }, { timeout: 8000 }).catch(err => logger.warn(`Telegram reply failed: ${err.message}`));
 }

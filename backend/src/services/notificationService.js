@@ -72,13 +72,21 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token || !chatId) return false;
   try {
+    // Bug fix (2026-09-01, deep audit pass): this call had no timeout --
+    // axios does not apply one by default, so a hung/slow Telegram API
+    // response could block whatever caller awaited this indefinitely
+    // (notification jobs run in a loop over many users -- one slow
+    // Telegram response could stall the whole batch). Same class of bug
+    // already fixed elsewhere in this codebase (T-088, T-089), just missed
+    // here. Still wrapped in try/catch either way, so this only bounds how
+    // long a failure takes to surface, not whether it's handled.
     await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
       chat_id:                  chatId,
       text,
       parse_mode:               'MarkdownV2',
       disable_web_page_preview: true,
       ...options,
-    });
+    }, { timeout: 8000 });
     return true;
   } catch (err) {
     logger.error(`Telegram failed for chatId ${chatId}:`, err.message);

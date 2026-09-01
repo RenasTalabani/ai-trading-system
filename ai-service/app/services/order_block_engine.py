@@ -1,6 +1,43 @@
 """
 Order Block Engine — Smart Money Concepts (SMC)
 Detects bullish and bearish order blocks from OHLCV data.
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 3 (2026-09-01) — real structure + liquidity context
+────────────────────────────────────────────────────────────────────────────
+This phase does NOT change which order blocks are detected, how they are
+scored, which BUY/SELL/HOLD signal is generated, or the sentiment fusion —
+all of that is the original, already-tested logic below, untouched.
+
+What Phase 3 adds is real, deterministic CONTEXT computed from the same
+OHLCV data already fetched for this analysis, via the Phase 1 (market
+structure) and Phase 2 (liquidity) engines built earlier in this build-out:
+
+  - Each order block gets a `structure_context`: the current confirmed
+    bias (BULLISH/BEARISH/UNKNOWN, never guessed), whether this OB's
+    direction agrees with that bias, and the most recent real BOS/CHoCH
+    break at or before this OB's impulse candle (or None if there wasn't
+    one — never fabricated).
+  - Each order block gets a `liquidity_context`: whether a liquidity pool
+    on the OPPOSITE side (sell-side liquidity for a bullish OB, buy-side
+    for a bearish OB — the classic "sweep then reversal" SMC pattern) was
+    genuinely swept (CONFIRMED_SWEEP or FAILED_SWEEP — an unresolved wick
+    with no confirm-window verdict yet does not count) within a bounded
+    lookback window before this OB's impulse candle. `None` if no such
+    event exists in that window — this module does not report "YES" to a
+    liquidity-sweep question it cannot actually answer from real data.
+  - The top-level response gains `market_structure` (bias, when it was
+    established, swing count, the last few real breaks) and `liquidity`
+    (pool counts by status/side, and resting-pool density near the current
+    price on both sides) — a genuine snapshot of current structure/
+    liquidity state, not new detection logic layered onto the OB scan
+    itself.
+
+Both new engines are called on the exact same `df` already fetched for
+this request — no extra network calls, no second data source. If either
+analysis fails for any reason, this module degrades gracefully (logs a
+warning, returns UNAVAILABLE/None context) rather than breaking order
+block detection, which remains fully independent of this context.
 """
 import logging
 from typing import Optional
@@ -8,6 +45,8 @@ import pandas as pd
 import numpy as np
 
 from app.services.data_processor import DataProcessor
+from app.services.market_structure_engine import analyze_structure
+from app.services.liquidity_engine import analyze_liquidity, resting_pool_density
 
 logger = logging.getLogger("ai-service.order_block_engine")
 
@@ -21,6 +60,15 @@ _TIMEFRAME_MAP = {
 _IMPULSE_MULTIPLIER = 2.5
 _LOOKBACK           = 10   # candles to look back for OB before impulse
 _AVG_WINDOW         = 20
+
+# Phase 3: how many candles before an OB's impulse candle to look for a
+# genuine opposite-side liquidity sweep (the "sweep then reversal" SMC
+# confluence). Deliberately a separate constant from _LOOKBACK above --
+# that one bounds the OB *zone-candle* search, this one bounds how far
+# back a liquidity event can be and still be considered related to this
+# OB's formation. 20 candles is a documented choice, not a magic number
+# inherited from the zone search.
+_LIQUIDITY_CONFLUENCE_WINDOW = 20
 
 
 def _ema(series: pd.Series, span: int) -> pd.Series:
@@ -57,6 +105,128 @@ def _strength_score(impulse_ratio: float, volume_ratio: float,
     ema_score = 20 if ema_aligned else 0
 
     return min(100, imp_score + vol_score + clean_score + ema_score)
+
+
+# ── Phase 3: structure + liquidity context helpers ─────────────────────────
+# All pure functions, independently testable, no side effects on the
+# original detection/signal logic.
+
+def _compute_structure_and_liquidity(df: pd.DataFrame):
+    """Runs the Phase 1 + Phase 2 engines on the already-fetched df. Never
+    raises -- degrades to (None, []) on any failure so a problem here can
+    never break order block detection itself."""
+    structure_result = None
+    pools: list = []
+    try:
+        structure_result = analyze_structure(df)
+    except Exception as e:
+        logger.warning(f"Phase 3: market structure analysis failed, degrading gracefully: {e}")
+        structure_result = None
+
+    if structure_result is not None and structure_result.status == "OK":
+        try:
+            pools = analyze_liquidity(df, structure_result.swings)
+        except Exception as e:
+            logger.warning(f"Phase 3: liquidity analysis failed, degrading gracefully: {e}")
+            pools = []
+
+    return structure_result, pools
+
+
+def _most_recent_break_at_or_before(breaks: list, idx: int) -> Optional[dict]:
+    candidates = [b for b in breaks if b.index <= idx]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda b: b.index)
+    return best.to_dict()
+
+
+def _structure_context_for_ob(ob: dict, structure_result) -> dict:
+    """Real bias/break context for one order block. Never guesses: bias is
+    UNKNOWN and aligned_with_bias is None when the underlying structure
+    analysis has no established bias yet, or is unavailable."""
+    if structure_result is None or structure_result.status != "OK":
+        return {"bias": "UNKNOWN", "aligned_with_bias": None, "most_recent_break": None}
+
+    bias = structure_result.bias
+    aligned = None
+    if bias in ("BULLISH", "BEARISH"):
+        aligned = (bias == "BULLISH") if ob["type"] == "bullish" else (bias == "BEARISH")
+
+    recent_break = _most_recent_break_at_or_before(structure_result.breaks, ob["impulse_index"])
+
+    return {
+        "bias": bias,
+        "aligned_with_bias": aligned,
+        "most_recent_break": recent_break,
+    }
+
+
+def _liquidity_sweep_confluence(ob: dict, pools: list,
+                                 window: int = _LIQUIDITY_CONFLUENCE_WINDOW) -> Optional[dict]:
+    """Rule: for a bullish OB, look for a SELL-side pool that was genuinely
+    swept (CONFIRMED_SWEEP or FAILED_SWEEP -- an AMBIGUOUS or unresolved
+    wick does not count as evidence) within `window` candles at or before
+    this OB's impulse candle -- the classic "liquidity grab, then reversal
+    forms the order block" pattern. Mirrored for bearish OBs against
+    BUY-side pools. Returns the most recent qualifying pool as a dict, or
+    None if no such real event exists in that window (never fabricated)."""
+    impulse_idx = ob["impulse_index"]
+    side = "sell_side" if ob["type"] == "bullish" else "buy_side"
+
+    candidates = [
+        p for p in pools
+        if p.kind == side
+        and p.sweep_classification in ("CONFIRMED_SWEEP", "FAILED_SWEEP")
+        and p.interaction_index is not None
+        and impulse_idx - window <= p.interaction_index <= impulse_idx
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda p: p.interaction_index)
+    return best.to_dict()
+
+
+def _build_market_structure_summary(structure_result) -> dict:
+    if structure_result is None:
+        return {"status": "UNAVAILABLE", "reason": "Structure analysis failed", "bias": "UNKNOWN"}
+    if structure_result.status != "OK":
+        return {"status": structure_result.status, "reason": structure_result.reason, "bias": "UNKNOWN"}
+
+    recent_breaks = sorted(structure_result.breaks, key=lambda b: b.index)[-3:]
+    return {
+        "status": "OK",
+        "bias": structure_result.bias,
+        "bias_established_at_index": structure_result.bias_established_at_index,
+        "swing_count": len(structure_result.swings),
+        "recent_breaks": [b.to_dict() for b in recent_breaks],
+    }
+
+
+def _build_liquidity_summary(pools: list, price: float) -> dict:
+    if not pools:
+        empty_density = {"count": 0, "levels": [], "proximity_pct": 0.015}
+        return {
+            "pools_total": 0, "resting_buy_side": 0, "resting_sell_side": 0,
+            "swept": 0, "broken": 0,
+            "buy_side_density_near_price": empty_density,
+            "sell_side_density_near_price": empty_density,
+        }
+
+    resting_buy = sum(1 for p in pools if p.kind == "buy_side" and p.status == "RESTING")
+    resting_sell = sum(1 for p in pools if p.kind == "sell_side" and p.status == "RESTING")
+    swept = sum(1 for p in pools if p.status == "SWEPT")
+    broken = sum(1 for p in pools if p.status == "BROKEN")
+
+    return {
+        "pools_total": len(pools),
+        "resting_buy_side": resting_buy,
+        "resting_sell_side": resting_sell,
+        "swept": swept,
+        "broken": broken,
+        "buy_side_density_near_price": resting_pool_density(pools, price, "buy_side"),
+        "sell_side_density_near_price": resting_pool_density(pools, price, "sell_side"),
+    }
 
 
 class OrderBlockEngine:
@@ -265,6 +435,16 @@ class OrderBlockEngine:
         # ── Sort by strength desc ─────────────────────────────────────────────
         order_blocks.sort(key=lambda x: x["strength"], reverse=True)
 
+        # ── Phase 3: annotate with real structure + liquidity context ─────────
+        # Computed once on this same df; never changes which OBs were found,
+        # their strength, freshness, or ordering above.
+        structure_result, pools = _compute_structure_and_liquidity(df)
+        for ob in order_blocks:
+            ob["structure_context"] = _structure_context_for_ob(ob, structure_result)
+            ob["liquidity_context"] = {
+                "swept_pool_before_formation": _liquidity_sweep_confluence(ob, pools),
+            }
+
         # ── Generate signal ───────────────────────────────────────────────────
         signal = self._generate_signal(
             price, order_blocks, bullish_trend, bearish_trend, rsi
@@ -286,6 +466,8 @@ class OrderBlockEngine:
             "order_blocks":  order_blocks[:10],
             "signal":        signal,
             "news_analysis": news_analysis,
+            "market_structure": _build_market_structure_summary(structure_result),
+            "liquidity":        _build_liquidity_summary(pools, price),
         }
 
     # ── Signal generation ─────────────────────────────────────────────────────
@@ -388,6 +570,8 @@ class OrderBlockEngine:
                 "article_count": 0, "aligned": False, "confidence_boost": 0,
                 "technical_confidence": 50,
             },
+            "market_structure": {"status": "UNAVAILABLE", "reason": reason, "bias": "UNKNOWN"},
+            "liquidity":        _build_liquidity_summary([], 0),
             "error":         reason,
         }
 
