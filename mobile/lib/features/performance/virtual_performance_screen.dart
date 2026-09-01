@@ -82,6 +82,19 @@ class VirtualPerformanceScreen extends ConsumerWidget {
               ),
             ),
 
+            // ── Watch List (T-094, 2026-09-02) ────────────────────────────
+            // Below-bar candidates the AI actually scored but that don't
+            // clear the confidence/quality bar -- shown so a frozen hero
+            // balance above reads as "nothing has cleared the bar lately",
+            // not "the app is broken". See brainController.js's
+            // actionReport() for where this comes from.
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _WatchListCard(),
+              ),
+            ),
+
             // ── Asset Analytics ───────────────────────────────────────────
             const SliverToBoxAdapter(
               child: Padding(
@@ -920,6 +933,127 @@ class _FolStat extends StatelessWidget {
               style: const TextStyle(fontSize: 9, color: AppColors.textMuted)),
         ]),
       );
+}
+
+// ── Watch List Card ────────────────────────────────────────────────────────────
+// T-094 (2026-09-02): real, computed candidates that don't yet clear the
+// confidence/quality bar -- never a confirmed pick, never a fabricated
+// Entry/SL/TP, just an honest "here's what's closest right now" so the app
+// doesn't read as dead when the hero balance above hasn't moved in a while.
+
+class _WatchListCard extends ConsumerWidget {
+  const _WatchListCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final actionAsync = ref.watch(brainActionProvider);
+
+    return actionAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (report) {
+        if (report.watchList.isEmpty) return const SizedBox.shrink();
+
+        return Container(
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Row(children: [
+                const Icon(Icons.visibility_outlined,
+                    size: 14, color: AppColors.hold),
+                const SizedBox(width: 8),
+                const Text('Watch List',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const Spacer(),
+                Text('${report.watchList.length} tracked',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textMuted)),
+              ]),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Real candidates the AI scored — none clear the confidence/'
+                'quality bar yet, so none are confirmed trades.',
+                style: TextStyle(fontSize: 11, color: AppColors.textMuted, height: 1.3),
+              ),
+            ),
+            ...report.watchList.map((w) => _WatchListRow(entry: w)),
+            const SizedBox(height: 4),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+class _WatchListRow extends StatelessWidget {
+  final WatchListEntry entry;
+  const _WatchListRow({required this.entry});
+
+  Color get _actionColor {
+    switch (entry.action) {
+      case 'BUY':
+        return AppColors.buy;
+      case 'SELL':
+        return AppColors.sell;
+      default:
+        return AppColors.hold;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: _actionColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(entry.action,
+              style: TextStyle(
+                  fontSize: 9, fontWeight: FontWeight.w800, color: _actionColor)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(entry.displayName,
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary)),
+            if (entry.reason != null) ...[
+              const SizedBox(height: 2),
+              Text(entry.reason!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            ],
+          ]),
+        ),
+        const SizedBox(width: 8),
+        Text('${entry.confidence}%',
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary)),
+      ]),
+    );
+  }
 }
 
 // ── Asset Analytics Card ──────────────────────────────────────────────────────

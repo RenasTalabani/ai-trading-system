@@ -24,6 +24,38 @@ class TopPick {
   );
 }
 
+// T-094 (2026-09-02): below-bar candidates the AI actually scored but that
+// do NOT clear the confidence/quality bar (AUDIT-02, backend
+// brainController.js) -- WATCH tier only, never presented as a confirmed
+// pick. `meetsBar` is always false for every entry here by construction
+// (the backend only ever populates this list when the top pick itself
+// didn't meet it), carried anyway so this model never has to assume.
+class WatchListEntry {
+  final String  asset;
+  final String  displayName;
+  final String  action;
+  final int     confidence;
+  final String  assetClass;
+  final bool    meetsBar;
+  final String? reason;
+
+  const WatchListEntry({
+    required this.asset, required this.displayName, required this.action,
+    required this.confidence, required this.assetClass, required this.meetsBar,
+    this.reason,
+  });
+
+  factory WatchListEntry.fromJson(Map<String, dynamic> j) => WatchListEntry(
+    asset:       j['asset']?.toString()       ?? '',
+    displayName: j['displayName']?.toString() ?? j['asset']?.toString() ?? '',
+    action:      j['action']?.toString()      ?? 'HOLD',
+    confidence:  (j['confidence'] as num?)?.toInt() ?? 0,
+    assetClass:  j['assetClass']?.toString()  ?? 'crypto',
+    meetsBar:    j['meetsBar'] as bool?       ?? false,
+    reason:      j['reason']?.toString(),
+  );
+}
+
 class ActionReport {
   final String   bestAsset;
   final String   displayName;
@@ -38,6 +70,7 @@ class ActionReport {
   final String?  expectedProfitPercent;
   final String   reason;
   final List<TopPick> topPicks;
+  final List<WatchListEntry> watchList;
   final String?  macroSentiment;
   final int?     fearGreed;
   final String?  fearGreedClass;
@@ -49,6 +82,7 @@ class ActionReport {
     required this.bestAsset, required this.displayName, required this.assetClass,
     required this.action, required this.timeframe, required this.confidence,
     required this.reason, required this.topPicks, required this.totalEvaluated,
+    this.watchList = const [],
     this.entryPrice, this.stopLoss, this.takeProfit, this.riskReward,
     this.expectedProfitPercent, this.macroSentiment, this.fearGreed,
     this.fearGreedClass, this.aiAccuracy, this.generatedAt,
@@ -78,6 +112,12 @@ class ActionReport {
           ? DateTime.tryParse(j['generatedAt'].toString()) : null,
       topPicks: (a['topPicks'] as List? ?? [])
           .map((p) => TopPick.fromJson(p as Map<String, dynamic>))
+          .toList(),
+      // Top-level on the response (sibling of `action`), not nested under
+      // it -- see brainController.js's actionReport(), only ever populated
+      // in the below-bar branch.
+      watchList: (j['watchList'] as List? ?? [])
+          .map((w) => WatchListEntry.fromJson(w as Map<String, dynamic>))
           .toList(),
     );
   }
