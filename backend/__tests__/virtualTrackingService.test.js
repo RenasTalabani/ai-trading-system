@@ -254,6 +254,14 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
     const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
     expect(trade.origin).toBe('guide_approval');
   });
+
+  test('Phase 2 (2026-09-01): a caller-supplied origin overrides the "guide_approval" default, e.g. conversationService.approvePlan() passing "conversation_approval"', async () => {
+    FAKE_PORTFOLIO = makePortfolio(1000, 5);
+    const trade = await svc.approveSuggestion({
+      asset: 'X', direction: 'BUY', entryPrice: 100, origin: 'conversation_approval',
+    });
+    expect(trade.origin).toBe('conversation_approval');
+  });
 });
 
 describe('previewSizeUsd — read-only sizing preview matches what approveSuggestion would actually charge', () => {

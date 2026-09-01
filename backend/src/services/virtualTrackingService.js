@@ -222,7 +222,13 @@ async function pickupNewSignals() {
 // opens a spot position, so a manually-approved trade can never risk more
 // than an automatically-picked-up one would.
 
-async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit, atrAtEntry = null, signalId = null, aiDecisionId = null }) {
+// Phase 2 (2026-09-01): `origin` is now caller-overridable (default
+// unchanged) so a second, honest call site -- conversationService's
+// approvePlan(), reached from RENO chat's own approve action -- can
+// record 'conversation_approval' instead of the guideController-specific
+// 'guide_approval' default. guideController.js's own call site passes
+// nothing new and keeps recording 'guide_approval' exactly as before.
+async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeProfit, atrAtEntry = null, signalId = null, aiDecisionId = null, origin = 'guide_approval' }) {
   if (!asset || !entryPrice) {
     throw new Error('Missing asset or entry price.');
   }
@@ -247,7 +253,8 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
     // distinguishable between a real user's tap and a testing/validation
     // session calling it directly -- see the field's comment in
     // VirtualTrade.js for why no such signal exists in this codebase today.
-    origin:     'guide_approval',
+    // Phase 2: caller-overridable -- see this function's signature comment.
+    origin,
     asset,
     direction,
     entryPrice,

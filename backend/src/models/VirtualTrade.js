@@ -37,13 +37,22 @@ const virtualTradeSchema = new mongoose.Schema(
     //                             that would just be guessing.
     //   - 'futures_manual'      — POST /virtual/trades/:signalId/open-futures.
     //                             Same ambiguity as 'guide_approval' above.
+    //   - 'conversation_approval' — Phase 2 (2026-09-01), POST
+    //                             /conversation/approve, RENO chat's own
+    //                             approve action. Server-side re-resolves
+    //                             the suggestion exactly like guide_approval
+    //                             does (see conversationService.approvePlan) --
+    //                             kept as its own honest value rather than
+    //                             reusing 'guide_approval' so a trade opened
+    //                             from a chat tap is distinguishable from one
+    //                             opened from the Guide screen's button.
     // No default -- pre-existing trades are simply undefined on this field
     // (see likelyTestOrigin below for a separate, clearly-labeled
     // best-effort backfill for those), matching this schema's existing
     // convention for additive fields (see `decision` on Signal.js, T-066).
     origin: {
       type: String,
-      enum: ['ai_worker', 'signal_auto_pickup', 'guide_approval', 'futures_manual'],
+      enum: ['ai_worker', 'signal_auto_pickup', 'guide_approval', 'futures_manual', 'conversation_approval'],
       index: true,
     },
 
