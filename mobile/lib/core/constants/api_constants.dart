@@ -3,9 +3,20 @@ class ApiConstants {
   //   flutter build apk --release \
   //     --dart-define=API_BASE_URL=https://YOUR_BACKEND.railway.app \
   //     --dart-define=WS_URL=wss://YOUR_BACKEND.railway.app/ws
+  //
+  // Bug fix (2026-09-01): this default used to point at
+  // distinguished-empathy-production-5d79.up.railway.app, which returns a
+  // Railway "Application not found" 404 on every path (verified live) --
+  // an old/decommissioned service URL, not the real backend. build-railway-apk.bat
+  // already overrides this correctly via --dart-define, which is why the
+  // shipped APK has been fine, but any `flutter run`/debug session started
+  // without that script would silently talk to a dead backend with no
+  // obvious error. Updated to the real, currently-live backend (verified
+  // live just now: GET /api/v1/health -> 200, backend/database/aiService
+  // all connected).
   static const String _base = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://distinguished-empathy-production-5d79.up.railway.app',
+    defaultValue: 'https://backend-production-bd777.up.railway.app',
   );
 
   static const String baseUrl = _base;
@@ -61,6 +72,6 @@ class ApiConstants {
   // WebSocket
   static const String wsUrl = String.fromEnvironment(
     'WS_URL',
-    defaultValue: 'wss://distinguished-empathy-production-5d79.up.railway.app/ws',
+    defaultValue: 'wss://backend-production-bd777.up.railway.app/ws',
   );
 }
