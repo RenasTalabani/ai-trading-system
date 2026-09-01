@@ -23,6 +23,7 @@ const { startDecisionTrackingJob }   = require('./src/jobs/decisionTrackingJob')
 const { startAIDecisionJob }         = require('./src/jobs/aiDecisionJob');
 const { start: startPerformanceAnalysisJob } = require('./src/jobs/performanceAnalysisJob');
 const { startDcaJob }                = require('./src/jobs/dcaJob');
+const { start: startConversationMonitorJob } = require('./src/jobs/conversationMonitorJob');
 const logger = require('./src/config/logger');
 
 const PORT = process.env.PORT || 5000;
@@ -98,6 +99,10 @@ async function bootstrap() {
 
   // Phase 18: Performance analysis + RL weight update every 6 hours
   startPerformanceAnalysisJob();
+
+  // Phase 2 (RENO chat, 2026-09-01): continuous position monitoring —
+  // proactive flip/close updates in threads that have discussed a trade.
+  startConversationMonitorJob();
 
   process.on('unhandledRejection', (err) => {
     logger.error('Unhandled Rejection:', err.message);
