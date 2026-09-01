@@ -53,6 +53,11 @@ class ApiConstants {
   static const String guideApprove    = '$apiV1/guide/suggestion/approve';
   static const String guidePositions  = '$apiV1/guide/positions';
 
+  // RENO conversation -- Phase 3 (2026-09-01)
+  static const String conversationThread  = '$apiV1/conversation';
+  static const String conversationMessage = '$apiV1/conversation/message';
+  static const String conversationApprove = '$apiV1/conversation/approve';
+
   // WebSocket
   static const String wsUrl = String.fromEnvironment(
     'WS_URL',

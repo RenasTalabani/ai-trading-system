@@ -10,6 +10,7 @@ import 'features/performance/virtual_performance_screen.dart';
 import 'features/advisor/advisor_screen.dart';
 import 'features/brain/brain_report_screen.dart';
 import 'features/guide/guide_screen.dart';
+import 'features/reno/reno_screen.dart';
 import 'features/watchlist/watchlist_screen.dart';
 import 'features/brain/ask_brain_screen.dart';
 import 'features/scanner/market_scanner_screen.dart';
@@ -38,6 +39,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, child) => AppShell(child: child),
         routes: [
           GoRoute(path: '/',              builder: (_, __) => const GuideScreen()),
+          GoRoute(path: '/reno',          builder: (_, __) => const RenoScreen()),
           GoRoute(path: '/brain',         builder: (_, __) => const BrainReportScreen()),
           GoRoute(path: '/performance',   builder: (_, __) => const VirtualPerformanceScreen()),
           GoRoute(path: '/advisor',       builder: (_, __) => const AdvisorScreen()),

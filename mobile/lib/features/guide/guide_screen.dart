@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/providers/guide_provider.dart';
 import '../../core/providers/positions_guidance_provider.dart';
 import '../../core/theme/app_theme.dart';
@@ -33,6 +34,19 @@ class GuideScreen extends ConsumerWidget {
         title: const Text('What Should I Do?',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                 color: AppColors.textPrimary)),
+        // RENO chat entry point -- Phase 3 (2026-09-01). A dedicated
+        // conversational companion screen, reached from here rather than
+        // added as a 6th bottom-nav tab (NavigationBar already carries 5
+        // and RENO is a different interaction paradigm -- chat, not a
+        // data screen). Revisit placement once this has actually been
+        // seen running on a device.
+        actions: [
+          IconButton(
+            onPressed: () => context.push('/reno'),
+            icon: const Icon(Icons.chat_bubble_outline, color: AppColors.textPrimary),
+            tooltip: 'Ask RENO',
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: () => Future.wait([
