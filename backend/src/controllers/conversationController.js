@@ -31,3 +31,19 @@ exports.postMessage = async (req, res) => {
     res.status(500).json({ success: false, message: 'Could not send that message right now.' });
   }
 };
+
+// Phase 2, step 1 (2026-09-01) — approve a trade plan from a chat "Approve"
+// tap. Deliberately takes NO trade parameters from req.body — see
+// conversationService.approvePlan()'s own comment for why (T-071 parity).
+exports.approvePlan = async (req, res) => {
+  try {
+    const result = await conversationService.approvePlan(req.user._id);
+    if (!result.success) {
+      return res.status(409).json({ success: false, message: result.message, reply: result.reply });
+    }
+    res.json({ success: true, trade: result.trade, reply: result.reply });
+  } catch (err) {
+    logger.error(`[Conversation] approvePlan failed: ${err.stack}`);
+    res.status(500).json({ success: false, message: 'Could not approve that right now.' });
+  }
+};

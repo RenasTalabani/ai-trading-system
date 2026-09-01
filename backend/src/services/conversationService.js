@@ -39,8 +39,9 @@ const VirtualTrade        = require('../models/VirtualTrade');
 
 const { getAllCachedPrices, TRACKED_ASSETS } = require('./binanceService');
 const aiService = require('./aiService');
-const { getSummary } = require('./virtualTrackingService');
+const { getSummary, approveSuggestion } = require('./virtualTrackingService');
 const { resolveSuggestion, buildPositionGuidance } = require('../controllers/guideController');
+const AIDecision = require('../models/AIDecision');
 
 const ANTHROPIC_KEY   = process.env.ANTHROPIC_API_KEY || null;
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001'; // verified 2026-09-01, see MODEL ID note above
@@ -270,6 +271,89 @@ async function sendMessage(userId, text) {
   }
 }
 
+/**
+ * Phase 2, step 1 (2026-09-01) — approve a trade plan from within RENO
+ * chat. This is reached by a dedicated "Approve" tap on a trade-plan card
+ * in the chat UI, NOT by the LLM interpreting free-form text as consent —
+ * a model deciding on its own that a sentence means "open this trade"
+ * is exactly the kind of ambiguous, unauditable trigger this system
+ * avoids everywhere else, so it isn't introduced here either.
+ *
+ * Security property, deliberately identical to guideController.approve()
+ * (T-071): the server re-resolves the suggestion itself via
+ * resolveSuggestion() and NEVER trusts a client-supplied asset/entry/
+ * stop/target — even though the request now arrives from the chat screen
+ * instead of Guide's button, the invariant does not change. This
+ * duplicates guideController.approve()'s three-line resolve ->
+ * approveSuggestion() shape rather than refactor that tested,
+ * owner-reviewed function to add a second caller — guideController.js
+ * stays completely untouched, per instruction.
+ *
+ * origin: 'conversation_approval' — see VirtualTrade.js's origin enum
+ * comment and approveSuggestion()'s new optional parameter.
+ */
+async function approvePlan(userId) {
+  const thread = await _getOrCreateThread(userId);
+
+  const suggestion = await resolveSuggestion();
+  if (!suggestion) {
+    const reply = await ConversationMessage.create({
+      threadId: thread._id,
+      role: 'assistant',
+      content: "There's no suggestion available to approve right now — it may have expired. Ask me for a fresh one first.",
+    });
+    return { success: false, message: reply.content, reply };
+  }
+
+  // T-061's same best-effort aiDecisionId lookup as guideController.approve() —
+  // only attempted when the suggestion has no signalId of its own.
+  let aiDecisionId = null;
+  if (!suggestion.signalId) {
+    const recentDecision = await AIDecision.findOne({
+      asset: suggestion.asset, action: suggestion.action,
+    }).sort({ createdAt: -1 }).lean();
+    if (recentDecision) aiDecisionId = recentDecision._id;
+  }
+
+  try {
+    const trade = await approveSuggestion({
+      asset:      suggestion.asset,
+      direction:  suggestion.action,
+      entryPrice: suggestion.entryPrice,
+      stopLoss:   suggestion.stopLoss,
+      takeProfit: suggestion.takeProfit,
+      atrAtEntry: suggestion.atrAtEntry ?? null,
+      signalId:   suggestion.signalId || null,
+      aiDecisionId,
+      origin:     'conversation_approval',
+    });
+
+    const verb = trade.direction === 'BUY' ? 'Bought' : 'Sold';
+    const content = `Done — ${verb} $${trade.sizeUsd.toFixed(2)} of ${suggestion.displayName || suggestion.asset}. This is a paper trade — I'll keep you posted on it here.`;
+    const reply = await ConversationMessage.create({
+      threadId: thread._id,
+      role: 'assistant',
+      content,
+      relatedTradeIds: [trade._id],
+    });
+    await ConversationThread.updateOne({ _id: thread._id }, {
+      lastMessageAt: reply.createdAt,
+      lastMessagePreview: content.slice(0, 140),
+    });
+    return { success: true, trade, reply };
+  } catch (err) {
+    // Mirrors guideController.approve()'s honest-rejection handling
+    // (e.g. "already have an open position") rather than a generic failure.
+    const content = `Couldn't approve that — ${err.message}`;
+    const reply = await ConversationMessage.create({
+      threadId: thread._id,
+      role: 'assistant',
+      content,
+    });
+    return { success: false, message: err.message, reply };
+  }
+}
+
 async function getThread(userId, limit = 50) {
   const thread = await _getOrCreateThread(userId);
   const messages = await ConversationMessage.find({ threadId: thread._id })
@@ -277,4 +361,4 @@ async function getThread(userId, limit = 50) {
   return { thread, messages: messages.reverse() };
 }
 
-module.exports = { sendMessage, getThread, TOOLS, TOOL_EXECUTORS };
+module.exports = { sendMessage, getThread, approvePlan, TOOLS, TOOL_EXECUTORS };

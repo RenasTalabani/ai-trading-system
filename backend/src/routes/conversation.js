@@ -6,5 +6,6 @@ const { protect } = require('../middleware/auth');
 router.use(protect);
 router.get('/',         ctrl.getThread);
 router.post('/message', ctrl.postMessage);
+router.post('/approve', ctrl.approvePlan);
 
 module.exports = router;
