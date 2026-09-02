@@ -70,3 +70,13 @@ _to_delete/
 # Sync bundles Claude generates to move commits between its cloud
 # workspace and this device — never project content
 *.bundle
+
+# Full-project/backup zip archives — these have historically bundled real
+# .env secrets (found in ai-trading-system.zip, 2026-09-02 audit); never
+# let one of these be committed by accident
+*.zip
+*.tar.gz
+
+# Local scratch task exports
+claude-code-task*.json
+.commit_msg_*.txt
