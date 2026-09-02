@@ -137,10 +137,19 @@ class RenoNotifier extends StateNotifier<RenoState> {
     try {
       final res = await ApiService.dio.post(ApiConstants.conversationApprove);
       final data = res.data as Map<String, dynamic>;
-      final replyText = data['reply'] as String?;
+      // Bug fix (UI/backend audit): the backend's `reply` field is a full
+      // ConversationMessage object (see conversationController.approvePlan /
+      // conversationService.approvePlan), not a plain string. Casting it
+      // directly to String threw an uncaught TypeError on every single
+      // "Approve" tap -- and because it's a TypeError rather than a
+      // DioException, the catch block below never even saw it. Parse it as
+      // a RenoMessage and read its `content` instead.
+      final replyMsg = data['reply'] is Map<String, dynamic>
+          ? RenoMessage.fromJson(data['reply'] as Map<String, dynamic>)
+          : null;
       state = state.copyWith(
         approving: false,
-        approveResultMessage: replyText ?? 'Trade approved.',
+        approveResultMessage: replyMsg?.content ?? 'Trade approved.',
       );
       // Refresh the thread so the real assistant confirmation message
       // (and any thesis/state it references) shows up in the transcript

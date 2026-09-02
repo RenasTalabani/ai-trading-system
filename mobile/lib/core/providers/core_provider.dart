@@ -193,9 +193,17 @@ class CoreDecisionsData {
 // ── Providers ─────────────────────────────────────────────────────────────────
 
 final coreAdviceProvider = FutureProvider.autoDispose<CoreAdvice>((ref) async {
-  final resp    = await ApiService.dio.get('core/advice');
-  final data    = resp.data as Map<String, dynamic>;
-  final advice  = Map<String, dynamic>.from(data['advice'] as Map<String, dynamic>);
+  final resp = await ApiService.dio.get('core/advice');
+  final data = resp.data as Map<String, dynamic>;
+  // Bug fix (UI/backend audit): coreController legitimately returns
+  // `advice: null` whenever no asset currently clears the confidence bar --
+  // that's the documented common case, not an edge case. Force-casting it
+  // to a Map threw a raw TypeError that crashed the AI Brain screen and
+  // silently blanked the Dashboard's AI Core card. Fall back to an empty
+  // map so CoreAdvice.fromJson can render its own "nothing right now" state.
+  final advice = Map<String, dynamic>.from(
+    (data['advice'] as Map<String, dynamic>?) ?? const {},
+  );
   // Inject top_picks into the advice map so CoreAdvice.fromJson can read it
   advice['top_picks'] = data['top_picks'] ?? [];
   return CoreAdvice.fromJson(advice);

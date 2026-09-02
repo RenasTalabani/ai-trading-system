@@ -285,8 +285,15 @@ class _PositionTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isSell = position.recommendation == 'SELL';
-    final pnlColor = position.pnlPct >= 0 ? AppColors.success : AppColors.error;
-    final pnlSign = position.pnlPct >= 0 ? '+' : '';
+    // Bug fix (UI/backend audit): pnlPct is null when this asset is
+    // currently halted on the exchange (backend sends no live price to
+    // compute it from) -- show a neutral placeholder instead of crashing.
+    final pnlPct = position.pnlPct;
+    final pnlColor = pnlPct == null
+        ? AppColors.textSecondary
+        : (pnlPct >= 0 ? AppColors.success : AppColors.error);
+    final pnlSign = (pnlPct != null && pnlPct >= 0) ? '+' : '';
+    final pnlText = pnlPct == null ? 'Halted' : '$pnlSign${pnlPct.toStringAsFixed(2)}%';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -303,7 +310,7 @@ class _PositionTile extends ConsumerWidget {
               Text(position.asset,
                   style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
               const SizedBox(width: 8),
-              Text('$pnlSign${position.pnlPct.toStringAsFixed(2)}%',
+              Text(pnlText,
                   style: TextStyle(color: pnlColor, fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               if (!isSell)

@@ -474,8 +474,12 @@ class _OpportunityCard extends ConsumerWidget {
           _FieldRow(label: 'Stop loss', value: opportunity.stopLoss?.toString()),
           _FieldRow(label: 'Take profit', value: opportunity.takeProfit?.toString()),
           _FieldRow(label: 'Timeframe', value: opportunity.timeframe),
+          // Bug fix (UI/backend audit): backend confidence values are
+          // already 0-100 (see conversationService/brainController -- e.g.
+          // "with 83% confidence"), not a 0-1 fraction. Multiplying by 100
+          // again turned a real 82% into "8200%" in the chat UI.
           _FieldRow(label: 'Confidence',
-              value: opportunity.confidence != null ? '${(opportunity.confidence! * 100).toStringAsFixed(0)}%' : null),
+              value: opportunity.confidence != null ? '${opportunity.confidence!.toStringAsFixed(0)}%' : null),
           if (opportunity.why.isNotEmpty) ...[
             const SizedBox(height: 10),
             const Text('Why', style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
