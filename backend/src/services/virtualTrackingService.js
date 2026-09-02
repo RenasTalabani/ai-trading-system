@@ -691,6 +691,7 @@ async function closePositionNow(tradeId, currentPrice, exitReason = 'MANUAL') {
 // ─── Date range helper ────────────────────────────────────────────────────────
 
 function rangeStart(range) {
+  if (range === '1h')  return new Date(Date.now() -  1 * 3_600_000);
   if (range === '1d')  return new Date(Date.now() -  1 * 24 * 3_600_000);
   if (range === '7d')  return new Date(Date.now() -  7 * 24 * 3_600_000);
   if (range === '30d') return new Date(Date.now() - 30 * 24 * 3_600_000);
@@ -773,6 +774,37 @@ async function getSummary(range = 'all') {
       : portfolio.balanceHistory.filter(p => !since || p.date >= since).slice(-100),
     startedAt:  portfolio.startedAt,
     updatedAt:  portfolio.updatedAt,
+  };
+}
+
+// ─── Real win/loss breakdown by period (2026-09-02) ────────────────────────
+// Built to answer "how am I doing today / this hour / this week" with real
+// counted outcomes -- not a vague "could win / could lose" guess. Every
+// number here is getSummary()'s own already-correct win/loss counting,
+// just called once per period; no new counting logic invented.
+async function getWinLossBreakdown() {
+  const [lastHour, today, thisWeek, allTime] = await Promise.all([
+    getSummary('1h'),
+    getSummary('1d'),
+    getSummary('7d'),
+    getSummary('all'),
+  ]);
+
+  const pick = (s) => ({
+    wins:      s.winCount,
+    losses:    s.lossCount,
+    trades:    s.totalTrades,
+    winRate:   s.winRate,      // 0-100, or 0 with trades:0 meaning "no closed trades yet this period"
+    netPnl:    s.totalPnl,
+  });
+
+  return {
+    lastHour: pick(lastHour),
+    today:    pick(today),
+    thisWeek: pick(thisWeek),
+    allTime:  pick(allTime),
+    openTrades: allTime.openTrades,
+    generatedAt: new Date().toISOString(),
   };
 }
 
@@ -916,5 +948,5 @@ module.exports = {
   resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
   enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
   approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
-  getTrackRecordByAsset,
+  getTrackRecordByAsset, getWinLossBreakdown,
 };

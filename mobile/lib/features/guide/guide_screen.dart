@@ -93,6 +93,15 @@ class GuideScreen extends ConsumerWidget {
                 _ResultBanner(message: positionsState.lastSellMessage!),
                 const SizedBox(height: 10),
               ],
+              // BUG FIX (2026-09-02): sellNow() already set this on a failed
+              // sell (e.g. "No live price available ... try again shortly"),
+              // but nothing rendered it -- so a failed tap looked like it did
+              // nothing at all. Mirrors the _ErrorBanner pattern already used
+              // above for the suggestion-fetch error.
+              if (positionsState.error != null) ...[
+                _ErrorBanner(message: positionsState.error!),
+                const SizedBox(height: 10),
+              ],
               ...positionsState.positions.map((p) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _PositionTile(

@@ -472,6 +472,62 @@ describe('getTrackRecordByAsset — Phase 2, step 3 (2026-09-01): per-asset real
   });
 });
 
+describe('getWinLossBreakdown — real per-period win/loss counts (2026-09-02)', () => {
+  // Four closed trades spread across time so each period boundary (1h/1d/7d/all)
+  // picks up a different, verifiable subset -- proving this pulls real counted
+  // outcomes per window, not a single all-time number relabeled four ways.
+  function closedAt(msAgo, result, pnl) {
+    return {
+      status: result === 'win' ? 'closed_profit' : 'closed_loss',
+      result, pnl, closedAt: new Date(Date.now() - msAgo),
+    };
+  }
+
+  beforeEach(() => {
+    FAKE_PORTFOLIO = { ...makePortfolio(1000, 5), startingBalance: 1000 };
+    const ALL_CLOSED = [
+      closedAt(30 * 60_000, 'win', 10),              // 30 min ago
+      closedAt(5 * 3_600_000, 'loss', -5),            // 5 hours ago
+      closedAt(3 * 24 * 3_600_000, 'win', 20),        // 3 days ago
+      closedAt(20 * 24 * 3_600_000, 'loss', -8),      // 20 days ago
+    ];
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) {
+        const since = query.closedAt && query.closedAt.$gte;
+        const filtered = ALL_CLOSED.filter(t => !since || t.closedAt >= since);
+        return { lean: async () => filtered };
+      }
+      return { sort: () => [] };
+    };
+    VirtualTrade.countDocuments = async (q) => (q && q.status === 'open') ? 3 : 0;
+  });
+
+  test('each period only counts trades that actually closed within it', async () => {
+    const result = await svc.getWinLossBreakdown();
+
+    expect(result.lastHour).toMatchObject({ wins: 1, losses: 0, trades: 1, netPnl: 10 });
+    expect(result.today).toMatchObject({ wins: 1, losses: 1, trades: 2, netPnl: 5 });
+    expect(result.thisWeek).toMatchObject({ wins: 2, losses: 1, trades: 3, netPnl: 25 });
+    expect(result.allTime).toMatchObject({ wins: 2, losses: 2, trades: 4, netPnl: 17 });
+  });
+
+  test('reports real open-trade count and a generation timestamp, not a placeholder', async () => {
+    const result = await svc.getWinLossBreakdown();
+    expect(result.openTrades).toBe(3);
+    expect(result.allTime.openTrades).toBeUndefined(); // pick() only forwards win/loss/trade fields, not openTrades
+    expect(new Date(result.generatedAt).getTime()).not.toBeNaN();
+  });
+
+  test('a period with zero closed trades reports trades:0 honestly, not a guessed win/loss', async () => {
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) return { lean: async () => [] };
+      return { sort: () => [] };
+    };
+    const result = await svc.getWinLossBreakdown();
+    expect(result.lastHour).toMatchObject({ wins: 0, losses: 0, trades: 0, winRate: 0, netPnl: 0 });
+  });
+});
+
 describe('closePositionNow — the Guide screen\'s "Sell Now" button', () => {
   test('closes a BUY position at the current price and records a profit', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);

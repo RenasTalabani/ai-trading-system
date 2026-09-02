@@ -40,7 +40,7 @@ const TradeThesis         = require('../models/TradeThesis'); // Phase 3, step 2
 
 const { getAllCachedPrices, TRACKED_ASSETS } = require('./binanceService');
 const aiService = require('./aiService');
-const { getSummary, approveSuggestion, getTrackRecordByAsset } = require('./virtualTrackingService');
+const { getSummary, approveSuggestion, getTrackRecordByAsset, getWinLossBreakdown } = require('./virtualTrackingService');
 const { resolveSuggestion, buildPositionGuidance } = require('../controllers/guideController');
 const AIDecision = require('../models/AIDecision');
 
@@ -98,6 +98,11 @@ const TOOLS = [
         asset: { type: 'string', description: 'Optional -- filter to one asset, e.g. "BTCUSDT" or "XAUUSD". Omit for a full breakdown across every traded asset.' },
       },
     },
+  },
+  {
+    name: 'get_win_loss_breakdown',
+    description: 'Get REAL, actually-counted win/loss numbers for the last hour, today, and this week (plus all-time), each with real win/loss counts, win rate, and net P&L -- not an estimate or a "could win/could lose" guess. Always use this (never guess or generalize) when asked "how am I doing today/this week/right now", "how many wins today", "what\'s my hourly/daily/weekly performance", or anything asking for a real recent track record broken down by time period. A period with trades:0 genuinely means no trade has closed in that window yet -- say so plainly rather than implying a result.',
+    input_schema: { type: 'object', properties: {} },
   },
 ];
 
@@ -171,12 +176,22 @@ async function _execGetTrackRecord(input = {}) {
   return { perAsset };
 }
 
+// 2026-09-02 -- real per-period win/loss counts (hour/day/week/all-time),
+// added specifically so RENO answers "how am I doing today" with actual
+// counted outcomes instead of vague language. Thin pass-through to
+// getWinLossBreakdown() (virtualTrackingService.js), which itself just
+// calls the existing, already-correct getSummary() once per period.
+async function _execGetWinLossBreakdown() {
+  return await getWinLossBreakdown();
+}
+
 const TOOL_EXECUTORS = {
   get_suggestion:            _execGetSuggestion,
   get_open_positions:        _execGetOpenPositions,
   get_recent_trade_outcomes: _execGetRecentTradeOutcomes,
   get_portfolio_summary:     _execGetPortfolioSummary,
   get_track_record:          _execGetTrackRecord,
+  get_win_loss_breakdown:    _execGetWinLossBreakdown,
 };
 
 // ── Thread helpers ───────────────────────────────────────────────────────────
