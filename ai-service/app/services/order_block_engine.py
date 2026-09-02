@@ -47,6 +47,9 @@ import numpy as np
 from app.services.data_processor import DataProcessor
 from app.services.market_structure_engine import analyze_structure
 from app.services.liquidity_engine import analyze_liquidity, resting_pool_density
+from app.services.fvg_engine import analyze_fvgs
+from app.services.premium_discount_engine import analyze_premium_discount
+from app.services.ob_intelligence_pipeline import enrich_order_blocks
 
 logger = logging.getLogger("ai-service.order_block_engine")
 
@@ -444,6 +447,44 @@ class OrderBlockEngine:
             ob["liquidity_context"] = {
                 "swept_pool_before_formation": _liquidity_sweep_confluence(ob, pools),
             }
+
+        # ── Phase 12: full per-OB intelligence (quality/state/setup) ──────────
+        # Purely additive, read-only enrichment layered on the exact same
+        # order_blocks already found above -- never changes which OBs were
+        # detected, their strength/freshness/zone, or the BUY/SELL/HOLD
+        # signal generated below (which runs immediately after this, over
+        # the same order_blocks list, untouched). Degrades gracefully to no
+        # `intelligence` key per OB if anything here fails, exactly like
+        # Phase 3's structure/liquidity annotation above. No new network
+        # calls -- FVG/premium-discount reuse the same df/structure_result
+        # already computed; higher-timeframe alignment (Phase 6) is not
+        # fetched here (would need extra live calls per other timeframe) so
+        # it degrades gracefully to NOT_APPLICABLE within this enrichment,
+        # exactly as ob_intelligence_pipeline.py's own docstring documents.
+        try:
+            fvgs = analyze_fvgs(df)
+        except Exception as e:
+            logger.warning(f"Phase 12: FVG analysis failed, degrading gracefully: {e}")
+            fvgs = []
+
+        premium_discount_result = None
+        if structure_result is not None and structure_result.status == "OK":
+            try:
+                premium_discount_result = analyze_premium_discount(structure_result.swings, price)
+            except Exception as e:
+                logger.warning(f"Phase 12: premium/discount analysis failed, degrading gracefully: {e}")
+                premium_discount_result = None
+
+        try:
+            enrichments = enrich_order_blocks(
+                order_blocks, df, fvgs, premium_discount_result, pools,
+                timeframe=timeframe,
+                structure_bias=structure_result.bias if structure_result is not None else None,
+            )
+            for ob, enrichment in zip(order_blocks, enrichments):
+                ob["intelligence"] = enrichment
+        except Exception as e:
+            logger.warning(f"Phase 12: order block intelligence enrichment failed, degrading gracefully: {e}")
 
         # ── Generate signal ───────────────────────────────────────────────────
         signal = self._generate_signal(
