@@ -7,6 +7,7 @@ import 'features/notifications/notifications_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'features/performance/virtual_performance_screen.dart';
+import 'features/performance/virtual_trades_screen.dart';
 import 'features/advisor/advisor_screen.dart';
 import 'features/brain/brain_report_screen.dart';
 import 'features/guide/guide_screen.dart';
@@ -42,6 +43,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/reno',          builder: (_, __) => const RenoScreen()),
           GoRoute(path: '/brain',         builder: (_, __) => const BrainReportScreen()),
           GoRoute(path: '/performance',   builder: (_, __) => const VirtualPerformanceScreen()),
+          GoRoute(path: '/real-portfolio', builder: (_, __) => const VirtualTradesScreen()),
           GoRoute(path: '/advisor',       builder: (_, __) => const AdvisorScreen()),
           GoRoute(path: '/watchlist',     builder: (_, __) => const WatchlistScreen()),
           GoRoute(path: '/scanner',      builder: (_, __) => const MarketScannerScreen()),

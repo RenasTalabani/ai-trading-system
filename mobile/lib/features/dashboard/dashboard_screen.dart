@@ -6,6 +6,8 @@ import '../../core/providers/auth_provider.dart';
 import '../../core/providers/signals_provider.dart';
 import '../../core/providers/prices_provider.dart';
 import '../../core/providers/pnl_provider.dart';
+import '../../core/providers/virtual_portfolio_provider.dart';
+import '../../core/models/virtual_portfolio_model.dart';
 import '../../core/providers/unified_provider.dart';
 import '../../core/providers/global_provider.dart';
 import '../../core/providers/budget_provider.dart';
@@ -107,6 +109,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: _DailyPnLCard(),
+              ),
+            ),
+
+            // Real paper-portfolio balance card (2026-09-02) -- the actual,
+            // continuously-updating paper-trading balance from real closed/open
+            // trades. Separate from the "AI Budget Manager" card below and from
+            // the Performance tab's Brain simulator -- this one is real trade data.
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _RealPortfolioCard(),
               ),
             ),
 
@@ -342,6 +355,92 @@ class _PnLChip extends StatelessWidget {
       child: Text(label,
           style: TextStyle(
               fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+    );
+  }
+}
+
+// ── Real paper-portfolio balance (2026-09-02) ──────────────────────────────────
+// Shows the ACTUAL paper-trading balance from real closed/open VirtualTrade
+// records (GET /virtual/performance) -- this is genuinely-computed money,
+// not the separate "AI Budget Manager" session card below, and not the
+// hypothetical Brain-simulator number shown on the Performance tab. Added
+// specifically because that real number, while correctly tracked in the
+// database this whole time, was never shown anywhere in the app -- so it
+// looked "stuck" even though nothing was actually broken.
+class _RealPortfolioCard extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final perfAsync = ref.watch(virtualPerformanceProvider);
+
+    return perfAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => GestureDetector(
+        onTap: () => ref.invalidate(virtualPerformanceProvider),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.sell.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.error_outline, color: AppColors.sell, size: 18),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text('Real portfolio balance unavailable — tap to retry',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            ),
+          ]),
+        ),
+      ),
+      data: (VirtualPerformanceModel p) {
+        final netPositive = p.netProfit >= 0;
+        final netColor = netPositive ? AppColors.buy : AppColors.sell;
+        return GestureDetector(
+          onTap: () => context.go('/real-portfolio'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: netColor.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.account_balance_wallet_outlined,
+                    color: netColor, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Real Paper Portfolio  \$${p.currentBalance.toStringAsFixed(2)}',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: netColor),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${p.totalTrades} closed trades · ${p.openTrades} open',
+                        style: const TextStyle(
+                            fontSize: 10, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+                _PnLChip(
+                  '${netPositive ? '+' : ''}\$${p.netProfit.toStringAsFixed(2)}',
+                  netColor,
+                ),
+                const SizedBox(width: 6),
+                _PnLChip('${p.winRate.toStringAsFixed(0)}% WR', AppColors.primary),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
