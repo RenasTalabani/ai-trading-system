@@ -26,7 +26,14 @@ class OrderBlockNotifier extends AsyncNotifier<OrderBlockResult?> {
         options: ApiService.slowOptions,
       );
       final data = resp.data as Map<String, dynamic>;
-      if (data['success'] == false) throw Exception(data['message'] ?? 'Analysis failed');
+      // Bug fix (UI/backend audit): ai-service's OrderBlockEngine._fallback()
+      // puts the real failure reason under the key "error", not "message"
+      // (see order_block_engine.py). Reading "message" always came back
+      // null, so every real failure ("Insufficient market data", etc.) was
+      // silently replaced with the generic "Analysis failed" toast.
+      if (data['success'] == false) {
+        throw Exception(data['error'] ?? data['message'] ?? 'Analysis failed');
+      }
       return OrderBlockResult.fromJson(data);
     });
   }

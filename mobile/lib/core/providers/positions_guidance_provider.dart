@@ -10,8 +10,8 @@ class PositionGuidance {
   final String direction; // BUY or SELL
   final double sizeUsd;
   final double entryPrice;
-  final double currentPrice;
-  final double pnlPct;
+  final double? currentPrice; // null = asset currently halted on the exchange
+  final double? pnlPct;       // null = asset currently halted on the exchange
   final String recommendation; // HOLD or SELL
   final List<String> why;
   final String? holdEstimate;
@@ -39,8 +39,15 @@ class PositionGuidance {
     direction:      json['direction'] as String,
     sizeUsd:        (json['sizeUsd'] as num).toDouble(),
     entryPrice:     (json['entryPrice'] as num).toDouble(),
-    currentPrice:   (json['currentPrice'] as num).toDouble(),
-    pnlPct:         (json['pnlPct'] as num).toDouble(),
+    // Bug fix (UI/backend audit): guideController.buildPositionGuidance()
+    // sends currentPrice/pnlPct as null for an asset currently halted on
+    // the exchange (see backend/src/controllers/guideController.js's
+    // halted-asset branch). Force-casting to non-nullable `num` threw an
+    // uncaught TypeError -- not caught by fetch()'s `on DioException`
+    // handler -- breaking the entire Guide positions list whenever any one
+    // tracked asset was halted.
+    currentPrice:   (json['currentPrice'] as num?)?.toDouble(),
+    pnlPct:         (json['pnlPct'] as num?)?.toDouble(),
     recommendation: json['recommendation'] as String,
     why:            (json['why'] as List).map((e) => e.toString()).toList(),
     holdEstimate:   json['holdEstimate'] as String?,
