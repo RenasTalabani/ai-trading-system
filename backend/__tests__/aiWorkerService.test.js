@@ -104,11 +104,21 @@ beforeEach(() => {
   MarketRegimeHistory.create = async () => ({});
   axios.post = jest.fn(async () => ({ data: SCAN_RESPONSE }));
   getCache.mockReturnValue(null); // default: no cache -> falls back to a direct scan call
-
-  process.env.AI_CONFIDENCE_THRESHOLD = '0';
-  process.env.AI_MIN_FUSED_SCORE = '0';
-  process.env.AI_MIN_QUALITY_SCORE = '0';
 });
+
+// aiWorkerService.js reads these into module-level `const`s at require time
+// (CONFIDENCE_THRESHOLD/MIN_FUSED_SCORE/MIN_QUALITY_SCORE), so setting them
+// inside beforeEach() (as this file used to) has no effect -- that callback
+// only runs once Jest starts executing a test, which is always AFTER this
+// file's own top-level `require()` below has already frozen the constants
+// at their real-world defaults (70/65/75). That silently left every test's
+// low/zero-confidence "opportunity" fixtures at the mercy of those production
+// defaults instead of being genuinely threshold-free, which is what every
+// test in this file actually intends. Setting them here, before the
+// require(), is what makes the override real.
+process.env.AI_CONFIDENCE_THRESHOLD = '0';
+process.env.AI_MIN_FUSED_SCORE = '0';
+process.env.AI_MIN_QUALITY_SCORE = '0';
 
 const {
   runAIWorkerCycle, approveDecision, rejectDecision, getPendingDecision,
