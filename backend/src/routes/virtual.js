@@ -7,10 +7,36 @@ const {
   enableTrailingStop, getExposureSummary,
 } = require('../services/virtualTrackingService');
 const { startPlan, stopPlan, getPlansWithSummary } = require('../services/dcaService');
+const riskStateService = require('../services/riskStateService');
 
 const router = express.Router();
 
 router.use(protect);
+
+// ─── GET /api/v1/virtual/risk-state ───────────────────────────────────────────
+// Surfaces the daily-loss circuit breaker's live status (master_plan_v1.md
+// decision #16) so the mobile app can show "trading halted for today" instead
+// of a silent lack of new trades.
+router.get('/risk-state', async (req, res) => {
+  try {
+    const state = await riskStateService.getState();
+    res.json({ success: true, data: state });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ─── POST /api/v1/virtual/risk-state/reset ────────────────────────────────────
+// The ONLY way to clear a tripped daily-loss circuit breaker (decision #16:
+// "stops until manual reactivation" -- deliberately not automatic/scheduled).
+router.post('/risk-state/reset', async (req, res) => {
+  try {
+    const state = await riskStateService.manualReset(req.user?.id || req.user?._id || 'user');
+    res.json({ success: true, data: state });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // ─── GET /api/v1/virtual/exposure ─────────────────────────────────────────────
 // Aggregate risk across all open positions: total notional/margin, per-asset
@@ -174,9 +200,11 @@ router.post('/set-capital', authorize('admin'), [
 });
 
 // ─── POST /api/v1/virtual/trades/:signalId/open-futures ──────────────────────
-// Simulated leverage — opens a leveraged paper position from an existing
-// signal. No real money at any point; leverage amplifies simulated P&L and
-// introduces a simulated liquidation price, same as real futures mechanics.
+// Master-plan decision #13 (locked, 2026-09-03): leverage is banned. This
+// endpoint's `leverage` body param is now IGNORED by the service layer
+// (virtualTrackingService.openFuturesTrade forces 1x regardless of what's
+// sent) — the validator below is left permissive only so an old client
+// sending 1-20 doesn't get a 400 instead of the clearer service-level log.
 router.post('/trades/:signalId/open-futures', [
   param('signalId').isMongoId(),
   body('leverage').optional().isInt({ min: 1, max: 20 }),

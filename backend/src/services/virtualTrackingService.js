@@ -9,6 +9,8 @@ const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession    = require('../models/BudgetSession');
 const logger           = require('../config/logger');
 const { withPortfolioLock } = require('../utils/portfolioLock');
+const safetyGate       = require('./safetyLimitsGate');
+const riskStateService = require('./riskStateService');
 
 // Lazy-require to avoid circular dependency at startup
 function notifySvc() { return require('./notificationService'); }
@@ -175,8 +177,22 @@ async function pickupNewSignals() {
     const portfolio = await getPortfolio();
     const trades = [];
 
+    const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+    if (halt.halted) {
+      logger.warn(`[VirtualTracker] Skipping signal pickup this cycle — daily-loss circuit breaker is tripped: ${halt.reason}`);
+      return 0;
+    }
+
     for (const sig of newSignals) {
       if (!sig.price?.entry) continue;
+
+      const gateResult = safetyGate.evaluateProposedTrade({
+        entryPrice: sig.price.entry, stopLoss: sig.price.stopLoss, direction: sig.direction, leverage: 1,
+      });
+      if (!gateResult.allowed) {
+        logger.warn(`[VirtualTracker] Signal ${sig.asset} (${sig._id}) skipped — failed safety gate: ${gateResult.reasons.join(', ')}`);
+        continue;
+      }
 
       const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(sig.asset, portfolio, `${sig.asset} spot pickup`);
 
@@ -242,6 +258,17 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
   }
 
   const portfolio = await getPortfolio();
+
+  // Safety Limits Gate (master_plan_v1.md decisions #13, #15, #16, #23) —
+  // deterministic code, checked on every single approval, no exceptions.
+  const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+  if (halt.halted) {
+    throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
+  }
+  safetyGate.assertTradeAllowed(
+    safetyGate.evaluateProposedTrade({ entryPrice, stopLoss, direction, leverage: 1 })
+  );
+
   const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(asset, portfolio, `${asset} guide approval`);
 
   // T-061: persist the AI-sourced signalId/aiDecisionId the caller resolved
@@ -291,8 +318,22 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
 // just one — whichever happens to run first claims the signalId in the spot
 // dedup check, which is fine (no duplicate exposure to the same signal).
 
-async function openFuturesTrade(signalId, leverage) {
-  leverage = Math.min(20, Math.max(1, parseInt(leverage, 10) || 1));
+async function openFuturesTrade(signalId, requestedLeverage) {
+  // Master-plan decision #13 (locked, non-negotiable, 2026-09-03): no
+  // leverage, ever. This endpoint used to accept 1-20x directly from the
+  // client (see routes/virtual.js's now-stale `body('leverage')` validator,
+  // kept only so an old request shape doesn't 400 instead of getting this
+  // clearer error). Leverage is now hard-forced to 1x regardless of what's
+  // requested -- this makes the "futures" product type behave as a plain
+  // spot position (no margin amplification, no liquidation risk) rather
+  // than deleting the field/table wiring other code still reads.
+  const leverage = safetyGate.ALLOWED_LEVERAGE;
+  if (requestedLeverage != null && parseInt(requestedLeverage, 10) !== leverage) {
+    logger.warn(
+      `[VirtualTracker] Leverage request (${requestedLeverage}x) overridden to ${leverage}x — ` +
+      `leverage is banned for this app (master_plan_v1.md decision #13).`
+    );
+  }
 
   const sig = await Signal.findById(signalId);
   if (!sig || !sig.price?.entry) {
@@ -303,15 +344,29 @@ async function openFuturesTrade(signalId, leverage) {
   }
 
   const portfolio = await getPortfolio();
+
+  const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+  if (halt.halted) {
+    throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
+  }
+  safetyGate.assertTradeAllowed(
+    safetyGate.evaluateProposedTrade({
+      entryPrice: sig.price.entry, stopLoss: sig.price.stopLoss, direction: sig.direction, leverage,
+    })
+  );
   const edgeMultiplier = await getEdgeMultiplier(sig.asset);
   const baseMarginUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage;
   const marginUsd = parseFloat(
     capToMaxRisk(baseMarginUsd * edgeMultiplier, portfolio.currentBalance, `${sig.asset} futures margin`).toFixed(2)
   );
 
-  const liquidationPrice = sig.direction === 'BUY'
-    ? sig.price.entry * (1 - 1 / leverage)
-    : sig.price.entry * (1 + 1 / leverage);
+  // At forced 1x leverage there is no margin call scenario -- the old
+  // formula (entry * (1 -/+ 1/leverage)) degenerates to 0 or 2x entry at
+  // leverage=1, which isn't a real liquidation price, just leftover algebra
+  // from when leverage was a free variable. Leave it null instead of a
+  // number that would confuse anything still reading this field for the
+  // "distance to liquidation" exposure check (getExposureSummary()).
+  const liquidationPrice = null;
 
   const trade = await VirtualTrade.create({
     signalId:         sig._id,
@@ -329,14 +384,14 @@ async function openFuturesTrade(signalId, leverage) {
     productType:      'futures',
     leverage,
     marginUsd,
-    liquidationPrice: parseFloat(liquidationPrice.toFixed(8)),
+    liquidationPrice,
     trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
     openedAt:         new Date(),
   });
 
   logger.info(
     `[VirtualTracker] Opened FUTURES ${sig.asset} ${sig.direction} @ ${leverage}x ` +
-    `— margin $${marginUsd}, liq @ ${liquidationPrice.toFixed(4)}`
+    `(forced -- leverage is banned) — margin $${marginUsd}, no liquidation risk at 1x`
   );
   return trade;
 }
@@ -948,5 +1003,5 @@ module.exports = {
   resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
   enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
   approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
-  getTrackRecordByAsset, getWinLossBreakdown,
+  getTrackRecordByAsset, getWinLossBreakdown, computeSpotSizeUsd, getPortfolio,
 };

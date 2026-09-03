@@ -9,6 +9,7 @@ const VirtualTrade     = require('../src/models/VirtualTrade');
 const VirtualPortfolio = require('../src/models/VirtualPortfolio');
 const Signal           = require('../src/models/Signal');
 const BudgetSession    = require('../src/models/BudgetSession');
+const RiskState        = require('../src/models/RiskState');
 
 // Fire-and-forget push notifications aren't under test here and would otherwise
 // try real Mongoose/Firebase calls against a connection that never exists in
@@ -23,7 +24,20 @@ function chain(result) {
   return { sort: () => ({ limit: () => ({ lean: async () => result }) }) };
 }
 
-let FAKE_HISTORY, FAKE_PORTFOLIO, FAKE_SIGNAL, FAKE_OPEN_TRADES, CREATED_TRADES, UPDATE_CALLS;
+let FAKE_HISTORY, FAKE_PORTFOLIO, FAKE_SIGNAL, FAKE_OPEN_TRADES, CREATED_TRADES, UPDATE_CALLS, FAKE_RISK_STATE;
+
+// riskStateService.checkAndMaybeHalt() (wired into approveSuggestion,
+// openFuturesTrade and pickupNewSignals as of the safety-gate patch) hits
+// RiskState.findOne/create and VirtualTrade.aggregate for real -- unmocked,
+// Mongoose buffers the call forever with no live connection and every test
+// that reaches it hangs to Jest's timeout instead of failing cleanly. Not a
+// change to any safety-limit number or approval logic -- purely closing the
+// same kind of in-memory-fake gap this suite already uses everywhere else.
+function makeRiskState(overrides = {}) {
+  const state = { riskKey: 'global', dailyLossHalted: false, haltReason: null, ...overrides };
+  state.save = async () => state;
+  return state;
+}
 
 beforeEach(() => {
   FAKE_HISTORY = [];
@@ -32,6 +46,7 @@ beforeEach(() => {
   FAKE_OPEN_TRADES = [];
   CREATED_TRADES = [];
   UPDATE_CALLS = [];
+  FAKE_RISK_STATE = makeRiskState();
 
   VirtualTrade.find = (query) => {
     if (query.status && query.status.$in) return chain(FAKE_HISTORY.filter(t => t.asset === query.asset));
@@ -48,11 +63,14 @@ beforeEach(() => {
   VirtualTrade.insertMany = async (docs) => { CREATED_TRADES.push(...docs); return docs; };
   VirtualTrade.create = async (doc) => { CREATED_TRADES.push(doc); return { ...doc, _id: 'fake_' + CREATED_TRADES.length }; };
   VirtualTrade.updateOne = async (filter, update) => { UPDATE_CALLS.push({ filter, update }); };
+  VirtualTrade.aggregate = async () => []; // riskStateService.checkAndMaybeHalt's daily-loss sum -- no losses by default
 
   VirtualPortfolio.findOne = async () => FAKE_PORTFOLIO;
   BudgetSession.findOne = async () => ({ status: 'active' });
   Signal.findById = async () => FAKE_SIGNAL;
   Signal.find = () => ({ sort: () => ({ limit: async () => (FAKE_SIGNAL ? [FAKE_SIGNAL] : []) }) });
+  RiskState.findOne = async () => FAKE_RISK_STATE;
+  RiskState.create = async () => FAKE_RISK_STATE;
 });
 
 // Required after the mocks are wired so the real module picks them up (module cache is shared).
@@ -193,7 +211,7 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
   test('persists the caller-supplied signalId/aiDecisionId onto the trade (regression: T-061, previously always dropped for source:"guide")', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     const trade = await svc.approveSuggestion({
-      asset: 'X', direction: 'BUY', entryPrice: 100,
+      asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95,
       signalId: 'sig123', aiDecisionId: null,
     });
     expect(trade.signalId).toBe('sig123');
@@ -202,7 +220,7 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
 
   test('defaults signalId/aiDecisionId to null when the caller passes neither (backward compatible)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
-    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95 });
     expect(trade.signalId).toBeNull();
     expect(trade.aiDecisionId).toBeNull();
   });
@@ -210,7 +228,7 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
   test('notifies (in-app, BUG-004) that a new position was opened', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     sendTradeOpenedNotification.mockClear();
-    const trade = await svc.approveSuggestion({ asset: 'BTCUSDT', direction: 'BUY', entryPrice: 65000 });
+    const trade = await svc.approveSuggestion({ asset: 'BTCUSDT', direction: 'BUY', entryPrice: 65000, stopLoss: 61750 });
     expect(sendTradeOpenedNotification).toHaveBeenCalledTimes(1);
     expect(sendTradeOpenedNotification).toHaveBeenCalledWith(trade);
   });
@@ -221,7 +239,7 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
       ...Array.from({ length: 5 },  () => historyDoc('MAXRISK', 'loss', 1)),
     ];
     FAKE_PORTFOLIO = makePortfolio(1000, 50);
-    const trade = await svc.approveSuggestion({ asset: 'MAXRISK', direction: 'BUY', entryPrice: 100 });
+    const trade = await svc.approveSuggestion({ asset: 'MAXRISK', direction: 'BUY', entryPrice: 100, stopLoss: 95 });
     const riskPct = (trade.sizeUsd / FAKE_PORTFOLIO.currentBalance) * 100;
     expect(riskPct).toBeLessThanOrEqual(svc.MAX_POSITION_RISK_PCT + 1e-9);
   });
@@ -245,20 +263,20 @@ describe('approveSuggestion — Guide screen "Yes" tap opens a correctly-sized s
 
   test('defaults atrAtEntry to null when the caller does not supply it (e.g. a Signal-sourced suggestion, which has no ATR data)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
-    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95 });
     expect(trade.atrAtEntry).toBeNull();
   });
 
   test('tags the trade origin: "guide_approval" (T-074a)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
-    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95 });
     expect(trade.origin).toBe('guide_approval');
   });
 
   test('Phase 2 (2026-09-01): a caller-supplied origin overrides the "guide_approval" default, e.g. conversationService.approvePlan() passing "conversation_approval"', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     const trade = await svc.approveSuggestion({
-      asset: 'X', direction: 'BUY', entryPrice: 100, origin: 'conversation_approval',
+      asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95, origin: 'conversation_approval',
     });
     expect(trade.origin).toBe('conversation_approval');
   });
@@ -268,7 +286,7 @@ describe('previewSizeUsd — read-only sizing preview matches what approveSugges
   test('preview amount equals the amount a real approval would size at', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     const preview = await svc.previewSizeUsd('X');
-    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100 });
+    const trade = await svc.approveSuggestion({ asset: 'X', direction: 'BUY', entryPrice: 100, stopLoss: 95 });
     expect(preview).toBe(trade.sizeUsd);
   });
 
@@ -292,24 +310,28 @@ describe('openFuturesTrade — margin sizing never exceeds the hard cap', () => 
     expect(riskPct).toBeLessThanOrEqual(svc.MAX_POSITION_RISK_PCT + 1e-9);
   });
 
-  test('leverage is clamped to [1, 20] regardless of input', async () => {
+  test('leverage is force-set to 1x regardless of what the caller requests (decision #13: leverage is banned, non-negotiable)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     FAKE_SIGNAL = makeSignal('LEVTEST');
     const tradeHigh = await svc.openFuturesTrade('sig_LEVTEST', 999);
-    expect(tradeHigh.leverage).toBe(20);
+    expect(tradeHigh.leverage).toBe(1);
     const tradeLow = await svc.openFuturesTrade('sig_LEVTEST', -5);
     expect(tradeLow.leverage).toBe(1);
   });
 
-  test('liquidation price is computed correctly for BUY and SELL', async () => {
+  test('liquidation price is null at the forced 1x leverage -- there is no margin-call scenario to compute (decision #13)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'BUY' });
     const buyTrade = await svc.openFuturesTrade('sig_LIQTEST', 10);
-    expect(buyTrade.liquidationPrice).toBeCloseTo(100 * (1 - 1 / 10), 6);
+    expect(buyTrade.liquidationPrice).toBeNull();
 
-    FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'SELL' });
+    // A SELL's stop-loss must sit above entry (loss if price rises) --
+    // makeSignal()'s default price object is BUY-shaped (SL below entry),
+    // so it has to be overridden here or the safety gate correctly rejects
+    // it as STOP_LOSS_WRONG_SIDE (decision #15), same as it would in prod.
+    FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'SELL', price: { entry: 100, stopLoss: 105, takeProfit: 90 } });
     const sellTrade = await svc.openFuturesTrade('sig_LIQTEST', 10);
-    expect(sellTrade.liquidationPrice).toBeCloseTo(100 * (1 + 1 / 10), 6);
+    expect(sellTrade.liquidationPrice).toBeNull();
   });
 
   test('tags the trade origin: "futures_manual" (T-074a)', async () => {

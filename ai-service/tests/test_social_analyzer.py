@@ -55,6 +55,17 @@ class TestRefreshMockVisibility:
     async def test_warns_when_reddit_and_twitter_are_both_mock(self, monkeypatch, caplog):
         analyzer = SocialAnalyzer(SocialSentimentModel())
 
+        # Master-plan decision #4/#7 (locked, 2026-09-03): Twitter/Reddit are
+        # feature-flagged off by default in production (see
+        # ENABLE_TWITTER_SOURCE/ENABLE_REDDIT_SOURCE in social_analyzer.py) --
+        # they were never an agreed v1 source. This test predates that flag
+        # and is about a different, still-valid concern (T-033's mock-post
+        # visibility across whichever platforms ARE live), so it opts both
+        # back on for its own scope only; production's default-off behavior
+        # is untouched.
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_TWITTER_SOURCE", True)
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_REDDIT_SOURCE", True)
+
         monkeypatch.setattr(
             "app.services.social_analyzer.collect_telegram_posts",
             AsyncMock(return_value=[_FakeTelegramPost("Real telegram post about bitcoin")]),
@@ -79,6 +90,13 @@ class TestRefreshMockVisibility:
     @pytest.mark.asyncio
     async def test_no_warning_when_all_platforms_are_live(self, monkeypatch, caplog):
         analyzer = SocialAnalyzer(SocialSentimentModel())
+
+        # See the comment in test_warns_when_reddit_and_twitter_are_both_mock
+        # above -- this test needs Twitter/Reddit actually invoked to prove
+        # "no warning when everything is live", independent of production's
+        # default-off gate for those sources.
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_TWITTER_SOURCE", True)
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_REDDIT_SOURCE", True)
 
         monkeypatch.setattr(
             "app.services.social_analyzer.collect_telegram_posts",

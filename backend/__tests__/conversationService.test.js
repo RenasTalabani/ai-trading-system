@@ -6,14 +6,28 @@
  */
 
 describe('conversationService', () => {
-  let ConversationThread, ConversationMessage, VirtualTrade;
-  let THREADS, MESSAGES, OPEN_TRADES, CLOSED_TRADES;
+  let ConversationThread, ConversationMessage, VirtualTrade, RiskState;
+  let THREADS, MESSAGES, OPEN_TRADES, CLOSED_TRADES, FAKE_RISK_STATE;
+
+  // approvePlan() -> approveSuggestion() (real, unmocked) now runs through
+  // riskStateService.checkAndMaybeHalt(), which hits RiskState.findOne/create
+  // and VirtualTrade.aggregate for real. Unmocked, Mongoose buffers the call
+  // forever with no live connection and the test hangs to Jest's timeout
+  // instead of failing cleanly -- same gap as virtualTrackingService.test.js,
+  // fixed the same way. Not a change to any safety-limit number or approval
+  // logic.
+  function makeRiskState(overrides = {}) {
+    const state = { riskKey: 'global', dailyLossHalted: false, haltReason: null, ...overrides };
+    state.save = async () => state;
+    return state;
+  }
 
   function freshMocks() {
     THREADS = [];
     MESSAGES = [];
     OPEN_TRADES = [];
     CLOSED_TRADES = [];
+    FAKE_RISK_STATE = makeRiskState();
 
     ConversationThread.findOne = async ({ userId }) =>
       THREADS.find(t => String(t.userId) === String(userId)) || null;
@@ -44,6 +58,10 @@ describe('conversationService', () => {
       if (query.status === 'open') return { sort: () => OPEN_TRADES };
       return { sort: () => ({ limit: (n) => ({ lean: async () => CLOSED_TRADES.slice(0, n) }) }) };
     };
+    VirtualTrade.aggregate = async () => []; // riskStateService.checkAndMaybeHalt's daily-loss sum -- no losses by default
+
+    RiskState.findOne = async () => FAKE_RISK_STATE;
+    RiskState.create = async () => FAKE_RISK_STATE;
   }
 
   beforeEach(() => {
@@ -51,6 +69,7 @@ describe('conversationService', () => {
     ConversationThread  = require('../src/models/ConversationThread');
     ConversationMessage = require('../src/models/ConversationMessage');
     VirtualTrade         = require('../src/models/VirtualTrade');
+    RiskState            = require('../src/models/RiskState');
     freshMocks();
   });
 
@@ -62,6 +81,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
 
       jest.mock('axios');
@@ -85,6 +105,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
 
       const svc = require('../src/services/conversationService');
@@ -100,6 +121,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       CLOSED_TRADES = [
         { asset: 'XAUUSD', direction: 'BUY', result: 'win', exitReason: 'TP', pnl: 42.5, pnlPct: 3.1, entryPrice: 2000, exitPrice: 2062, openedAt: new Date('2026-08-30'), closedAt: new Date('2026-08-31') },
@@ -120,6 +142,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
       const Signal = require('../src/models/Signal');
@@ -137,6 +160,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
       const Signal = require('../src/models/Signal');
@@ -162,6 +186,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       const VirtualPortfolio = require('../src/models/VirtualPortfolio');
       VirtualPortfolio.findOne = async () => ({
@@ -198,6 +223,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
       const Signal = require('../src/models/Signal');
@@ -217,6 +243,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
 
@@ -274,6 +301,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
 
@@ -312,6 +340,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.distinct = async () => [];
 
@@ -348,6 +377,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.find = (query) => {
         if (query.status && query.status.$in) return { lean: async () => [] };
@@ -366,6 +396,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.find = (query) => {
         if (query.status && query.status.$in) {
@@ -396,6 +427,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
       VirtualTrade.find = (query) => {
         if (query.status && query.status.$in) {
@@ -422,6 +454,7 @@ describe('conversationService', () => {
       ConversationThread  = require('../src/models/ConversationThread');
       ConversationMessage = require('../src/models/ConversationMessage');
       VirtualTrade         = require('../src/models/VirtualTrade');
+      RiskState            = require('../src/models/RiskState');
       freshMocks();
 
       const svc = require('../src/services/conversationService');

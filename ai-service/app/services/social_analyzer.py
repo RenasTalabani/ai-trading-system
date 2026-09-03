@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from typing import List, Optional
 
@@ -9,6 +10,28 @@ from app.services.collectors.twitter_collector  import collect_tweets, Tweet
 from app.services.collectors.reddit_collector   import collect_reddit_posts, RedditPost
 
 logger = logging.getLogger("ai-service.social_analyzer")
+
+# Master-plan decision #4 / #7 (locked, 2026-09-03): v1's agreed source list
+# is CoinDesk, CoinGecko, CoinMarketCap, federalreserve.gov, and three named
+# Telegram channels (kurdchain/yawmly/KurdishFinancial) — NOT an open-ended
+# crawl, and Twitter/Reddit were never agreed to at all. Both collectors stay
+# in the codebase (real infra, easy to re-enable with an explicit future
+# decision) but are off by default so the live pipeline actually matches what
+# was agreed rather than silently pulling from unapproved sources.
+ENABLE_TWITTER_SOURCE = os.getenv("ENABLE_TWITTER_SOURCE", "false").lower() == "true"
+ENABLE_REDDIT_SOURCE  = os.getenv("ENABLE_REDDIT_SOURCE",  "false").lower() == "true"
+
+
+async def _maybe_collect_tweets():
+    if not ENABLE_TWITTER_SOURCE:
+        return []
+    return await collect_tweets()
+
+
+async def _maybe_collect_reddit():
+    if not ENABLE_REDDIT_SOURCE:
+        return []
+    return await collect_reddit_posts()
 
 
 def _to_post_dict(post) -> dict:
@@ -73,11 +96,14 @@ class SocialAnalyzer:
     async def _do_refresh(self, now: float) -> dict:
         logger.info("Refreshing social media intelligence...")
 
-        # Collect from all 3 platforms concurrently
+        # Collect from all 3 platforms concurrently — Twitter/Reddit are
+        # feature-flagged off for v1 (see ENABLE_TWITTER_SOURCE/
+        # ENABLE_REDDIT_SOURCE above); _maybe_collect_* return [] instantly
+        # without making a network call when disabled.
         telegram_raw, twitter_raw, reddit_raw = await asyncio.gather(
             collect_telegram_posts(),
-            collect_tweets(),
-            collect_reddit_posts(),
+            _maybe_collect_tweets(),
+            _maybe_collect_reddit(),
             return_exceptions=True,
         )
 
