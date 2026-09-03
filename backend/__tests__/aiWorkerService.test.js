@@ -16,6 +16,16 @@
  * All Mongoose models and axios are faked in-memory; no live services touched.
  */
 jest.mock('../src/jobs/globalScanJob', () => ({ getCache: jest.fn(() => null) }));
+// approveDecision() calls through to virtualTrackingService's real
+// approveSuggestion(), which fires a fire-and-forget push notification via a
+// lazy require('./notificationService') on success. Left unmocked here, that
+// hits the real Mongoose/Firebase-backed service with no live connection and
+// the approveDecision tests hang to Jest's timeout -- same class of gap as
+// virtualTrackingService.test.js already guards against for the same reason.
+jest.mock('../src/services/notificationService', () => ({
+  sendTradeOpenedNotification: jest.fn(async () => {}),
+  sendTradeClosedNotification: jest.fn(async () => {}),
+}));
 
 const BudgetSession       = require('../src/models/BudgetSession');
 const VirtualTrade        = require('../src/models/VirtualTrade');

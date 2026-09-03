@@ -9,6 +9,7 @@ const VirtualTrade     = require('../src/models/VirtualTrade');
 const VirtualPortfolio = require('../src/models/VirtualPortfolio');
 const Signal           = require('../src/models/Signal');
 const BudgetSession    = require('../src/models/BudgetSession');
+const RiskState        = require('../src/models/RiskState');
 
 // Fire-and-forget push notifications aren't under test here and would otherwise
 // try real Mongoose/Firebase calls against a connection that never exists in
@@ -23,7 +24,20 @@ function chain(result) {
   return { sort: () => ({ limit: () => ({ lean: async () => result }) }) };
 }
 
-let FAKE_HISTORY, FAKE_PORTFOLIO, FAKE_SIGNAL, FAKE_OPEN_TRADES, CREATED_TRADES, UPDATE_CALLS;
+let FAKE_HISTORY, FAKE_PORTFOLIO, FAKE_SIGNAL, FAKE_OPEN_TRADES, CREATED_TRADES, UPDATE_CALLS, FAKE_RISK_STATE;
+
+// riskStateService.checkAndMaybeHalt() (wired into approveSuggestion,
+// openFuturesTrade and pickupNewSignals as of the safety-gate patch) hits
+// RiskState.findOne/create and VirtualTrade.aggregate for real -- unmocked,
+// Mongoose buffers the call forever with no live connection and every test
+// that reaches it hangs to Jest's timeout instead of failing cleanly. Not a
+// change to any safety-limit number or approval logic -- purely closing the
+// same kind of in-memory-fake gap this suite already uses everywhere else.
+function makeRiskState(overrides = {}) {
+  const state = { riskKey: 'global', dailyLossHalted: false, haltReason: null, ...overrides };
+  state.save = async () => state;
+  return state;
+}
 
 beforeEach(() => {
   FAKE_HISTORY = [];
@@ -32,6 +46,7 @@ beforeEach(() => {
   FAKE_OPEN_TRADES = [];
   CREATED_TRADES = [];
   UPDATE_CALLS = [];
+  FAKE_RISK_STATE = makeRiskState();
 
   VirtualTrade.find = (query) => {
     if (query.status && query.status.$in) return chain(FAKE_HISTORY.filter(t => t.asset === query.asset));
@@ -48,11 +63,14 @@ beforeEach(() => {
   VirtualTrade.insertMany = async (docs) => { CREATED_TRADES.push(...docs); return docs; };
   VirtualTrade.create = async (doc) => { CREATED_TRADES.push(doc); return { ...doc, _id: 'fake_' + CREATED_TRADES.length }; };
   VirtualTrade.updateOne = async (filter, update) => { UPDATE_CALLS.push({ filter, update }); };
+  VirtualTrade.aggregate = async () => []; // riskStateService.checkAndMaybeHalt's daily-loss sum -- no losses by default
 
   VirtualPortfolio.findOne = async () => FAKE_PORTFOLIO;
   BudgetSession.findOne = async () => ({ status: 'active' });
   Signal.findById = async () => FAKE_SIGNAL;
   Signal.find = () => ({ sort: () => ({ limit: async () => (FAKE_SIGNAL ? [FAKE_SIGNAL] : []) }) });
+  RiskState.findOne = async () => FAKE_RISK_STATE;
+  RiskState.create = async () => FAKE_RISK_STATE;
 });
 
 // Required after the mocks are wired so the real module picks them up (module cache is shared).
@@ -292,24 +310,24 @@ describe('openFuturesTrade — margin sizing never exceeds the hard cap', () => 
     expect(riskPct).toBeLessThanOrEqual(svc.MAX_POSITION_RISK_PCT + 1e-9);
   });
 
-  test('leverage is clamped to [1, 20] regardless of input', async () => {
+  test('leverage is force-set to 1x regardless of what the caller requests (decision #13: leverage is banned, non-negotiable)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     FAKE_SIGNAL = makeSignal('LEVTEST');
     const tradeHigh = await svc.openFuturesTrade('sig_LEVTEST', 999);
-    expect(tradeHigh.leverage).toBe(20);
+    expect(tradeHigh.leverage).toBe(1);
     const tradeLow = await svc.openFuturesTrade('sig_LEVTEST', -5);
     expect(tradeLow.leverage).toBe(1);
   });
 
-  test('liquidation price is computed correctly for BUY and SELL', async () => {
+  test('liquidation price is null at the forced 1x leverage -- there is no margin-call scenario to compute (decision #13)', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);
     FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'BUY' });
     const buyTrade = await svc.openFuturesTrade('sig_LIQTEST', 10);
-    expect(buyTrade.liquidationPrice).toBeCloseTo(100 * (1 - 1 / 10), 6);
+    expect(buyTrade.liquidationPrice).toBeNull();
 
     FAKE_SIGNAL = makeSignal('LIQTEST', { direction: 'SELL' });
     const sellTrade = await svc.openFuturesTrade('sig_LIQTEST', 10);
-    expect(sellTrade.liquidationPrice).toBeCloseTo(100 * (1 + 1 / 10), 6);
+    expect(sellTrade.liquidationPrice).toBeNull();
   });
 
   test('tags the trade origin: "futures_manual" (T-074a)', async () => {
