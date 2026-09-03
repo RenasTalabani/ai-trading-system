@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,16 +11,32 @@ import aiohttp
 
 logger = logging.getLogger("ai-service.news_collector")
 
+# Master-plan decision #4 / #7 (locked, 2026-09-03): v1's agreed news source
+# is CoinDesk only -- the founder interrogation explicitly named CoinDesk,
+# CoinGecko, CoinMarketCap, federalreserve.gov, and three Telegram channels,
+# and separately, EXPLICITLY REJECTED an "open crawl of unspecified sources"
+# (decision #7). This collector used to pull from 8 RSS feeds spanning
+# general finance/forex outlets never agreed to, plus an unrestricted Google
+# News keyword search across 6 broad topics -- exactly the open-crawl shape
+# that was rejected. Trimmed to the one agreed feed; the rest are commented
+# out (not deleted) in case a future, explicit decision re-adds them one at
+# a time -- re-adding all of them silently would recreate the same problem.
 RSS_FEEDS = [
-    {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US", "source": "Yahoo Finance"},
     {"url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "source": "CoinDesk"},
-    {"url": "https://cointelegraph.com/rss", "source": "CoinTelegraph"},
-    {"url": "https://decrypt.co/feed", "source": "Decrypt"},
-    {"url": "https://feeds.reuters.com/reuters/businessNews", "source": "Reuters"},
-    {"url": "https://cryptopanic.com/news/rss/", "source": "CryptoPanic"},
-    {"url": "https://www.forexlive.com/feed/news", "source": "ForexLive"},
-    {"url": "https://www.investing.com/rss/news.rss", "source": "Investing.com"},
+    # -- Not in the agreed v1 source list (master_plan_v1.md decision #4) --
+    # {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US", "source": "Yahoo Finance"},
+    # {"url": "https://cointelegraph.com/rss", "source": "CoinTelegraph"},
+    # {"url": "https://decrypt.co/feed", "source": "Decrypt"},
+    # {"url": "https://feeds.reuters.com/reuters/businessNews", "source": "Reuters"},
+    # {"url": "https://cryptopanic.com/news/rss/", "source": "CryptoPanic"},
+    # {"url": "https://www.forexlive.com/feed/news", "source": "ForexLive"},
+    # {"url": "https://www.investing.com/rss/news.rss", "source": "Investing.com"},
 ]
+
+# Decision #7 (locked): no open-ended crawl of unspecified sources. Off by
+# default; ENABLE_GOOGLE_NEWS_SEARCH=true is an explicit opt-back-in, not
+# something this pass turns on.
+ENABLE_GOOGLE_NEWS_SEARCH = os.getenv("ENABLE_GOOGLE_NEWS_SEARCH", "false").lower() == "true"
 
 GOOGLE_NEWS_TOPICS = [
     "bitcoin+cryptocurrency",
@@ -106,10 +123,10 @@ async def _fetch_google_news(session: aiohttp.ClientSession, query: str) -> List
 
 
 async def collect_all_news() -> List[NewsArticle]:
-    """Fetch from all RSS feeds + Google News concurrently."""
+    """Fetch from the agreed RSS feed(s), plus Google News only if explicitly re-enabled."""
     async with aiohttp.ClientSession() as session:
         rss_tasks   = [_fetch_feed(session, f) for f in RSS_FEEDS]
-        gnews_tasks = [_fetch_google_news(session, q) for q in GOOGLE_NEWS_TOPICS]
+        gnews_tasks = [_fetch_google_news(session, q) for q in GOOGLE_NEWS_TOPICS] if ENABLE_GOOGLE_NEWS_SEARCH else []
         results = await asyncio.gather(*rss_tasks, *gnews_tasks, return_exceptions=True)
 
     articles: List[NewsArticle] = []
@@ -122,5 +139,6 @@ async def collect_all_news() -> List[NewsArticle]:
                     seen_urls.add(a.url)
                     articles.append(a)
 
-    logger.info(f"News collected: {len(articles)} unique articles from {len(RSS_FEEDS) + len(GOOGLE_NEWS_TOPICS)} sources")
+    source_count = len(RSS_FEEDS) + (len(GOOGLE_NEWS_TOPICS) if ENABLE_GOOGLE_NEWS_SEARCH else 0)
+    logger.info(f"News collected: {len(articles)} unique articles from {source_count} source(s)")
     return articles

@@ -6,6 +6,9 @@ const router = express.Router();
 
 router.get('/latest',           protect, ctrl.latest);
 router.get('/stats',            protect, ctrl.stats);
+router.get('/pending',          protect, ctrl.pending);
 router.get('/decisions/:asset', protect, ctrl.assetHistory);
+router.post('/decisions/:id/approve', protect, ctrl.approve);
+router.post('/decisions/:id/reject',  protect, ctrl.reject);
 
 module.exports = router;

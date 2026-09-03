@@ -1,7 +1,15 @@
 /**
  * AI Worker Service
- * Calls the Python AI service every cycle, stores decisions, opens virtual trades.
- * This is the core of the 24/7 autonomous AI brain.
+ * Calls the Python AI service every cycle, stores PROPOSED decisions.
+ *
+ * Master-plan decision #11 (locked, 2026-09-03): this used to be a 24/7
+ * autonomous brain that opened VirtualTrades on its own the moment a
+ * decision cleared its confidence bar -- that directly contradicts the
+ * locked "approval required for every trade" decision from the founder
+ * interrogation. It now only ever proposes (creates an AIDecision with
+ * status: 'PENDING_APPROVAL') and never calls VirtualTrade.create() itself.
+ * A trade is only ever opened by approveDecision() below, which is the one
+ * path a human action (the mobile app's Yes/No tap) reaches.
  */
 const axios          = require('axios');
 const AIDecision     = require('../models/AIDecision');
@@ -10,7 +18,9 @@ const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession  = require('../models/BudgetSession');
 const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger         = require('../config/logger');
-const { capToMaxRisk } = require('./virtualTrackingService');
+const { approveSuggestion } = require('./virtualTrackingService');
+const safetyGate     = require('./safetyLimitsGate');
+const riskStateService = require('./riskStateService');
 const { getCache: getGlobalScanCache } = require('../jobs/globalScanJob');
 
 // T-060 (2026-08-26, product-to-code audit follow-up): this worker used to
@@ -30,7 +40,11 @@ const MIN_FUSED_SCORE       = parseInt(process.env.AI_MIN_FUSED_SCORE)       || 
 const MIN_QUALITY_SCORE     = parseInt(process.env.AI_MIN_QUALITY_SCORE)     || 75;  // Phase 18
 const MAX_OPEN_TRADES       = parseInt(process.env.AI_MAX_OPEN_TRADES)       || 5;   // Phase 18: reduced to 5
 const MAX_NEW_PER_CYCLE     = parseInt(process.env.AI_MAX_NEW_PER_CYCLE)     || 3;
-const MAX_DAILY_LOSS_PCT    = parseFloat(process.env.AI_MAX_DAILY_LOSS_PCT)  || 0.05; // 5 %
+// The old self-resuming 5%-over-a-rolling-24h-window check that used to
+// live here is gone -- master-plan decision #16 (locked) replaced it with
+// riskStateService's persistent, human-reset-only 10% circuit breaker
+// (safetyLimitsGate.DAILY_LOSS_HALT_PCT). A limit that quietly re-opens once
+// a bad trade "ages out" of a window isn't a real circuit breaker.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,16 +72,12 @@ async function runAIWorkerCycle() {
   const portfolio = await VirtualPortfolio.findOne({ portfolioKey: 'global' });
   if (!portfolio) return { skipped: 'no_portfolio' };
 
-  // 2b. Portfolio protection — max daily loss (5 %)
-  const dayStart  = new Date(Date.now() - 86400_000);
-  const todayLosses = await VirtualTrade.aggregate([
-    { $match: { status: { $in: ['closed_profit', 'closed_loss'] }, closedAt: { $gte: dayStart }, pnl: { $lt: 0 } } },
-    { $group: { _id: null, totalLoss: { $sum: '$pnl' } } },
-  ]);
-  const dailyLoss = Math.abs((todayLosses[0]?.totalLoss) || 0);
-  if (dailyLoss >= portfolio.currentBalance * MAX_DAILY_LOSS_PCT) {
-    logger.warn(`[AIWorker] Daily loss limit hit ($${dailyLoss.toFixed(2)}) — pausing trading.`);
-    return { skipped: 'daily_loss_limit', dailyLoss };
+  // 2b. Portfolio protection — daily-loss circuit breaker (decision #16:
+  // 10% of balance, halted until a human resets it — see riskStateService).
+  const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+  if (halt.halted) {
+    logger.warn(`[AIWorker] Daily-loss circuit breaker is tripped — pausing proposals: ${halt.reason}`);
+    return { skipped: 'daily_loss_halted', reason: halt.reason };
   }
 
   // 4. Reuse globalScanJob's cached scan when fresh enough (T-060); only
@@ -97,29 +107,29 @@ async function runAIWorkerCycle() {
     return { skipped: 'no_opportunities' };
   }
 
-  // 5. Assets already in open trades — avoid doubling up
+  // 5. Assets already in open trades — avoid doubling up. Sizing itself now
+  // happens only inside approveSuggestion() at approval time (single source
+  // of truth for position sizing — see virtualTrackingService.js), not here.
   const openAssets  = await VirtualTrade.distinct('asset', { status: 'open' });
   const openSet     = new Set(openAssets);
-  const rawSizeUsd  = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100;
-  const sizeUsd     = parseFloat(
-    capToMaxRisk(rawSizeUsd, portfolio.currentBalance, 'AI worker cycle').toFixed(2)
-  );
 
-  let tradesCreated = 0;
+  let proposalsCreated = 0;
 
-  // 6. Process each top opportunity
+  // 6. Process each top opportunity — PROPOSE only (decision #11). Nothing
+  // in this loop calls VirtualTrade.create() any more; it only writes an
+  // AIDecision the mobile app can show as "waiting for your yes/no", and
+  // approveDecision() below is the single place that actually opens a
+  // trade, once a human has tapped Approve.
   for (const opp of scanResult.top_opportunities) {
-    if (tradesCreated >= MAX_NEW_PER_CYCLE) break;
+    if (proposalsCreated >= MAX_NEW_PER_CYCLE) break;
     // Bug found 2026-08-18 (PM continuous-improvement pass): the check at
     // the top of this function only gates whether the cycle runs *at all*
     // (openCount >= MAX_OPEN_TRADES -> skip the whole cycle) -- it never
     // limited how many NEW trades this loop could add on top of that
-    // starting count. With enough qualifying opportunities in one scan,
-    // a cycle could open up to MAX_NEW_PER_CYCLE trades regardless of how
-    // close openCount already was to MAX_OPEN_TRADES, silently exceeding
-    // the portfolio's own declared risk cap (e.g. openCount=4,
-    // MAX_OPEN_TRADES=5, MAX_NEW_PER_CYCLE=3 -> could reach 7 open trades).
-    if (openCount + tradesCreated >= MAX_OPEN_TRADES) break;
+    // starting count. Kept here even though this loop now only proposes,
+    // because open positions + pending proposals shouldn't together exceed
+    // the portfolio's own declared exposure cap.
+    if (openCount + proposalsCreated >= MAX_OPEN_TRADES) break;
     if (opp.action === 'HOLD') continue;
     if ((opp.confidence   || 0) < CONFIDENCE_THRESHOLD) continue;
     if ((opp.fused_score  || 0) < MIN_FUSED_SCORE)      continue;
@@ -132,7 +142,20 @@ async function runAIWorkerCycle() {
     const stopLoss   = _pick(opp, 'stop_loss',   'stopLoss');
     const takeProfit = _pick(opp, 'take_profit',  'takeProfit');
 
-    // Store the AI decision
+    // Safety Limits Gate BEFORE even proposing — no point showing the user
+    // a "Yes/No" card for something that could never be approved anyway
+    // (decisions #15/#23). The reasons are stored on the decision itself so
+    // the settings/history screen can show exactly why, if it matters later.
+    const gateResult = safetyGate.evaluateProposedTrade({
+      entryPrice, stopLoss, direction: opp.action, leverage: 1,
+    });
+    if (!gateResult.allowed) {
+      logger.warn(`[AIWorker] ${opp.asset} opportunity failed the safety gate, not proposing: ${gateResult.reasons.join(', ')}`);
+      continue;
+    }
+
+    // Store the AI decision as a pending proposal — awaiting explicit
+    // human approval (mobile app's single-screen Yes/No).
     const decision = await AIDecision.create({
       asset:       opp.asset,
       displayName: _pick(opp, 'display_name', 'displayName') || opp.asset,
@@ -148,30 +171,13 @@ async function runAIWorkerCycle() {
       trend:       opp.trend  ?? null,
       newsScore:   _pick(opp, 'news_score',  'newsScore')    ?? null,
       fusedScore:  _pick(opp, 'fused_score', 'fusedScore')   ?? null,
-    });
-
-    // Open virtual trade
-    const trade = await VirtualTrade.create({
-      source:       'ai',
-      origin:       'ai_worker', // T-074a: 100%-certain, no HTTP request/human involved
-      aiDecisionId: decision._id,
-      asset:        opp.asset,
-      direction:    opp.action,
-      entryPrice:   parseFloat(Number(entryPrice).toFixed(8)),
-      stopLoss:     stopLoss   != null ? parseFloat(Number(stopLoss).toFixed(8))   : null,
-      takeProfit:   takeProfit != null ? parseFloat(Number(takeProfit).toFixed(8)) : null,
+      status:      'PENDING_APPROVAL',
       // T-073: same ATR value ai-service's GlobalAnalyzer already computed
       // and used to size this exact opportunity's stopLoss/takeProfit
       // (see global_analyzer.py's _score_crypto/_score_multi_asset) --
-      // reused as-is, not recalculated.
-      atrAtEntry:   _pick(opp, 'atr'),
-      sizeUsd,
-      openedAt:     new Date(),
+      // kept on the decision so approveDecision() can reuse it as-is.
+      atrAtEntry:  _pick(opp, 'atr'),
     });
-
-    // Back-link trade onto the decision
-    await AIDecision.updateOne({ _id: decision._id },
-      { tradeCreated: true, tradeId: trade._id });
 
     // Store regime history (Phase 18)
     if (opp.regime) {
@@ -184,17 +190,17 @@ async function runAIWorkerCycle() {
       }).catch(() => {});
     }
 
-    openSet.add(opp.asset);
-    tradesCreated++;
+    openSet.add(opp.asset); // reserve the asset so we don't propose it twice in one cycle
+    proposalsCreated++;
 
     logger.info(
-      `[AIWorker] Trade OPENED — ${opp.asset} ${opp.action} @ ${entryPrice} ` +
-      `| conf:${opp.confidence}% | SL:${stopLoss} | TP:${takeProfit} | size:$${sizeUsd}`
+      `[AIWorker] Proposal created (awaiting approval) — ${opp.asset} ${opp.action} @ ${entryPrice} ` +
+      `| conf:${opp.confidence}% | SL:${stopLoss} | TP:${takeProfit} | decisionId:${decision._id}`
     );
   }
 
   return {
-    tradesCreated,
+    proposalsCreated,
     openCount,
     balance: parseFloat(portfolio.currentBalance.toFixed(2)),
     scanned: scanResult.scanned,
@@ -208,6 +214,71 @@ async function getLatestDecisions(limit = 20) {
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();
+}
+
+// ── Human approval of a pending proposal (decision #11) ────────────────────────
+// The single path that turns an AIDecision into a real (paper) VirtualTrade.
+// Reuses approveSuggestion()'s existing sizing + safety-gate + circuit-breaker
+// checks unchanged, so an AI-worker-approved trade can never bypass any limit
+// a manually-approved Guide/RENO trade would also have to pass.
+async function approveDecision(decisionId) {
+  const decision = await AIDecision.findById(decisionId);
+  if (!decision) throw new Error('Decision not found.');
+  if (decision.status !== 'PENDING_APPROVAL') {
+    throw new Error(`This decision is already ${decision.status.toLowerCase()} — nothing to approve.`);
+  }
+  if (!['BUY', 'SELL'].includes(decision.action)) {
+    throw new Error('Only BUY/SELL decisions can be approved into a trade.');
+  }
+
+  let trade;
+  try {
+    trade = await approveSuggestion({
+      asset:        decision.asset,
+      direction:    decision.action,
+      entryPrice:   decision.entryPrice,
+      stopLoss:     decision.stopLoss,
+      takeProfit:   decision.takeProfit,
+      atrAtEntry:   decision.atrAtEntry,
+      aiDecisionId: decision._id,
+      origin:       'ai_worker_approved',
+    });
+  } catch (err) {
+    // A safety-gate rejection at approval time (e.g. price moved enough
+    // since the proposal that the stop-loss no longer complies) should be
+    // visible on the decision record, not just thrown away in a 500.
+    if (err.isSafetyGateRejection) {
+      decision.safetyGateReasons = err.safetyGateReasons;
+    }
+    throw err;
+  }
+
+  decision.status       = 'APPROVED';
+  decision.decidedAt    = new Date();
+  decision.tradeCreated = true;
+  decision.tradeId      = trade._id;
+  await decision.save();
+
+  logger.info(`[AIWorker] Decision ${decisionId} APPROVED by user — trade ${trade._id} opened.`);
+  return trade;
+}
+
+async function rejectDecision(decisionId) {
+  const decision = await AIDecision.findById(decisionId);
+  if (!decision) throw new Error('Decision not found.');
+  if (decision.status !== 'PENDING_APPROVAL') {
+    throw new Error(`This decision is already ${decision.status.toLowerCase()} — nothing to reject.`);
+  }
+  decision.status    = 'REJECTED';
+  decision.decidedAt = new Date();
+  await decision.save();
+  logger.info(`[AIWorker] Decision ${decisionId} REJECTED by user.`);
+  return decision;
+}
+
+// Read-only — what the single main screen shows as "the one pending decision".
+async function getPendingDecision() {
+  return AIDecision.findOne({ status: 'PENDING_APPROVAL' }).sort({ createdAt: -1 }).lean();
 }
 
 async function getStats() {
@@ -227,4 +298,7 @@ async function getStats() {
   };
 }
 
-module.exports = { runAIWorkerCycle, getLatestDecisions, getStats };
+module.exports = {
+  runAIWorkerCycle, getLatestDecisions, getStats,
+  approveDecision, rejectDecision, getPendingDecision,
+};

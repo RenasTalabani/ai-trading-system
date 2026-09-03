@@ -19,9 +19,28 @@ const aiDecisionSchema = new mongoose.Schema(
     trend:     { type: String, default: null },
     newsScore: { type: Number, default: null },
     fusedScore:{ type: Number, default: null },
+    // T-073: carried from proposal through to approveDecision() so the
+    // eventual VirtualTrade still gets the same ATR value GlobalAnalyzer
+    // computed for this exact opportunity, now that trade creation happens
+    // at approval time rather than at proposal time (decision #11).
+    atrAtEntry:{ type: Number, default: null },
 
     tradeCreated: { type: Boolean, default: false },
     tradeId:      { type: mongoose.Schema.Types.ObjectId, ref: 'VirtualTrade', default: null },
+
+    // Master-plan decision #11 (locked, 2026-09-03): every trade needs an
+    // explicit user approval before it opens -- the AI worker used to open
+    // VirtualTrades directly the moment a decision cleared its confidence
+    // bar. Now it only ever proposes (status starts 'PENDING_APPROVAL') and
+    // a human action (approve/reject) is what moves it forward. 'EXPIRED'
+    // covers a proposal nobody acted on before its price context went stale.
+    status: {
+      type: String,
+      enum: ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXPIRED'],
+      default: 'PENDING_APPROVAL',
+    },
+    decidedAt: { type: Date, default: null }, // when approved/rejected/expired
+    safetyGateReasons: { type: [String], default: [] }, // populated if the gate blocked approval
 
     // Phase 3 — outcome tracking
     timeframe:       { type: String, default: '1h' },

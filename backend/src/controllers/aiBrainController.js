@@ -1,4 +1,6 @@
-const { getLatestDecisions, getStats } = require('../services/aiWorkerService');
+const {
+  getLatestDecisions, getStats, approveDecision, rejectDecision, getPendingDecision,
+} = require('../services/aiWorkerService');
 const AIDecision   = require('../models/AIDecision');
 const VirtualTrade = require('../models/VirtualTrade');
 const BudgetSession = require('../models/BudgetSession');
@@ -49,5 +51,40 @@ exports.assetHistory = async (req, res) => {
   } catch (err) {
     logger.error('[AiBrain] assetHistory error:', err.message);
     return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/v1/ai-brain/pending — the ONE thing the single main screen needs:
+// "is there a decision waiting on me right now, and what is it".
+exports.pending = async (req, res) => {
+  try {
+    const decision = await getPendingDecision();
+    return res.json({ success: true, decision: decision || null });
+  } catch (err) {
+    logger.error('[AiBrain] pending error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/v1/ai-brain/decisions/:id/approve — master-plan decision #11:
+// this is the ONLY way a proposal becomes a real (paper) trade.
+exports.approve = async (req, res) => {
+  try {
+    const trade = await approveDecision(req.params.id);
+    return res.json({ success: true, trade });
+  } catch (err) {
+    logger.warn('[AiBrain] approve rejected:', err.message);
+    return res.status(err.isSafetyGateRejection ? 422 : 400).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/v1/ai-brain/decisions/:id/reject
+exports.reject = async (req, res) => {
+  try {
+    const decision = await rejectDecision(req.params.id);
+    return res.json({ success: true, decision });
+  } catch (err) {
+    logger.warn('[AiBrain] reject failed:', err.message);
+    return res.status(400).json({ success: false, message: err.message });
   }
 };
