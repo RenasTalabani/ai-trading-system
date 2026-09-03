@@ -110,12 +110,21 @@ beforeEach(() => {
 // (CONFIDENCE_THRESHOLD/MIN_FUSED_SCORE/MIN_QUALITY_SCORE), so setting them
 // inside beforeEach() (as this file used to) has no effect -- that callback
 // only runs once Jest starts executing a test, which is always AFTER this
-// file's own top-level `require()` below has already frozen the constants
-// at their real-world defaults (70/65/75). That silently left every test's
-// low/zero-confidence "opportunity" fixtures at the mercy of those production
-// defaults instead of being genuinely threshold-free, which is what every
-// test in this file actually intends. Setting them here, before the
-// require(), is what makes the override real.
+// file's own top-level require() below has already evaluated the constants.
+// Moved here so the assignment at least happens before that require() runs.
+//
+// NOTE (found chasing the still-failing BEST1/BEST2 allocation test after
+// this move alone didn't fix it): aiWorkerService.js reads these with
+// `parseInt(process.env.X) || <default>` -- and `0 || 70` is 70 in
+// JavaScript, because 0 is falsy. So even with correct timing, "0" can
+// never actually zero out these thresholds; the real production defaults
+// (70/65/75) apply regardless. That's a separate, pre-existing bug in
+// production code unrelated to any master-plan safety limit (this is an
+// AI-signal-quality knob, not a leverage/stop-loss/daily-loss number) --
+// left untouched here per the standing instruction to keep this fix scoped
+// to tests. Every fixture in this file is chosen to clear the *real*
+// defaults on its own merits (see BEST2 below), so none of them actually
+// depend on this override working.
 process.env.AI_CONFIDENCE_THRESHOLD = '0';
 process.env.AI_MIN_FUSED_SCORE = '0';
 process.env.AI_MIN_QUALITY_SCORE = '0';
@@ -347,7 +356,10 @@ describe('approveAllocationProposal / rejectAllocationProposal — the single-sc
   test('approving "best_single" opens exactly one trade and closes out every decision from that cycle', async () => {
     const proposal = await proposeCycle([
       { asset: 'BEST1', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
-      { asset: 'BEST2', action: 'BUY', confidence: 70, fused_score: 70, quality_score: 70, current_price: 200, stop_loss: 190, take_profit: 220 },
+      // quality_score must clear the real MIN_QUALITY_SCORE default (75) --
+      // see the note above the env-var overrides near the top of this file
+      // for why "70" silently never reached buildAllocationOptions() at all.
+      { asset: 'BEST2', action: 'BUY', confidence: 80, fused_score: 80, quality_score: 80, current_price: 200, stop_loss: 190, take_profit: 220 },
     ]);
     expect(proposal.options.map(o => o.key)).toEqual(expect.arrayContaining(['best_single', 'diversified', 'single_BEST2']));
 
