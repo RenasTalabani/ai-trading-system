@@ -21,12 +21,13 @@ const BudgetSession       = require('../src/models/BudgetSession');
 const VirtualTrade        = require('../src/models/VirtualTrade');
 const VirtualPortfolio    = require('../src/models/VirtualPortfolio');
 const AIDecision          = require('../src/models/AIDecision');
+const AllocationProposal  = require('../src/models/AllocationProposal');
 const RiskState           = require('../src/models/RiskState');
 const MarketRegimeHistory = require('../src/models/MarketRegimeHistory');
 const axios                = require('axios');
 const { getCache }         = require('../src/jobs/globalScanJob');
 
-let FAKE_PORTFOLIO, FAKE_AGGREGATE_RESULT, CREATED_DECISIONS, CREATED_TRADES, SCAN_RESPONSE, FAKE_RISK_STATE;
+let FAKE_PORTFOLIO, FAKE_AGGREGATE_RESULT, CREATED_DECISIONS, CREATED_TRADES, CREATED_PROPOSALS, SCAN_RESPONSE, FAKE_RISK_STATE;
 
 function makeRiskState(overrides = {}) {
   const state = { riskKey: 'global', dailyLossHalted: false, haltReason: null, ...overrides };
@@ -34,11 +35,16 @@ function makeRiskState(overrides = {}) {
   return state;
 }
 
+function chain(result) {
+  return { sort: () => ({ limit: () => ({ lean: async () => result }) }) };
+}
+
 beforeEach(() => {
   FAKE_PORTFOLIO = { currentBalance: 1000, riskPerTradePct: 5, save: async () => {} };
   FAKE_AGGREGATE_RESULT = [];
   CREATED_DECISIONS = [];
   CREATED_TRADES = [];
+  CREATED_PROPOSALS = [];
   SCAN_RESPONSE = { success: true, scanned: 1, top_opportunities: [] };
   FAKE_RISK_STATE = makeRiskState();
 
@@ -46,6 +52,7 @@ beforeEach(() => {
   VirtualTrade.countDocuments = async () => 0;
   VirtualTrade.aggregate = async () => FAKE_AGGREGATE_RESULT; // used by riskStateService.checkAndMaybeHalt
   VirtualTrade.distinct = async () => [];
+  VirtualTrade.find = () => chain([]); // used by computeSpotSizeUsd -> getEdgeMultiplier (no trade history -> 1.0x)
   VirtualTrade.findOne = async () => null; // no already-open position, for approveDecision tests
   VirtualTrade.create = async (doc) => { const t = { ...doc, _id: 'trade_' + (CREATED_TRADES.length + 1) }; CREATED_TRADES.push(t); return t; };
   VirtualPortfolio.findOne = async () => FAKE_PORTFOLIO;
@@ -54,8 +61,34 @@ beforeEach(() => {
     CREATED_DECISIONS.push(d);
     return d;
   };
-  AIDecision.updateOne = async () => {};
+  // Mutate the in-memory fakes for real, the same way Mongo would apply the
+  // update -- otherwise tests that check a decision's status after
+  // approveAllocationProposal/rejectAllocationProposal would trivially pass
+  // no matter what those functions actually did.
+  AIDecision.updateOne = async (filter, update) => {
+    const d = CREATED_DECISIONS.find(x => String(x._id) === String(filter._id));
+    if (d) Object.assign(d, update);
+  };
+  AIDecision.updateMany = async (filter, update) => {
+    const ids = (filter._id && filter._id.$in ? filter._id.$in : []).map(String);
+    for (const d of CREATED_DECISIONS) {
+      if (ids.includes(String(d._id)) && (!filter.status || d.status === filter.status)) {
+        Object.assign(d, update);
+      }
+    }
+  };
   AIDecision.findById = async (id) => CREATED_DECISIONS.find(d => d._id === id) || null;
+  AllocationProposal.findOne = async () => null; // default: nothing pending yet
+  AllocationProposal.create = async (doc) => {
+    const p = {
+      ...doc,
+      _id: 'proposal_' + (CREATED_PROPOSALS.length + 1),
+      save: async function () { return this; },
+    };
+    CREATED_PROPOSALS.push(p);
+    return p;
+  };
+  AllocationProposal.findById = async (id) => CREATED_PROPOSALS.find(p => p._id === id) || null;
   RiskState.findOne = async () => FAKE_RISK_STATE;
   RiskState.create = async () => FAKE_RISK_STATE;
   MarketRegimeHistory.create = async () => ({});
@@ -67,7 +100,10 @@ beforeEach(() => {
   process.env.AI_MIN_QUALITY_SCORE = '0';
 });
 
-const { runAIWorkerCycle, approveDecision, rejectDecision, getPendingDecision } = require('../src/services/aiWorkerService');
+const {
+  runAIWorkerCycle, approveDecision, rejectDecision, getPendingDecision,
+  approveAllocationProposal, rejectAllocationProposal, getPendingProposal,
+} = require('../src/services/aiWorkerService');
 
 test('runAIWorkerCycle completes without throwing (regression: TDZ crash on every cycle)', async () => {
   await expect(runAIWorkerCycle()).resolves.toBeDefined();
@@ -87,6 +123,26 @@ test('never calls VirtualTrade.create — proposals only (decision #11)', async 
   expect(CREATED_DECISIONS).toHaveLength(1);
   expect(CREATED_DECISIONS[0].status).toBe('PENDING_APPROVAL');
   expect(CREATED_DECISIONS[0].tradeCreated).toBeFalsy();
+
+  // Decision #14: candidates get bundled into one allocation proposal too.
+  expect(result.proposalId).toBeDefined();
+  expect(CREATED_PROPOSALS).toHaveLength(1);
+  expect(CREATED_PROPOSALS[0].status).toBe('PENDING_APPROVAL');
+  expect(CREATED_PROPOSALS[0].options[0].key).toBe('best_single');
+});
+
+test('a pending proposal blocks a new cycle from creating another one (decision #21: one card at a time)', async () => {
+  AllocationProposal.findOne = async () => ({ _id: 'proposal_existing', status: 'PENDING_APPROVAL' });
+  SCAN_RESPONSE = {
+    success: true, scanned: 1,
+    top_opportunities: [{
+      asset: 'FAKEUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+      current_price: 100, stop_loss: 95, take_profit: 110,
+    }],
+  };
+  const result = await runAIWorkerCycle();
+  expect(result.skipped).toBe('pending_proposal_exists');
+  expect(CREATED_DECISIONS).toHaveLength(0);
 });
 
 test('daily-loss circuit breaker pauses proposals when the threshold is hit (decision #16)', async () => {
@@ -257,6 +313,78 @@ describe('getPendingDecision', () => {
   test('returns null when there is nothing pending', async () => {
     AIDecision.findOne = () => ({ sort: () => ({ lean: async () => null }) });
     const pending = await getPendingDecision();
+    expect(pending).toBeNull();
+  });
+});
+
+describe('approveAllocationProposal / rejectAllocationProposal — the single-screen surface (decisions #11 + #14)', () => {
+  async function proposeCycle(opps) {
+    SCAN_RESPONSE = { success: true, scanned: opps.length, top_opportunities: opps };
+    const result = await runAIWorkerCycle();
+    return CREATED_PROPOSALS.find(p => p._id === String(result.proposalId));
+  }
+
+  test('approving "best_single" opens exactly one trade and closes out every decision from that cycle', async () => {
+    const proposal = await proposeCycle([
+      { asset: 'BEST1', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
+      { asset: 'BEST2', action: 'BUY', confidence: 70, fused_score: 70, quality_score: 70, current_price: 200, stop_loss: 190, take_profit: 220 },
+    ]);
+    expect(proposal.options.map(o => o.key)).toEqual(expect.arrayContaining(['best_single', 'diversified', 'single_BEST2']));
+
+    const { trades, failures } = await approveAllocationProposal(proposal._id, 'best_single');
+
+    expect(failures).toHaveLength(0);
+    expect(trades).toHaveLength(1);
+    expect(trades[0].asset).toBe('BEST1'); // highest confidence -> the recommended single
+    expect(proposal.status).toBe('APPROVED');
+    expect(proposal.chosenOptionKey).toBe('best_single');
+
+    // BEST2's decision was never chosen -> closed out as REJECTED, not left dangling.
+    const best2Decision = CREATED_DECISIONS.find(d => d.asset === 'BEST2');
+    expect(best2Decision.status).toBe('REJECTED');
+  });
+
+  test('approving "diversified" opens one trade per asset in that option', async () => {
+    const proposal = await proposeCycle([
+      { asset: 'DIVA', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
+      { asset: 'DIVB', action: 'BUY', confidence: 80, fused_score: 80, quality_score: 80, current_price: 200, stop_loss: 190, take_profit: 220 },
+    ]);
+    const { trades, failures } = await approveAllocationProposal(proposal._id, 'diversified');
+    expect(failures).toHaveLength(0);
+    expect(trades.map(t => t.asset).sort()).toEqual(['DIVA', 'DIVB']);
+  });
+
+  test('approving an unknown option key throws', async () => {
+    const proposal = await proposeCycle([
+      { asset: 'ONLYONE', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
+    ]);
+    await expect(approveAllocationProposal(proposal._id, 'not_a_real_option')).rejects.toThrow(/not one of this proposal/i);
+  });
+
+  test('approving an already-decided proposal fails', async () => {
+    const proposal = await proposeCycle([
+      { asset: 'DECIDEDONCE', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
+    ]);
+    await approveAllocationProposal(proposal._id, 'best_single');
+    await expect(approveAllocationProposal(proposal._id, 'best_single')).rejects.toThrow(/already approved/i);
+  });
+
+  test('rejectAllocationProposal closes out every decision from that cycle without opening any trade', async () => {
+    const proposal = await proposeCycle([
+      { asset: 'REJONE', action: 'BUY', confidence: 90, fused_score: 90, quality_score: 90, current_price: 100, stop_loss: 95, take_profit: 110 },
+      { asset: 'REJTWO', action: 'BUY', confidence: 80, fused_score: 80, quality_score: 80, current_price: 200, stop_loss: 190, take_profit: 220 },
+    ]);
+    await rejectAllocationProposal(proposal._id);
+    expect(proposal.status).toBe('REJECTED');
+    expect(CREATED_TRADES).toHaveLength(0);
+    expect(CREATED_DECISIONS.every(d => d.status === 'REJECTED')).toBe(true);
+  });
+});
+
+describe('getPendingProposal', () => {
+  test('returns null when there is nothing pending', async () => {
+    AllocationProposal.findOne = () => ({ sort: () => ({ lean: async () => null }) });
+    const pending = await getPendingProposal();
     expect(pending).toBeNull();
   });
 });

@@ -13,14 +13,16 @@
  */
 const axios          = require('axios');
 const AIDecision     = require('../models/AIDecision');
+const AllocationProposal = require('../models/AllocationProposal');
 const VirtualTrade   = require('../models/VirtualTrade');
 const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession  = require('../models/BudgetSession');
 const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger         = require('../config/logger');
-const { approveSuggestion } = require('./virtualTrackingService');
+const { approveSuggestion, computeSpotSizeUsd } = require('./virtualTrackingService');
 const safetyGate     = require('./safetyLimitsGate');
 const riskStateService = require('./riskStateService');
+const { buildAllocationOptions } = require('./allocationOptionsBuilder');
 const { getCache: getGlobalScanCache } = require('../jobs/globalScanJob');
 
 // T-060 (2026-08-26, product-to-code audit follow-up): this worker used to
@@ -80,6 +82,14 @@ async function runAIWorkerCycle() {
     return { skipped: 'daily_loss_halted', reason: halt.reason };
   }
 
+  // 3b. Single-screen model (decision #21): only ever show ONE pending
+  // decision at a time. Don't pile a new proposal on top of one the user
+  // hasn't answered yet.
+  const existingPending = await AllocationProposal.findOne({ status: 'PENDING_APPROVAL' });
+  if (existingPending) {
+    return { skipped: 'pending_proposal_exists', proposalId: existingPending._id };
+  }
+
   // 4. Reuse globalScanJob's cached scan when fresh enough (T-060); only
   // fall back to an independent call when there's no usable cache.
   let scanResult;
@@ -114,6 +124,7 @@ async function runAIWorkerCycle() {
   const openSet     = new Set(openAssets);
 
   let proposalsCreated = 0;
+  const candidates = []; // feeds buildAllocationOptions() after the loop
 
   // 6. Process each top opportunity — PROPOSE only (decision #11). Nothing
   // in this loop calls VirtualTrade.create() any more; it only writes an
@@ -190,6 +201,18 @@ async function runAIWorkerCycle() {
       }).catch(() => {});
     }
 
+    // Same sizing math every other trade path uses (computeSpotSizeUsd —
+    // riskPerTradePct × edge multiplier, hard-capped at MAX_POSITION_RISK_PCT)
+    // so a diversified/single-asset allocation option can never risk more
+    // than a normally-approved trade in that asset would.
+    const { sizeUsd } = await computeSpotSizeUsd(opp.asset, portfolio, `${opp.asset} AI worker proposal`);
+
+    candidates.push({
+      asset: opp.asset, direction: opp.action, entryPrice, stopLoss, takeProfit,
+      confidence: opp.confidence, fusedScore: _pick(opp, 'fused_score', 'fusedScore'),
+      sizeUsd, aiDecisionId: decision._id,
+    });
+
     openSet.add(opp.asset); // reserve the asset so we don't propose it twice in one cycle
     proposalsCreated++;
 
@@ -199,8 +222,21 @@ async function runAIWorkerCycle() {
     );
   }
 
+  // 7. Bundle every candidate from this cycle into ONE allocation proposal
+  // with 2-4 choices (decision #14) — the single thing the main screen shows.
+  let proposalId = null;
+  if (candidates.length > 0) {
+    const options = buildAllocationOptions(candidates);
+    const proposal = await AllocationProposal.create({ options, status: 'PENDING_APPROVAL' });
+    proposalId = proposal._id;
+    logger.info(
+      `[AIWorker] Allocation proposal ${proposalId} created — ${options.length} option(s) from ${candidates.length} candidate(s).`
+    );
+  }
+
   return {
     proposalsCreated,
+    proposalId,
     openCount,
     balance: parseFloat(portfolio.currentBalance.toFixed(2)),
     scanned: scanResult.scanned,
@@ -277,8 +313,122 @@ async function rejectDecision(decisionId) {
 }
 
 // Read-only — what the single main screen shows as "the one pending decision".
+// Kept for per-asset history/back-compat; getPendingProposal() below is what
+// the single-screen mobile UI actually polls (decision #14: it needs the
+// full multi-option card, not one bare asset/action pair).
 async function getPendingDecision() {
   return AIDecision.findOne({ status: 'PENDING_APPROVAL' }).sort({ createdAt: -1 }).lean();
+}
+
+// ── Allocation proposal approval (decisions #11 + #14) ──────────────────────────
+// The single main screen's actual "yes/no" surface: one card, 2-4 options,
+// exactly one flagged as the AI's recommendation, the user picks or declines.
+
+async function getPendingProposal() {
+  return AllocationProposal.findOne({ status: 'PENDING_APPROVAL' }).sort({ createdAt: -1 }).lean();
+}
+
+// All aiDecisionIds referenced anywhere in a proposal's options, deduped —
+// used to close out every candidate this cycle produced, not just the ones
+// in the chosen option.
+function _allReferencedDecisionIds(proposal) {
+  const ids = new Set();
+  for (const opt of proposal.options) {
+    for (const a of opt.allocations) ids.add(String(a.aiDecisionId));
+  }
+  return [...ids];
+}
+
+async function approveAllocationProposal(proposalId, optionKey) {
+  const proposal = await AllocationProposal.findById(proposalId);
+  if (!proposal) throw new Error('Proposal not found.');
+  if (proposal.status !== 'PENDING_APPROVAL') {
+    throw new Error(`This proposal is already ${proposal.status.toLowerCase()} — nothing to approve.`);
+  }
+  const chosen = proposal.options.find(o => o.key === optionKey);
+  if (!chosen) throw new Error(`"${optionKey}" is not one of this proposal's options.`);
+
+  const chosenDecisionIds = new Set(chosen.allocations.map(a => String(a.aiDecisionId)));
+  const trades = [];
+  const failures = [];
+
+  for (const alloc of chosen.allocations) {
+    try {
+      const trade = await approveSuggestion({
+        asset:        alloc.asset,
+        direction:    alloc.direction,
+        entryPrice:   alloc.entryPrice,
+        stopLoss:     alloc.stopLoss,
+        takeProfit:   alloc.takeProfit,
+        aiDecisionId: alloc.aiDecisionId,
+        origin:       'ai_worker_approved',
+      });
+      trades.push(trade);
+      await AIDecision.updateOne({ _id: alloc.aiDecisionId }, {
+        status: 'APPROVED', decidedAt: new Date(), tradeCreated: true, tradeId: trade._id,
+      });
+    } catch (err) {
+      failures.push({ asset: alloc.asset, error: err.message });
+      await AIDecision.updateOne({ _id: alloc.aiDecisionId }, {
+        status: 'REJECTED', decidedAt: new Date(),
+        safetyGateReasons: err.safetyGateReasons || [],
+      });
+      logger.warn(`[AIWorker] Allocation for ${alloc.asset} in proposal ${proposalId} failed at approval time: ${err.message}`);
+    }
+  }
+
+  // Every candidate NOT part of the chosen option was implicitly declined by
+  // the user's choice — close them out rather than leaving them dangling in
+  // PENDING_APPROVAL forever.
+  const otherDecisionIds = _allReferencedDecisionIds(proposal).filter(id => !chosenDecisionIds.has(id));
+  if (otherDecisionIds.length > 0) {
+    await AIDecision.updateMany(
+      { _id: { $in: otherDecisionIds }, status: 'PENDING_APPROVAL' },
+      { status: 'REJECTED', decidedAt: new Date() }
+    );
+  }
+
+  if (trades.length === 0 && failures.length > 0) {
+    // Nothing at all could be opened — surface this as a real failure rather
+    // than a silent "success" with zero trades.
+    proposal.status = 'REJECTED';
+    proposal.decidedAt = new Date();
+    await proposal.save();
+    const err = new Error(`Could not open any trade in "${optionKey}": ${failures.map(f => `${f.asset} (${f.error})`).join('; ')}`);
+    err.failures = failures;
+    throw err;
+  }
+
+  proposal.status = 'APPROVED';
+  proposal.chosenOptionKey = optionKey;
+  proposal.tradeIds = trades.map(t => t._id);
+  proposal.decidedAt = new Date();
+  await proposal.save();
+
+  logger.info(`[AIWorker] Proposal ${proposalId} APPROVED — option "${optionKey}", ${trades.length} trade(s) opened${failures.length ? `, ${failures.length} failed` : ''}.`);
+  return { proposal, trades, failures };
+}
+
+async function rejectAllocationProposal(proposalId) {
+  const proposal = await AllocationProposal.findById(proposalId);
+  if (!proposal) throw new Error('Proposal not found.');
+  if (proposal.status !== 'PENDING_APPROVAL') {
+    throw new Error(`This proposal is already ${proposal.status.toLowerCase()} — nothing to reject.`);
+  }
+
+  const decisionIds = _allReferencedDecisionIds(proposal);
+  if (decisionIds.length > 0) {
+    await AIDecision.updateMany(
+      { _id: { $in: decisionIds }, status: 'PENDING_APPROVAL' },
+      { status: 'REJECTED', decidedAt: new Date() }
+    );
+  }
+
+  proposal.status = 'REJECTED';
+  proposal.decidedAt = new Date();
+  await proposal.save();
+  logger.info(`[AIWorker] Proposal ${proposalId} REJECTED by user.`);
+  return proposal;
 }
 
 async function getStats() {
@@ -301,4 +451,5 @@ async function getStats() {
 module.exports = {
   runAIWorkerCycle, getLatestDecisions, getStats,
   approveDecision, rejectDecision, getPendingDecision,
+  approveAllocationProposal, rejectAllocationProposal, getPendingProposal,
 };

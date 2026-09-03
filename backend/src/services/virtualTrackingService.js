@@ -1003,5 +1003,5 @@ module.exports = {
   resetPortfolio, setCapital, openFuturesTrade, applyFundingPayments,
   enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
   approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
-  getTrackRecordByAsset, getWinLossBreakdown,
+  getTrackRecordByAsset, getWinLossBreakdown, computeSpotSizeUsd, getPortfolio,
 };

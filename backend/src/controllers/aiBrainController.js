@@ -1,5 +1,6 @@
 const {
   getLatestDecisions, getStats, approveDecision, rejectDecision, getPendingDecision,
+  getPendingProposal, approveAllocationProposal, rejectAllocationProposal,
 } = require('../services/aiWorkerService');
 const AIDecision   = require('../models/AIDecision');
 const VirtualTrade = require('../models/VirtualTrade');
@@ -85,6 +86,45 @@ exports.reject = async (req, res) => {
     return res.json({ success: true, decision });
   } catch (err) {
     logger.warn('[AiBrain] reject failed:', err.message);
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// ── Allocation proposal endpoints (decisions #11 + #14) ─────────────────────
+// This is what the single main screen actually polls: one pending card with
+// 2-4 choices and exactly one AI-recommended pick.
+
+// GET /api/v1/ai-brain/pending-proposal
+exports.pendingProposal = async (req, res) => {
+  try {
+    const proposal = await getPendingProposal();
+    return res.json({ success: true, proposal: proposal || null });
+  } catch (err) {
+    logger.error('[AiBrain] pendingProposal error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/v1/ai-brain/proposals/:id/approve  body: { optionKey }
+exports.approveProposal = async (req, res) => {
+  try {
+    const { optionKey } = req.body;
+    if (!optionKey) return res.status(400).json({ success: false, message: '"optionKey" is required.' });
+    const result = await approveAllocationProposal(req.params.id, optionKey);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    logger.warn('[AiBrain] approveProposal rejected:', err.message);
+    return res.status(err.isSafetyGateRejection ? 422 : 400).json({ success: false, message: err.message, failures: err.failures });
+  }
+};
+
+// POST /api/v1/ai-brain/proposals/:id/reject
+exports.rejectProposal = async (req, res) => {
+  try {
+    const proposal = await rejectAllocationProposal(req.params.id);
+    return res.json({ success: true, proposal });
+  } catch (err) {
+    logger.warn('[AiBrain] rejectProposal failed:', err.message);
     return res.status(400).json({ success: false, message: err.message });
   }
 };
