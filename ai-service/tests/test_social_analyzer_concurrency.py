@@ -48,6 +48,16 @@ class FakeSentimentModel:
 
 class TestConcurrentRefreshCallsShareOneInFlightRefresh:
     async def test_five_concurrent_refresh_calls_only_collect_once_per_platform(self, monkeypatch):
+        # Master-plan decision #4/#7 (locked, 2026-09-03): Twitter/Reddit are
+        # feature-flagged off by default in production (see
+        # ENABLE_TWITTER_SOURCE/ENABLE_REDDIT_SOURCE in social_analyzer.py).
+        # This test predates that flag and is about a different, still-valid
+        # concern (BUG-001's dedup-in-flight-refresh lock covering all three
+        # collectors, not just Telegram), so it opts both back on for its own
+        # scope only; production's default-off behavior is untouched.
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_TWITTER_SOURCE", True)
+        monkeypatch.setattr("app.services.social_analyzer.ENABLE_REDDIT_SOURCE", True)
+
         call_counts = {"telegram": 0, "twitter": 0, "reddit": 0}
 
         async def _fake_telegram():
