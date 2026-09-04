@@ -300,7 +300,12 @@ async def _run_transformer_training(asset: str, epochs: int):
 
 
 async def _run_transformer_training_all(epochs: int):
-    assets = list(TRACKED_ASSETS) + ["XAUUSD"]
+    # Decision #18: gold is PAXGUSDT, already inside TRACKED_ASSETS -- no
+    # separate "+ gold" append needed anymore (there used to be a
+    # "+ ['XAUUSD']" here, which also meant this list could silently drift
+    # from the one below in the route handler; now both just read
+    # TRACKED_ASSETS directly).
+    assets = list(TRACKED_ASSETS)
     for asset in assets:
         await _run_transformer_training(asset, epochs)
     logger.info(f"Transformer batch training complete for {len(assets)} assets.")
@@ -319,10 +324,11 @@ class TransformerTrainAllRequest(BaseModel):
 
 @router.post("/train/transformer/all")
 async def train_transformer_all(req: TransformerTrainAllRequest, background_tasks: BackgroundTasks):
-    """Train a separate Transformer model per tracked asset (+ gold) instead of
-    sharing the single BTCUSDT-trained model everywhere. Takes real minutes per
-    asset — this is an explicit, operator-triggered batch job, not run on boot."""
-    assets = list(TRACKED_ASSETS) + ["XAUUSD"]
+    """Train a separate Transformer model per tracked asset (gold/PAXGUSDT
+    included, decision #18) instead of sharing the single BTCUSDT-trained
+    model everywhere. Takes real minutes per asset — this is an explicit,
+    operator-triggered batch job, not run on boot."""
+    assets = list(TRACKED_ASSETS)
     background_tasks.add_task(_run_transformer_training_all, req.epochs)
     return {
         "success": True,

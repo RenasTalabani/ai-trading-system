@@ -4,9 +4,9 @@ const { protect, authorize } = require('../middleware/auth');
 const VirtualTrade = require('../models/VirtualTrade');
 const {
   getPerformance, getSummary, resetPortfolio, setCapital, openFuturesTrade,
-  enableTrailingStop, getExposureSummary,
+  enableTrailingStop, getExposureSummary, getBenchmarkComparison,
 } = require('../services/virtualTrackingService');
-const { startPlan, stopPlan, getPlansWithSummary } = require('../services/dcaService');
+const { startPlan, stopPlan, getPlansWithSummary, approveDueBuy, skipDueBuy } = require('../services/dcaService');
 const riskStateService = require('../services/riskStateService');
 
 const router = express.Router();
@@ -33,6 +33,20 @@ router.post('/risk-state/reset', async (req, res) => {
   try {
     const state = await riskStateService.manualReset(req.user?.id || req.user?._id || 'user');
     res.json({ success: true, data: state });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ─── GET /api/v1/virtual/benchmark ────────────────────────────────────────────
+// Master-plan decision #22's graduation criterion, part 2: "outperforming a
+// buy-and-hold BTC benchmark". Purely informational -- see
+// getBenchmarkComparison()'s own comment for why this never auto-decides
+// anything.
+router.get('/benchmark', async (req, res) => {
+  try {
+    const data = await getBenchmarkComparison();
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -262,7 +276,13 @@ router.post('/dca/start', [
     const plan = await startPlan(req.body.asset, req.body.amountPerBuy, req.body.frequencyDays);
     res.json({ success: true, plan });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    // Bug fix (2026-09-04, overnight continuous-improvement pass): startPlan()
+    // now throws an isSafetyGateRejection-flagged error when the daily-loss
+    // circuit breaker (decision #16) is active -- mirror the same 422 vs 400
+    // distinction the /dca/:planId/approve-buy route below already makes, so
+    // a client can tell "paused for the day" apart from an ordinary
+    // validation/not-found failure.
+    res.status(err.isSafetyGateRejection ? 422 : 400).json({ success: false, message: err.message });
   }
 });
 
@@ -275,6 +295,39 @@ router.post('/dca/:planId/stop', [
 
   try {
     const plan = await stopPlan(req.params.planId);
+    res.json({ success: true, plan });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/v1/virtual/dca/:planId/approve-buy — safety fix (2026-09-04,
+// decision #11): the ONLY way a due DCA buy actually spends money. The
+// daily cron just flags "due"; a human tap is what executes it.
+router.post('/dca/:planId/approve-buy', [
+  param('planId').isMongoId(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const plan = await approveDueBuy(req.params.planId);
+    res.json({ success: true, plan });
+  } catch (err) {
+    res.status(err.isSafetyGateRejection ? 422 : 400).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/v1/virtual/dca/:planId/skip-buy — declines this cycle's due
+// buy without spending anything.
+router.post('/dca/:planId/skip-buy', [
+  param('planId').isMongoId(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const plan = await skipDueBuy(req.params.planId);
     res.json({ success: true, plan });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

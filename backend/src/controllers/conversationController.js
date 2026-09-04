@@ -33,13 +33,22 @@ exports.postMessage = async (req, res) => {
 };
 
 // Phase 2, step 1 (2026-09-01) — approve a trade plan from a chat "Approve"
-// tap. Deliberately takes NO trade parameters from req.body — see
-// conversationService.approvePlan()'s own comment for why (T-071 parity).
+// tap. Deliberately takes NO trade PARAMETERS (asset/entry/stop/target/
+// amount) from req.body — see conversationService.approvePlan()'s own
+// comment for why (T-071 parity). asset/action below are the one exception,
+// added 2026-09-04: identity-only, used solely to confirm the plan hasn't
+// changed since the client displayed it (see approvePlan()'s own comment).
 exports.approvePlan = async (req, res) => {
   try {
-    const result = await conversationService.approvePlan(req.user._id);
+    const { asset, action } = req.body || {};
+    const result = await conversationService.approvePlan(req.user._id, asset, action);
     if (!result.success) {
-      return res.status(409).json({ success: false, message: result.message, reply: result.reply });
+      return res.status(409).json({
+        success: false,
+        staleApproval: !!result.staleApproval,
+        message: result.message,
+        reply: result.reply,
+      });
     }
     res.json({ success: true, trade: result.trade, reply: result.reply });
   } catch (err) {

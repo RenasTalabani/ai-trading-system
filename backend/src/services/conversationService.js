@@ -49,7 +49,10 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-2025100
 const ANTHROPIC_URL   = 'https://api.anthropic.com/v1/messages';
 const MAX_TOOL_ROUNDS = 4; // hard cap so a confused tool-call loop can't run away
 
-const EXTENDED_PRICE_ASSETS = ['XAUUSD']; // mirrors guideController.js's own list
+// Empty since decision #18 (locked, 2026-09-03) moved gold from XAUUSD to
+// PAXGUSDT (now just another TRACKED_ASSETS entry) -- see guideController.js's
+// own EXTENDED_PRICE_ASSETS comment for the full reasoning.
+const EXTENDED_PRICE_ASSETS = [];
 
 const SYSTEM_PROMPT = `You are RENO, the trading companion inside this app. You talk with the user about their (paper/virtual — not real-money) trading account.
 
@@ -80,7 +83,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         limit: { type: 'integer', description: 'How many recent closed trades to return (default 10, max 30)' },
-        asset: { type: 'string', description: 'Optional — filter to one asset, e.g. "XAUUSD" or "BTCUSDT"' },
+        asset: { type: 'string', description: 'Optional — filter to one asset, e.g. "PAXGUSDT" or "BTCUSDT"' },
       },
     },
   },
@@ -95,7 +98,7 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        asset: { type: 'string', description: 'Optional -- filter to one asset, e.g. "BTCUSDT" or "XAUUSD". Omit for a full breakdown across every traded asset.' },
+        asset: { type: 'string', description: 'Optional -- filter to one asset, e.g. "BTCUSDT" or "PAXGUSDT". Omit for a full breakdown across every traded asset.' },
       },
     },
   },
@@ -336,8 +339,12 @@ async function sendMessage(userId, text) {
  *
  * origin: 'conversation_approval' — see VirtualTrade.js's origin enum
  * comment and approveSuggestion()'s new optional parameter.
+ *
+ * clientAsset/clientAction (2026-09-04, overnight continuous-improvement
+ * pass): optional, and checked for IDENTITY ONLY -- see the comment at the
+ * check site below for why this doesn't weaken the T-071 property above.
  */
-async function approvePlan(userId) {
+async function approvePlan(userId, clientAsset, clientAction) {
   const thread = await _getOrCreateThread(userId);
 
   const suggestion = await resolveSuggestion();
@@ -348,6 +355,33 @@ async function approvePlan(userId) {
       content: "There's no suggestion available to approve right now — it may have expired. Ask me for a fresh one first.",
     });
     return { success: false, message: reply.content, reply };
+  }
+
+  // Bug fix (2026-09-04, overnight continuous-improvement pass): identical
+  // gap to the one just fixed in guideController.approve() -- resolveSuggestion()
+  // above is a live, real-time query, so this SECOND independent call (the
+  // first was whatever get_suggestion tool call rendered the opportunity
+  // card the user is tapping Approve on) can legitimately return a
+  // DIFFERENT asset/direction by the time this runs. RENO's chat has no
+  // periodic silent auto-refresh like Guide's screen does, but the plain
+  // decide-then-tap gap alone is enough (a fresher signal appearing, the
+  // asset getting opened elsewhere and excluded via openAssets, or the
+  // global-scan cache refreshing every 30 min) -- approving would then
+  // silently open a paper position in something the user never actually
+  // saw in the chat transcript. Same soft, backward-compatible design as
+  // guideController.approve(): only checked when the caller actually
+  // passes the asset/action it displayed (the pre-existing callers in
+  // conversationService.test.js all call approvePlan(userId) with neither,
+  // so this is a no-op for them), and checks identity only -- never
+  // amount, which stays 100% server-computed either way (T-071, untouched).
+  if (clientAsset && clientAction &&
+      (clientAsset !== suggestion.asset || clientAction !== suggestion.action)) {
+    const reply = await ConversationMessage.create({
+      threadId: thread._id,
+      role: 'assistant',
+      content: "That plan has changed since you last saw it — ask me for a fresh suggestion before approving.",
+    });
+    return { success: false, staleApproval: true, message: reply.content, reply };
   }
 
   // T-061's same best-effort aiDecisionId lookup as guideController.approve() —

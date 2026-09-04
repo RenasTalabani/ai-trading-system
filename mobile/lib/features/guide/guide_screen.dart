@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/guide_provider.dart';
 import '../../core/providers/positions_guidance_provider.dart';
+import '../../core/providers/allocation_proposal_provider.dart';
+import '../../core/providers/risk_state_provider.dart';
+import '../../core/models/allocation_proposal_model.dart';
 import '../../core/theme/app_theme.dart';
 
 // The "just tell me what to do" screen — one suggestion at a time, plain
@@ -17,6 +20,8 @@ class GuideScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(guideProvider);
     final positionsState = ref.watch(positionsGuidanceProvider);
+    final proposalState = ref.watch(allocationProposalProvider);
+    final riskState = ref.watch(riskStateProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -52,10 +57,37 @@ class GuideScreen extends ConsumerWidget {
         onRefresh: () => Future.wait([
           ref.read(guideProvider.notifier).fetch(),
           ref.read(positionsGuidanceProvider.notifier).fetch(),
+          ref.read(allocationProposalProvider.notifier).fetch(),
+          ref.read(riskStateProvider.notifier).fetch(),
         ]),
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
           children: [
+            // Decision #16: a live circuit breaker halt outranks everything
+            // else on the single main screen -- shown first, before even the
+            // open-positions risk summary.
+            if (riskState.state.dailyLossHalted) ...[
+              _SafetyHaltBanner(riskState: riskState),
+              const SizedBox(height: 20),
+            ],
+
+            // Decision #14: the AI-worker-cycle multi-option proposal, when
+            // one is pending. Additive alongside the single-suggestion Guide
+            // flow below -- the two are independent pipelines, not a
+            // replacement of one by the other.
+            if (proposalState.proposal != null) ...[
+              _AllocationProposalCard(state: proposalState),
+              const SizedBox(height: 20),
+            ],
+            if (proposalState.lastResultMessage != null) ...[
+              _ResultBanner(message: proposalState.lastResultMessage!),
+              const SizedBox(height: 16),
+            ],
+            if (proposalState.error != null && proposalState.proposal != null) ...[
+              _ErrorBanner(message: proposalState.error!),
+              const SizedBox(height: 16),
+            ],
+
             if (positionsState.positions.isNotEmpty) ...[
               _RiskSummaryBanner(
                 totalAtRiskUsd: positionsState.totalAtRiskUsd,
@@ -581,6 +613,242 @@ class _ErrorBanner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(child: Text(message, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14))),
         ],
+      ),
+    );
+  }
+}
+
+// Master-plan decision #16: the daily-loss circuit breaker's UI. Shown only
+// while actually halted -- outranks the rest of the main screen because
+// nothing else here matters if the AI can't currently open a trade anyway.
+// Resuming is a deliberate, confirmed human action, never automatic.
+class _SafetyHaltBanner extends ConsumerWidget {
+  final RiskStateState riskState;
+  const _SafetyHaltBanner({required this.riskState});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = riskState.state;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.error, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.pause_circle_filled, color: AppColors.error, size: 24),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text('Trading Paused',
+                    style: TextStyle(color: AppColors.error, fontSize: 17, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            s.haltReason ??
+                "Today's losses hit the daily limit, so the AI has stopped opening new trades. "
+                    'This only clears when you say so.',
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, height: 1.4),
+          ),
+          if (s.dailyLossAtHalt != null) ...[
+            const SizedBox(height: 8),
+            Text('Loss at halt: \$${s.dailyLossAtHalt!.toStringAsFixed(2)}',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+          ],
+          if (riskState.error != null) ...[
+            const SizedBox(height: 10),
+            Text(riskState.error!,
+                style: const TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: OutlinedButton(
+              onPressed: riskState.resetting ? null : () => _confirmAndReset(context, ref),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppColors.error),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: riskState.resetting
+                  ? const SizedBox(width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.error))
+                  : const Text('Resume Trading',
+                      style: TextStyle(color: AppColors.error, fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmAndReset(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Resume trading?'),
+        content: const Text(
+          "Only do this after you've reviewed what happened today. "
+          'The AI will be allowed to open new trades again immediately.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Resume')),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      HapticFeedback.mediumImpact();
+      await ref.read(riskStateProvider.notifier).resetHalt();
+    }
+  }
+}
+
+// Master-plan decisions #11 + #14: the AI-worker-cycle proposal. 2-4
+// options, one of them the AI's own recommendation (pre-selected but always
+// changeable) -- approving opens exactly the chosen option's trades, all
+// others in this cycle are implicitly declined server-side.
+class _AllocationProposalCard extends ConsumerWidget {
+  final AllocationProposalState state;
+  const _AllocationProposalCard({required this.state});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final proposal = state.proposal!;
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('The AI Wants To Trade',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text('Pick one option, or skip this cycle entirely.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+          const SizedBox(height: 16),
+          ...proposal.options.map((opt) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _ProposalOptionTile(
+                  option: opt,
+                  selected: state.selectedOptionKey == opt.key,
+                  onTap: state.approving
+                      ? null
+                      : () {
+                          HapticFeedback.selectionClick();
+                          ref.read(allocationProposalProvider.notifier).selectOption(opt.key);
+                        },
+                ),
+              )),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: (state.approving || state.selectedOptionKey == null)
+                  ? null
+                  : () {
+                      HapticFeedback.mediumImpact();
+                      ref.read(allocationProposalProvider.notifier).approve();
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: state.approving
+                  ? const SizedBox(width: 22, height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                  : const Text('Approve Selected', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton(
+              onPressed: state.approving
+                  ? null
+                  : () {
+                      HapticFeedback.selectionClick();
+                      ref.read(allocationProposalProvider.notifier).reject();
+                    },
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppColors.border),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: const Text('Skip This Cycle',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProposalOptionTile extends StatelessWidget {
+  final ProposalOption option;
+  final bool selected;
+  final VoidCallback? onTap;
+  const _ProposalOptionTile({required this.option, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withValues(alpha: 0.10) : AppColors.background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: selected ? AppColors.primary : AppColors.border, width: selected ? 1.5 : 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    color: selected ? AppColors.primary : AppColors.textMuted, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(option.label,
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+                ),
+                if (option.isRecommended)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(color: AppColors.success, borderRadius: BorderRadius.circular(6)),
+                    child: const Text('AI PICK',
+                        style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('\$${option.totalUsd.toStringAsFixed(0)} total',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            ...option.allocations.map((a) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '${a.direction == 'BUY' ? 'Buy' : 'Sell'} ${a.asset} — \$${a.amountUsd.toStringAsFixed(0)}'
+                    '${a.stopLoss != null ? ' · stop \$${a.stopLoss!.toStringAsFixed(2)}' : ''}',
+                    style: const TextStyle(color: AppColors.textMuted, fontSize: 12.5, height: 1.3),
+                  ),
+                )),
+          ],
+        ),
       ),
     );
   }

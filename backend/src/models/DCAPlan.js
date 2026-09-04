@@ -20,6 +20,12 @@ const dcaPlanSchema = new mongoose.Schema(
 
     startedAt: { type: Date, default: Date.now },
     lastBuyAt: { type: Date, default: null },
+
+    // Safety fix (2026-09-04, decision #11): the daily cron used to execute
+    // a due buy immediately, with no human approval at all. Now it only
+    // ever sets this flag + notifies -- approveDueBuy()/skipDueBuy() in
+    // dcaService.js are the sole path that can move money or clear it.
+    dueBuyPending: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

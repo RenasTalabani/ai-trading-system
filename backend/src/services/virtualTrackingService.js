@@ -7,14 +7,16 @@ const Signal           = require('../models/Signal');
 const VirtualTrade     = require('../models/VirtualTrade');
 const VirtualPortfolio = require('../models/VirtualPortfolio');
 const BudgetSession    = require('../models/BudgetSession');
+const MarketData       = require('../models/MarketData');
 const logger           = require('../config/logger');
 const { withPortfolioLock } = require('../utils/portfolioLock');
 const safetyGate       = require('./safetyLimitsGate');
 const riskStateService = require('./riskStateService');
 
 // Lazy-require to avoid circular dependency at startup
-function notifySvc() { return require('./notificationService'); }
-function aiSvc()     { return require('./aiService'); }
+function notifySvc()  { return require('./notificationService'); }
+function aiSvc()      { return require('./aiService'); }
+function binanceSvc() { return require('./binanceService'); }
 
 // ─── Portfolio helpers ────────────────────────────────────────────────────────
 
@@ -252,56 +254,89 @@ async function approveSuggestion({ asset, direction, entryPrice, stopLoss, takeP
     throw new Error('Only BUY/SELL suggestions can be approved.');
   }
 
-  const alreadyOpen = await VirtualTrade.findOne({ asset, status: 'open' });
-  if (alreadyOpen) {
-    throw new Error(`Already have an open ${asset} position — nothing new to approve.`);
-  }
+  // Bug fix (2026-09-04, overnight continuous-improvement pass): the
+  // "already open" dedup check below and the VirtualTrade.create() that
+  // follows it used to straddle real async work (portfolio load,
+  // checkAndMaybeHalt, the safety gate, computeSpotSizeUsd) with nothing
+  // serializing the two. Two near-simultaneous approvals for the same
+  // asset -- a network retry, a double-tap that beats the mobile app's own
+  // in-flight `approving`/`sending` guard, or Guide and RENO chat both
+  // resolving and approving the same underlying suggestion within the same
+  // window -- could both pass the check and both open a position, silently
+  // doubling real (paper) exposure on that asset. This is a genuine
+  // check-then-act race, not a hypothetical one: nothing here previously
+  // prevented it.
+  //
+  // Fix: wrap the whole check-through-create critical section in the SAME
+  // shared portfolio mutex this file already uses for
+  // checkOpenTrades/applyFundingPayments/closePositionNow (see
+  // portfolioLock.js's own comment on why an in-process mutex, not a DB
+  // lock, is the correct fix for this app's single-process deployment
+  // model) rather than introducing a second, different locking primitive.
+  // This is a natural fit, not a stretch: opening a trade already reads
+  // portfolio.currentBalance for position sizing and can mutate
+  // portfolio.startedAt below, which is exactly the class of
+  // read-mutate-save portfolio access that lock exists to serialize. Since
+  // every trade-opening path in this app (Guide, RENO, AI-worker
+  // decisions, AI-worker allocation proposals) funnels through this one
+  // function, this single change closes the race for all of them at once
+  // -- a second concurrent caller for the same asset now simply sees
+  // "already open" cleanly once the first has actually landed, instead of
+  // a race that could let both through.
+  const trade = await withPortfolioLock(async () => {
+    const alreadyOpen = await VirtualTrade.findOne({ asset, status: 'open' });
+    if (alreadyOpen) {
+      throw new Error(`Already have an open ${asset} position — nothing new to approve.`);
+    }
 
-  const portfolio = await getPortfolio();
+    const portfolio = await getPortfolio();
 
-  // Safety Limits Gate (master_plan_v1.md decisions #13, #15, #16, #23) —
-  // deterministic code, checked on every single approval, no exceptions.
-  const halt = await riskStateService.checkAndMaybeHalt(portfolio);
-  if (halt.halted) {
-    throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
-  }
-  safetyGate.assertTradeAllowed(
-    safetyGate.evaluateProposedTrade({ entryPrice, stopLoss, direction, leverage: 1 })
-  );
+    // Safety Limits Gate (master_plan_v1.md decisions #13, #15, #16, #23) —
+    // deterministic code, checked on every single approval, no exceptions.
+    const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+    if (halt.halted) {
+      throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
+    }
+    safetyGate.assertTradeAllowed(
+      safetyGate.evaluateProposedTrade({ entryPrice, stopLoss, direction, leverage: 1 })
+    );
 
-  const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(asset, portfolio, `${asset} guide approval`);
+    const { sizeUsd, edgeMultiplier } = await computeSpotSizeUsd(asset, portfolio, `${asset} guide approval`);
 
-  // T-061: persist the AI-sourced signalId/aiDecisionId the caller resolved
-  // this suggestion from, so this trade stays traceable back to what
-  // justified it (previously neither was ever set for source:'guide').
-  const trade = await VirtualTrade.create({
-    source:     'guide',
-    // T-074a: known to come through this endpoint, but honestly NOT
-    // distinguishable between a real user's tap and a testing/validation
-    // session calling it directly -- see the field's comment in
-    // VirtualTrade.js for why no such signal exists in this codebase today.
-    // Phase 2: caller-overridable -- see this function's signature comment.
-    origin,
-    asset,
-    direction,
-    entryPrice,
-    stopLoss:   stopLoss   || null,
-    takeProfit: takeProfit || null,
-    atrAtEntry, // T-073: reused as-is from the caller's already-resolved suggestion
-    sizeUsd,
-    sizeMultiplier: edgeMultiplier,
-    trailingStopDistance: trailingDistanceFor(entryPrice, stopLoss),
-    signalId,
-    aiDecisionId,
-    openedAt:   new Date(),
+    // T-061: persist the AI-sourced signalId/aiDecisionId the caller resolved
+    // this suggestion from, so this trade stays traceable back to what
+    // justified it (previously neither was ever set for source:'guide').
+    const newTrade = await VirtualTrade.create({
+      source:     'guide',
+      // T-074a: known to come through this endpoint, but honestly NOT
+      // distinguishable between a real user's tap and a testing/validation
+      // session calling it directly -- see the field's comment in
+      // VirtualTrade.js for why no such signal exists in this codebase today.
+      // Phase 2: caller-overridable -- see this function's signature comment.
+      origin,
+      asset,
+      direction,
+      entryPrice,
+      stopLoss:   stopLoss   || null,
+      takeProfit: takeProfit || null,
+      atrAtEntry, // T-073: reused as-is from the caller's already-resolved suggestion
+      sizeUsd,
+      sizeMultiplier: edgeMultiplier,
+      trailingStopDistance: trailingDistanceFor(entryPrice, stopLoss),
+      signalId,
+      aiDecisionId,
+      openedAt:   new Date(),
+    });
+
+    if (!portfolio.startedAt) {
+      portfolio.startedAt = newTrade.openedAt;
+      await portfolio.save();
+    }
+
+    return newTrade;
   });
 
-  if (!portfolio.startedAt) {
-    portfolio.startedAt = trade.openedAt;
-    await portfolio.save();
-  }
-
-  logger.info(`[VirtualTracker] Guide suggestion approved — ${asset} ${direction} @ $${sizeUsd.toFixed(2)}`);
+  logger.info(`[VirtualTracker] Guide suggestion approved — ${asset} ${direction} @ $${trade.sizeUsd.toFixed(2)}`);
 
   // BUG-004 (2026-08-29 overnight validation): no notification-creation
   // code existed anywhere for trade-open events -- a user would only find
@@ -335,63 +370,89 @@ async function openFuturesTrade(signalId, requestedLeverage) {
     );
   }
 
-  const sig = await Signal.findById(signalId);
-  if (!sig || !sig.price?.entry) {
-    throw new Error('Signal not found or missing entry price.');
-  }
-  if (!['BUY', 'SELL'].includes(sig.direction)) {
-    throw new Error('Only BUY/SELL signals can be opened as futures.');
-  }
+  // Bug fix (2026-09-04, overnight continuous-improvement pass): unlike
+  // every other trade-opening path in this file (approveSuggestion,
+  // pickupNewSignals), this function had ZERO dedup check and no lock at
+  // all -- not a narrow race window, an unconditional gap. Two taps of
+  // "Open Futures" on the same signal (a double-tap, or a client retry
+  // after a slow response/timeout that actually succeeded) created TWO
+  // full futures positions, each independently sized off the same
+  // portfolio balance -- duplicated exposure and duplicated margin spend
+  // with no error, no warning, nothing to even notice it happened.
+  //
+  // Fixed the same way as the other two: wrap the whole check-through-
+  // create critical section in the shared portfolio mutex, and add the
+  // dedup check that was simply missing. The check is scoped to
+  // (signalId, productType: 'futures', status: 'open') rather than just
+  // signalId, because a signal legitimately CAN have both an
+  // auto-tracked spot VirtualTrade and a manually-opened futures one at
+  // the same time (see the comment above this function) -- this only
+  // blocks opening the *same* futures position on the *same* signal
+  // twice, not spot+futures coexisting.
+  const trade = await withPortfolioLock(async () => {
+    const sig = await Signal.findById(signalId);
+    if (!sig || !sig.price?.entry) {
+      throw new Error('Signal not found or missing entry price.');
+    }
+    if (!['BUY', 'SELL'].includes(sig.direction)) {
+      throw new Error('Only BUY/SELL signals can be opened as futures.');
+    }
 
-  const portfolio = await getPortfolio();
+    const alreadyOpen = await VirtualTrade.findOne({ signalId: sig._id, productType: 'futures', status: 'open' });
+    if (alreadyOpen) {
+      throw new Error('A futures position for this signal is already open — nothing new to open.');
+    }
 
-  const halt = await riskStateService.checkAndMaybeHalt(portfolio);
-  if (halt.halted) {
-    throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
-  }
-  safetyGate.assertTradeAllowed(
-    safetyGate.evaluateProposedTrade({
-      entryPrice: sig.price.entry, stopLoss: sig.price.stopLoss, direction: sig.direction, leverage,
-    })
-  );
-  const edgeMultiplier = await getEdgeMultiplier(sig.asset);
-  const baseMarginUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage;
-  const marginUsd = parseFloat(
-    capToMaxRisk(baseMarginUsd * edgeMultiplier, portfolio.currentBalance, `${sig.asset} futures margin`).toFixed(2)
-  );
+    const portfolio = await getPortfolio();
 
-  // At forced 1x leverage there is no margin call scenario -- the old
-  // formula (entry * (1 -/+ 1/leverage)) degenerates to 0 or 2x entry at
-  // leverage=1, which isn't a real liquidation price, just leftover algebra
-  // from when leverage was a free variable. Leave it null instead of a
-  // number that would confuse anything still reading this field for the
-  // "distance to liquidation" exposure check (getExposureSummary()).
-  const liquidationPrice = null;
+    const halt = await riskStateService.checkAndMaybeHalt(portfolio);
+    if (halt.halted) {
+      throw new Error(`Trading is halted for today: ${halt.reason}. A human must reset it before any new trade can open.`);
+    }
+    safetyGate.assertTradeAllowed(
+      safetyGate.evaluateProposedTrade({
+        entryPrice: sig.price.entry, stopLoss: sig.price.stopLoss, direction: sig.direction, leverage,
+      })
+    );
+    const edgeMultiplier = await getEdgeMultiplier(sig.asset);
+    const baseMarginUsd = (portfolio.currentBalance * portfolio.riskPerTradePct) / 100 / leverage;
+    const marginUsd = parseFloat(
+      capToMaxRisk(baseMarginUsd * edgeMultiplier, portfolio.currentBalance, `${sig.asset} futures margin`).toFixed(2)
+    );
 
-  const trade = await VirtualTrade.create({
-    signalId:         sig._id,
-    // T-074a: same ambiguity as 'guide_approval' -- known to come through
-    // this endpoint, not distinguishable between a real user and a
-    // testing/validation session calling it directly.
-    origin:           'futures_manual',
-    asset:            sig.asset,
-    direction:        sig.direction,
-    entryPrice:       sig.price.entry,
-    stopLoss:         sig.price.stopLoss   || null,
-    takeProfit:       sig.price.takeProfit || null,
-    sizeUsd:          parseFloat((marginUsd * leverage).toFixed(2)), // notional
-    sizeMultiplier:   parseFloat(edgeMultiplier.toFixed(2)),
-    productType:      'futures',
-    leverage,
-    marginUsd,
-    liquidationPrice,
-    trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
-    openedAt:         new Date(),
+    // At forced 1x leverage there is no margin call scenario -- the old
+    // formula (entry * (1 -/+ 1/leverage)) degenerates to 0 or 2x entry at
+    // leverage=1, which isn't a real liquidation price, just leftover algebra
+    // from when leverage was a free variable. Leave it null instead of a
+    // number that would confuse anything still reading this field for the
+    // "distance to liquidation" exposure check (getExposureSummary()).
+    const liquidationPrice = null;
+
+    return VirtualTrade.create({
+      signalId:         sig._id,
+      // T-074a: same ambiguity as 'guide_approval' -- known to come through
+      // this endpoint, not distinguishable between a real user and a
+      // testing/validation session calling it directly.
+      origin:           'futures_manual',
+      asset:            sig.asset,
+      direction:        sig.direction,
+      entryPrice:       sig.price.entry,
+      stopLoss:         sig.price.stopLoss   || null,
+      takeProfit:       sig.price.takeProfit || null,
+      sizeUsd:          parseFloat((marginUsd * leverage).toFixed(2)), // notional
+      sizeMultiplier:   parseFloat(edgeMultiplier.toFixed(2)),
+      productType:      'futures',
+      leverage,
+      marginUsd,
+      liquidationPrice,
+      trailingStopDistance: trailingDistanceFor(sig.price.entry, sig.price.stopLoss),
+      openedAt:         new Date(),
+    });
   });
 
   logger.info(
-    `[VirtualTracker] Opened FUTURES ${sig.asset} ${sig.direction} @ ${leverage}x ` +
-    `(forced -- leverage is banned) — margin $${marginUsd}, no liquidation risk at 1x`
+    `[VirtualTracker] Opened FUTURES ${trade.asset} ${trade.direction} @ ${leverage}x ` +
+    `(forced -- leverage is banned) — margin $${trade.marginUsd}, no liquidation risk at 1x`
   );
   return trade;
 }
@@ -798,13 +859,45 @@ async function getSummary(range = 'all') {
     if (!worstTrade || t.pnl < worstTrade.pnl) worstTrade = t;
   }
 
+  // Bug fix (2026-09-04, overnight continuous-improvement pass, 3rd audit
+  // pass): netProfit/netProfitPct below used to be computed straight off
+  // `portfolio.startingBalance` -- but that field isn't frozen, the
+  // admin-only POST /virtual/set-capital endpoint (setCapital(), see this
+  // file) can change it at any later time without touching `currentBalance`
+  // or trade history at all. That meant a mid-experiment capital top-up (or
+  // reduction) silently rewrote the headline "net profit since you started"
+  // number shown on the mobile Dashboard/Performance/Brain-Report screens,
+  // even though nothing about actual trading performance had changed --
+  // e.g. bump startingBalance from $500 to $2000 with currentBalance still
+  // at $600 and this used to report a $1400 LOSS out of nowhere, when the
+  // real trading history is a genuine $100 profit. This is the exact same
+  // bug class already fixed for the decision #22 graduation benchmark via
+  // the frozen `benchmarkStartBalance` field (see getBenchmarkComparison()'s
+  // own comment above) -- reusing that same field here rather than inventing
+  // a second one. Before any trade has ever opened (`startedAt` is still
+  // null) there's no history to protect yet, so a set-capital adjustment at
+  // that point is a legitimate "set my initial capital" action and netProfit
+  // against the live startingBalance is correct -- freeze only once trading
+  // has actually started, self-healing on first read same as
+  // getBenchmarkComparison() already does.
+  let netProfitBaseline = portfolio.startingBalance;
+  if (portfolio.startedAt) {
+    if (portfolio.benchmarkStartBalance == null) {
+      portfolio.benchmarkStartBalance = portfolio.startingBalance;
+      await portfolio.save();
+    }
+    netProfitBaseline = portfolio.benchmarkStartBalance;
+  }
+
   return {
     range,
     startingBalance: portfolio.startingBalance,
     currentBalance:  portfolio.currentBalance,
     riskPerTradePct: portfolio.riskPerTradePct,
-    netProfit:       parseFloat((portfolio.currentBalance - portfolio.startingBalance).toFixed(2)),
-    netProfitPct:    parseFloat(((portfolio.currentBalance - portfolio.startingBalance) / portfolio.startingBalance * 100).toFixed(2)),
+    netProfit:       parseFloat((portfolio.currentBalance - netProfitBaseline).toFixed(2)),
+    netProfitPct:    netProfitBaseline > 0
+      ? parseFloat(((portfolio.currentBalance - netProfitBaseline) / netProfitBaseline * 100).toFixed(2))
+      : 0,
     totalProfit:     parseFloat(totalProfit.toFixed(2)),
     totalLoss:       parseFloat(totalLoss.toFixed(2)),
     totalPnl:        parseFloat(totalPnl.toFixed(2)),
@@ -969,6 +1062,107 @@ async function getExposureSummary() {
   };
 }
 
+// ─── Buy-and-hold BTC benchmark (decision #22 graduation criterion) ──────────
+// Master-plan decision #22 (locked, 2026-09-03): graduating from paper to
+// real money requires "minimum 4-6 weeks of paper trading AND outperforming
+// a buy-and-hold BTC benchmark". This function only reports those two facts
+// -- it never decides "you should go live now" on its own. That call is the
+// founder's, same as every other consequential decision in this app
+// (mirrors decision #11's spirit: the app proposes/informs, a human decides).
+
+async function getBenchmarkComparison() {
+  const portfolio = await getPortfolio();
+
+  if (!portfolio.startedAt) {
+    return {
+      available: false,
+      message: 'No trades opened yet — the benchmark starts counting from your first trade.',
+    };
+  }
+
+  // Bug fix (2026-09-04, overnight continuous-improvement pass): the
+  // benchmark math below used to read `portfolio.startingBalance`
+  // directly, but that field isn't frozen -- the admin-only
+  // POST /virtual/set-capital endpoint can change it at any later time
+  // without touching `startedAt` (by design, for adjusting risk% or
+  // topping up paper capital mid-experiment). That meant a later
+  // set-capital call would silently retroact onto this ENTIRE benchmark
+  // comparison as if the new capital had been invested in BTC since the
+  // actual trading-start date -- e.g. bump startingBalance from $500 to
+  // $2000 three weeks in, and benchmarkValue below would compute as if
+  // $2000 had been buying-and-holding BTC the whole three weeks, wildly
+  // distorting `outperformingBenchmark`/`graduationCriteriaMet` (the exact
+  // criterion decision #22 gates moving to real money on). Freeze it here,
+  // the first time this function runs after `startedAt` is set, into a
+  // dedicated field setCapital() never touches -- self-healing on first
+  // read rather than requiring a migration, matching this codebase's
+  // existing convention for additive fields on already-running documents.
+  if (portfolio.benchmarkStartBalance == null) {
+    portfolio.benchmarkStartBalance = portfolio.startingBalance;
+    await portfolio.save();
+  }
+  const benchmarkStartBalance = portfolio.benchmarkStartBalance;
+
+  // BTC price at (or just before) the portfolio's actual start date.
+  const startPriceDoc = await MarketData.findOne({
+    asset: 'BTCUSDT', interval: '1h', timestamp: { $lte: portfolio.startedAt },
+  }).sort({ timestamp: -1 }).lean();
+  // Fallback: no candle on or before the start date (e.g. stored history
+  // only begins later) -- use the earliest one we DO have rather than
+  // failing outright; still reports honestly which one it used.
+  const priceDoc = startPriceDoc || await MarketData.findOne({
+    asset: 'BTCUSDT', interval: '1h',
+  }).sort({ timestamp: 1 }).lean();
+
+  if (!priceDoc) {
+    return { available: false, message: 'No BTC price history available yet to compute the benchmark.' };
+  }
+
+  const btcPriceAtStart = priceDoc.close;
+  const cachedBtc = binanceSvc().getCachedPrice('BTCUSDT');
+  const currentBtcPrice = cachedBtc ? (typeof cachedBtc === 'object' ? cachedBtc.price : cachedBtc) : null;
+
+  if (!currentBtcPrice || !btcPriceAtStart) {
+    return { available: false, message: 'No live BTC price available right now to compute the benchmark.' };
+  }
+
+  const benchmarkValue = benchmarkStartBalance * (currentBtcPrice / btcPriceAtStart);
+  const benchmarkReturnPct = ((currentBtcPrice / btcPriceAtStart) - 1) * 100;
+  const portfolioReturnPct = benchmarkStartBalance > 0
+    ? ((portfolio.currentBalance / benchmarkStartBalance) - 1) * 100
+    : 0;
+  const outperformingBenchmark = portfolio.currentBalance > benchmarkValue;
+
+  const daysElapsed  = (Date.now() - new Date(portfolio.startedAt).getTime()) / 86_400_000;
+  const weeksElapsed = daysElapsed / 7;
+  // "Minimum 4-6 weeks" -- 4 is the literal minimum of that range; the app
+  // never rounds this up to 6 on the user's behalf.
+  const minWeeksMet = weeksElapsed >= 4;
+
+  return {
+    available: true,
+    startedAt: portfolio.startedAt,
+    usedFallbackStartPrice: !startPriceDoc,
+    daysElapsed: Math.floor(daysElapsed),
+    weeksElapsed: parseFloat(weeksElapsed.toFixed(1)),
+    minWeeksMet,
+    // The frozen benchmark baseline, NOT necessarily today's live
+    // startingBalance setting (see this function's own comment on why) --
+    // this is what benchmarkValue/portfolioReturnPct above are actually
+    // computed against.
+    startingBalance: benchmarkStartBalance,
+    currentBalance: portfolio.currentBalance,
+    portfolioReturnPct: parseFloat(portfolioReturnPct.toFixed(2)),
+    btcPriceAtStart,
+    currentBtcPrice,
+    benchmarkValue: parseFloat(benchmarkValue.toFixed(2)),
+    benchmarkReturnPct: parseFloat(benchmarkReturnPct.toFixed(2)),
+    outperformingBenchmark,
+    // Both halves of decision #22's criterion, ANDed -- purely informational.
+    graduationCriteriaMet: minWeeksMet && outperformingBenchmark,
+  };
+}
+
 // ─── Reset / set-capital ─────────────────────────────────────────────────────
 
 async function resetPortfolio(startingBalance = 500, riskPerTradePct = 5) {
@@ -1004,4 +1198,5 @@ module.exports = {
   enableTrailingStop, getExposureSummary, getEdgeMultiplier, capToMaxRisk,
   approveSuggestion, previewSizeUsd, closePositionNow, MAX_POSITION_RISK_PCT,
   getTrackRecordByAsset, getWinLossBreakdown, computeSpotSizeUsd, getPortfolio,
+  getBenchmarkComparison,
 };

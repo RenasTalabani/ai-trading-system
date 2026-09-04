@@ -424,6 +424,44 @@ async function sendTradeClosedNotification(trade, portfolio) {
   }
 }
 
+// ─── DCA buy due (safety fix, 2026-09-04) ──────────────────────────────────────
+// In-app only, mirrors sendTradeOpenedNotification's scope -- this is the
+// user's cue to open the app and approve/skip a due DCA buy now that
+// dcaService.js no longer executes it automatically (decision #11).
+async function sendDcaBuyDueNotification(plan) {
+  const title = `🟡 DCA buy due — ${plan.asset}`;
+  const body  = `Your $${plan.amountPerBuy} recurring buy for ${plan.asset} is ready — open the app to approve or skip it.`;
+  await persistTradeEventNotification('dca_buy_due', title, body, {
+    planId: plan._id?.toString(),
+    asset: plan.asset,
+    amountUsd: plan.amountPerBuy,
+  });
+}
+
+// ─── AI proposal expired notification ──────────────────────────────────────────
+// Master-plan decision #11 keeps a human in the loop on every trade -- but
+// that only means something if the human finds out when their turn to act
+// quietly ran out. Without this, a proposal nobody answered in time just
+// vanished from the pending-proposal card with zero trace: the AI worker
+// cycle (aiWorkerService.expireStalePendingProposals()) blocks itself from
+// proposing anything new for as long as one sits unanswered, so silence here
+// meant the whole assistant looked "stuck" with no visible reason. In-app
+// only for now, matching sendTradeOpenedNotification's precedent of keeping
+// a new notification scoped to exactly the gap that was found.
+async function sendProposalExpiredNotification(proposal) {
+  const assets = [...new Set(
+    (proposal.options || []).flatMap(o => (o.allocations || []).map(a => a.asset))
+  )];
+  const title = '⏱ AI proposal expired';
+  const body  = assets.length
+    ? `Nobody answered in time, so it expired (price context went stale): ${assets.join(', ')}`
+    : 'A pending AI proposal expired unanswered — price context went stale.';
+  await persistTradeEventNotification('proposal_expired', title, body, {
+    proposalId: proposal._id?.toString(),
+    assets,
+  });
+}
+
 // ─── Generic push ────────────────────────────────────────────────────────────
 
 async function sendPushToUser(userId, title, body, data = {}) {
@@ -442,6 +480,8 @@ module.exports = {
   sendPushToUser,
   sendTradeOpenedNotification,
   sendTradeClosedNotification,
+  sendDcaBuyDueNotification,
+  sendProposalExpiredNotification,
   buildSignalMessage,
   getRiskFlags,
 };

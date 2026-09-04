@@ -32,8 +32,14 @@ logger = logging.getLogger("ai-service.global_analyzer")
 # ── Metadata ──────────────────────────────────────────────────────────────────
 
 ASSET_CLASS_MAP: dict[str, str] = {
+    # Master-plan decision #18 (locked, 2026-09-03): gold = PAXG (a digital
+    # token), never real XAUUSD forex. PAXGUSDT is now in TRACKED_ASSETS
+    # (binance_collector.py) so it's classified "crypto" here automatically
+    # via the comprehension below -- no separate "commodity" entry for gold
+    # exists anymore. XAGUSD/WTI/BRENT/EURUSD/GBPUSD/USDJPY are unaffected
+    # (out of scope for decision #18, which is gold-specific).
     **{a: "crypto"    for a in TRACKED_ASSETS},
-    "XAUUSD": "commodity", "XAGUSD": "commodity",
+    "XAGUSD": "commodity",
     "WTI":    "commodity", "BRENT":  "commodity",
     "EURUSD": "forex",     "GBPUSD": "forex",
     "USDJPY": "forex",
@@ -45,20 +51,39 @@ ASSET_DISPLAY: dict[str, str] = {
     "XRPUSDT":  "XRP",         "ADAUSDT":  "Cardano",
     "DOGEUSDT": "Dogecoin",    "AVAXUSDT": "Avalanche",
     "LINKUSDT": "Chainlink",   "MATICUSDT":"Polygon",
-    "XAUUSD":   "Gold",        "XAGUSD":   "Silver",
+    # Decision #18: gold is PAXGUSDT (Paxos Gold, a real Binance spot pair
+    # backed 1:1 by physical gold), not XAUUSD forex.
+    "PAXGUSDT": "Gold (PAXG)", "XAGUSD":   "Silver",
     "WTI":      "Crude Oil",   "BRENT":    "Brent Oil",
     "EURUSD":   "EUR / USD",   "GBPUSD":   "GBP / USD",
     "USDJPY":   "USD / JPY",
 }
 
 _NEWS_KEYWORDS: dict[str, str] = {
-    "XAUUSD": "gold",  "XAGUSD": "silver",
+    # No "PAXGUSDT" entry needed -- it's scored via _score_crypto now (see
+    # scan_all()), which sources its news score through UnifiedAnalyzer.analyze()
+    # like every other crypto asset, not through this multi-asset-only dict.
+    "XAGUSD": "silver",
     "WTI":    "oil",   "BRENT":  "oil",
     "EURUSD": "euro",  "GBPUSD": "pound",
     "USDJPY": "japan",
 }
 
-_CRYPTO_SCAN_LIMIT = 6
+# Decision #18 (2026-09-03): raised 6 -> 7 so PAXGUSDT (inserted into
+# TRACKED_ASSETS right after ADAUSDT, i.e. index 6 -- see
+# binance_collector.py) is guaranteed to land inside this slice and get
+# scanned every cycle via the full _score_crypto path (social/manipulation/
+# MTF/funding-rate signals included) -- previously XAUUSD was scanned
+# unconditionally every cycle via _score_multi_asset (no cap at all), so
+# this preserves that "always scanned" guarantee for gold specifically
+# while leaving every other crypto asset's scan-cost throttle unchanged
+# (still exactly 6 pre-existing cryptos scanned: BTC/ETH/BNB/SOL/XRP/ADA).
+# This is index-order-dependent and a little fragile -- if TRACKED_ASSETS
+# is reordered later without updating this comment's assumption, gold could
+# silently drop out of the scan again with no error. Worth hardening to an
+# explicit "always include" set in a future pass rather than relying on
+# array position.
+_CRYPTO_SCAN_LIMIT = 7
 
 # ── Phase 18 thresholds ───────────────────────────────────────────────────────
 MIN_CONFIDENCE  = 70

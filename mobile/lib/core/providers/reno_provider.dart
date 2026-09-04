@@ -126,16 +126,31 @@ class RenoNotifier extends StateNotifier<RenoState> {
   }
 
   // Dedicated approval action -- calls the dedicated backend endpoint with
-  // NO trade parameters (T-071 parity: the server re-resolves the
-  // suggestion itself and never trusts anything the client sends). This is
-  // the ONLY path that can open a real (paper) trade from RENO chat --
-  // ordinary chat text, including something like "yes" typed into the
-  // message box, is never interpreted as approval anywhere in this app.
-  Future<void> approvePlan() async {
+  // NO trade PARAMETERS (T-071 parity: the server re-resolves the
+  // suggestion itself and never trusts anything the client sends for
+  // entry/stop/target/amount). This is the ONLY path that can open a real
+  // (paper) trade from RENO chat -- ordinary chat text, including something
+  // like "yes" typed into the message box, is never interpreted as approval
+  // anywhere in this app.
+  //
+  // asset/action (2026-09-04, overnight continuous-improvement pass): the
+  // one exception to "no parameters" above, and identity-only -- pass the
+  // exact asset/action of the opportunity card being tapped so the backend
+  // can confirm it's still the same plan it's about to open. Without this,
+  // resolveSuggestion() runs a SECOND time server-side at approval and can
+  // legitimately return something different from what's on screen (a
+  // fresher signal appearing, the asset opened elsewhere in the meantime,
+  // the global-scan cache refreshing) -- silently opening a paper position
+  // in something the user never actually saw in this chat. Optional so
+  // existing/older call sites keep working unchanged.
+  Future<void> approvePlan({String? asset, String? action}) async {
     if (state.approving) return;
     state = state.copyWith(approving: true, clearErrors: true);
     try {
-      final res = await ApiService.dio.post(ApiConstants.conversationApprove);
+      final res = await ApiService.dio.post(
+        ApiConstants.conversationApprove,
+        data: (asset != null && action != null) ? {'asset': asset, 'action': action} : null,
+      );
       final data = res.data as Map<String, dynamic>;
       // Bug fix (UI/backend audit): the backend's `reply` field is a full
       // ConversationMessage object (see conversationController.approvePlan /
@@ -160,6 +175,13 @@ class RenoNotifier extends StateNotifier<RenoState> {
       final body = e.response?.data as Map?;
       final msg = body?['message'] as String? ?? "Couldn't approve that trade right now.";
       state = state.copyWith(approving: false, sendError: msg);
+      // On a stale-plan rejection the backend already wrote its explanation
+      // into the conversation as a real assistant message (same convention
+      // as the "no suggestion available" reply above) -- refresh so it
+      // shows up in the transcript instead of only as a transient banner.
+      if (body?['staleApproval'] == true) {
+        await loadThread();
+      }
     }
   }
 }

@@ -20,7 +20,25 @@ const notificationSchema = new mongoose.Schema({
     // notification list to know when the AI opened or closed a position
     // for them would never find out. 'trade_open'/'trade_closed' added so
     // both now use the same persisted-notification list signals already do.
-    enum: ['signal', 'alert', 'system', 'news', 'trade_open', 'trade_closed'],
+    //
+    // Bug found 2026-09-04 (overnight continuous-improvement pass): two
+    // newer call sites -- notificationService.sendDcaBuyDueNotification()
+    // and sendProposalExpiredNotification() -- pass 'dca_buy_due' and
+    // 'proposal_expired' to persistTradeEventNotification(), but this enum
+    // never listed either value. Every such Notification.create() call
+    // therefore failed Mongoose's own enum validation on every single
+    // invocation -- and because persistTradeEventNotification() wraps each
+    // per-user create() in its own `.catch(() => null)` (so one user's
+    // failure can't stop the others' from persisting), that ValidationError
+    // was swallowed with no warning logged anywhere: the DCA-buy-due and
+    // proposal-expired features read as fully wired up but silently
+    // produced zero in-app notifications in production. Same root-cause
+    // shape as BUG-004 above -- a documented notification path that was
+    // actually structurally unreachable.
+    enum: [
+      'signal', 'alert', 'system', 'news', 'trade_open', 'trade_closed',
+      'dca_buy_due', 'proposal_expired',
+    ],
     default: 'signal',
     index: true,
   },
@@ -43,6 +61,13 @@ const notificationSchema = new mongoose.Schema({
     pnl:        Number,
     pnlPct:     Number,
     exitReason: String,
+    // dca_buy_due (see the `type` enum comment above) -- also stripped
+    // silently until named here.
+    planId:     String,
+    amountUsd:  Number,
+    // proposal_expired (see the `type` enum comment above) -- ditto.
+    proposalId: String,
+    assets:     [String],
   },
 
   delivery: [deliverySchema],

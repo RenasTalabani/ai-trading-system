@@ -46,13 +46,46 @@ const virtualTradeSchema = new mongoose.Schema(
     //                             reusing 'guide_approval' so a trade opened
     //                             from a chat tap is distinguishable from one
     //                             opened from the Guide screen's button.
+    //   - 'ai_worker_approved'  — Bug fix (2026-09-04, overnight continuous-
+    //                             improvement pass): aiWorkerService.js's
+    //                             approveDecision()/approveAllocationProposal()
+    //                             (decisions #11 + #14's human "Approve"
+    //                             button for an AI-proposed decision/
+    //                             allocation option) have always written
+    //                             this exact string as `origin`, but it was
+    //                             never added to this enum -- so every real
+    //                             approval of an AI-worker proposal threw a
+    //                             Mongoose ValidationError out of
+    //                             VirtualTrade.create() instead of opening
+    //                             the trade, breaking the app's primary
+    //                             "AI proposes -> human approves" flow
+    //                             end-to-end. Deliberately its own value,
+    //                             not reused from 'ai_worker' above: that
+    //                             one is documented as "no HTTP request or
+    //                             human involved at all", which is the
+    //                             opposite of this path -- a human tapped
+    //                             Approve on an HTTP endpoint, same as
+    //                             guide_approval/conversation_approval, just
+    //                             for an AI-worker-sourced decision instead
+    //                             of a Guide/RENO one. The only reason this
+    //                             shipped unnoticed is that
+    //                             aiWorkerService.test.js stubs
+    //                             VirtualTrade.create with a plain object
+    //                             literal that never runs real Mongoose
+    //                             schema validation -- see
+    //                             virtualTradeOriginEnum.test.js for a test
+    //                             that exercises the real schema definition
+    //                             instead.
     // No default -- pre-existing trades are simply undefined on this field
     // (see likelyTestOrigin below for a separate, clearly-labeled
     // best-effort backfill for those), matching this schema's existing
     // convention for additive fields (see `decision` on Signal.js, T-066).
     origin: {
       type: String,
-      enum: ['ai_worker', 'signal_auto_pickup', 'guide_approval', 'futures_manual', 'conversation_approval'],
+      enum: [
+        'ai_worker', 'signal_auto_pickup', 'guide_approval', 'futures_manual',
+        'conversation_approval', 'ai_worker_approved',
+      ],
       index: true,
     },
 

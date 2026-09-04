@@ -221,3 +221,56 @@ class TestSmartSimulatorRun:
         many_assets = [f"A{i}USDT" for i in range(15)]
         result = await sim.run(capital=500.0, assets=many_assets, duration_days=7, risk_pct=5.0)
         assert len(result["per_asset"]) == 10
+
+
+class TestComputeIndicatorsRsiDuringSustainedRally:
+    """
+    Bug fix (2026-09-04, overnight continuous-improvement pass): the same
+    `loss.replace(0, np.nan)` defect already found and fixed in
+    multi_timeframe_analyzer.py's _compute_indicators() -- `loss` (a
+    14-period rolling mean) is legitimately exactly 0 during any sustained
+    rally with zero down candles in the window, and substituting NaN for
+    that turned a perfectly real "RSI approaching 100" case into an
+    undefined one.
+
+    Here the consequence is worse than a stale read elsewhere in this
+    codebase: _simulate_asset() calls df.dropna() immediately after this
+    function runs, which DELETES those rows from the backtest outright. In
+    a genuinely monotonic rally (a real, if extreme, market condition),
+    every row's 14-period loss window eventually contains zero down
+    candles, so the NaN cascades forever from that point on -- confirmed
+    directly: a 40-candle pure uptrend produced NaN RSI for ALL 40 rows
+    pre-fix (not just the ones in the rally), meaning dropna() would wipe
+    out the ENTIRE backtest for that asset instead of just the expected
+    14-row indicator warmup.
+    """
+
+    def _rally_df(self, n=40, start=100.0, step=1.0):
+        closes = [start + i * step for i in range(n)]
+        return pd.DataFrame({
+            "close": closes,
+            "high": [c + 0.1 for c in closes],
+            "low":  [c - 0.1 for c in closes],
+        })
+
+    def test_rsi_has_no_nan_after_the_real_indicator_warmup_period(self):
+        out = _compute_indicators(self._rally_df())
+        # The first 14 rows are a REAL, expected NaN (rolling(14) warmup,
+        # same either way) -- the regression this guards is any NaN AFTER
+        # that warmup, which only a wrongly-substituted zero-loss window
+        # during the rally itself would produce.
+        post_warmup = out["rsi"].iloc[14:]
+        assert post_warmup.notna().all(), (
+            f"unexpected NaN RSI during a sustained rally: {list(post_warmup[post_warmup.isna()].index)}"
+        )
+
+    def test_simulate_asset_does_not_silently_drop_mid_rally_candles(self):
+        raw = self._rally_df(n=40)
+        out = _compute_indicators(raw.copy())
+        # Mirrors exactly what _simulate_asset()'s own first line does.
+        cleaned = out.dropna().reset_index(drop=True)
+        dropped = len(raw) - len(cleaned)
+        # Only the natural 14-row indicator warmup should ever be dropped --
+        # not the entire backtest, which is what pre-fix code did for any
+        # monotonic rally.
+        assert dropped == 14, f"expected exactly the 14-row warmup dropped, got {dropped} rows dropped"

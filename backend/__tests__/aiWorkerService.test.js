@@ -25,6 +25,7 @@ jest.mock('../src/jobs/globalScanJob', () => ({ getCache: jest.fn(() => null) })
 jest.mock('../src/services/notificationService', () => ({
   sendTradeOpenedNotification: jest.fn(async () => {}),
   sendTradeClosedNotification: jest.fn(async () => {}),
+  sendProposalExpiredNotification: jest.fn(async () => {}),
 }));
 
 const BudgetSession       = require('../src/models/BudgetSession');
@@ -89,6 +90,11 @@ beforeEach(() => {
   };
   AIDecision.findById = async (id) => CREATED_DECISIONS.find(d => d._id === id) || null;
   AllocationProposal.findOne = async () => null; // default: nothing pending yet
+  // expireStalePendingProposals() now runs at the very top of every
+  // runAIWorkerCycle() call (see the fix this default supports) -- default
+  // to "nothing stale" so every pre-existing test in this file, none of
+  // which is about expiry, keeps behaving exactly as before.
+  AllocationProposal.find = async () => [];
   AllocationProposal.create = async (doc) => {
     const p = {
       ...doc,
@@ -99,6 +105,22 @@ beforeEach(() => {
     return p;
   };
   AllocationProposal.findById = async (id) => CREATED_PROPOSALS.find(p => p._id === id) || null;
+  // approveAllocationProposal() (2026-09-04 fix) claims a proposal
+  // atomically via findOneAndUpdate instead of findById()+save(), to close
+  // a real concurrent-approval race (see approveAllocationProposalRace.test.js)
+  // -- mutate the SAME in-memory object findById()/the assertions below
+  // already hold a reference to, the same way Mongo's real findOneAndUpdate
+  // would apply the update to the one real document.
+  AllocationProposal.findOneAndUpdate = async (filter, update) => {
+    const p = CREATED_PROPOSALS.find(x => String(x._id) === String(filter._id));
+    if (!p || (filter.status && p.status !== filter.status)) return null;
+    Object.assign(p, update);
+    return p;
+  };
+  AllocationProposal.updateOne = async (filter, update) => {
+    const p = CREATED_PROPOSALS.find(x => String(x._id) === String(filter._id));
+    if (p) Object.assign(p, update);
+  };
   RiskState.findOne = async () => FAKE_RISK_STATE;
   RiskState.create = async () => FAKE_RISK_STATE;
   MarketRegimeHistory.create = async () => ({});
@@ -132,7 +154,9 @@ process.env.AI_MIN_QUALITY_SCORE = '0';
 const {
   runAIWorkerCycle, approveDecision, rejectDecision, getPendingDecision,
   approveAllocationProposal, rejectAllocationProposal, getPendingProposal,
+  expireStalePendingProposals,
 } = require('../src/services/aiWorkerService');
+const notificationService = require('../src/services/notificationService');
 
 test('runAIWorkerCycle completes without throwing (regression: TDZ crash on every cycle)', async () => {
   await expect(runAIWorkerCycle()).resolves.toBeDefined();
@@ -172,6 +196,70 @@ test('a pending proposal blocks a new cycle from creating another one (decision 
   const result = await runAIWorkerCycle();
   expect(result.skipped).toBe('pending_proposal_exists');
   expect(CREATED_DECISIONS).toHaveLength(0);
+});
+
+// Bug found 2026-09-04 (overnight continuous-improvement pass): the guard
+// above -- "one pending decision at a time" -- had no matching expiry, so a
+// proposal nobody ever answered blocked the worker from proposing anything
+// new FOREVER, and an old-price proposal approved days later would still
+// open a trade at that stale price. expireStalePendingProposals() (called
+// at the very top of every runAIWorkerCycle()) is the fix; see its own
+// comment in aiWorkerService.js for the full reasoning.
+describe('expireStalePendingProposals — a proposal nobody answers eventually clears itself (bug fix, 2026-09-04)', () => {
+  function makeProposal(id, ageHours, status = 'PENDING_APPROVAL') {
+    const decisionIds = [`${id}-decA`, `${id}-decB`];
+    for (const did of decisionIds) {
+      CREATED_DECISIONS.push({ _id: did, status: 'PENDING_APPROVAL' });
+    }
+    return {
+      _id: id,
+      status,
+      createdAt: new Date(Date.now() - ageHours * 3_600_000),
+      options: [{ key: 'opt1', allocations: decisionIds.map(aiDecisionId => ({ aiDecisionId })) }],
+      decidedAt: null,
+      save: async function () { return this; },
+    };
+  }
+
+  test('a 4h-old (past the 3h default) PENDING_APPROVAL proposal is marked EXPIRED, its decisions too', async () => {
+    const stale = makeProposal('stale1', 4);
+    AllocationProposal.find = async () => [stale];
+
+    await expireStalePendingProposals();
+
+    expect(stale.status).toBe('EXPIRED');
+    expect(stale.decidedAt).not.toBeNull();
+    expect(CREATED_DECISIONS.filter(d => d._id.startsWith('stale1')).every(d => d.status === 'EXPIRED')).toBe(true);
+    expect(notificationService.sendProposalExpiredNotification).toHaveBeenCalledWith(stale);
+  });
+
+  test('a fresh proposal (under the cutoff) is never touched — AllocationProposal.find already filters by createdAt, this just documents the contract', async () => {
+    AllocationProposal.find = async () => []; // a real cutoff query would exclude a fresh one
+    await expireStalePendingProposals();
+    expect(notificationService.sendProposalExpiredNotification).not.toHaveBeenCalled();
+  });
+
+  test('runAIWorkerCycle expires a stale proposal and then proceeds — the app is never stuck forever (the actual bug)', async () => {
+    const stale = makeProposal('stale2', 5);
+    // First call still sees it (as the real query would, before it's saved);
+    // once expired, a second read (what the existingPending check does next
+    // in the SAME cycle) must no longer see it as PENDING_APPROVAL.
+    AllocationProposal.find   = async () => [stale];
+    AllocationProposal.findOne = async () => (stale.status === 'PENDING_APPROVAL' ? stale : null);
+    SCAN_RESPONSE = {
+      success: true, scanned: 1,
+      top_opportunities: [{
+        asset: 'UNSTUCKUSDT', action: 'BUY', confidence: 99, fused_score: 99, quality_score: 99,
+        current_price: 100, stop_loss: 95, take_profit: 110,
+      }],
+    };
+
+    const result = await runAIWorkerCycle();
+
+    expect(stale.status).toBe('EXPIRED');
+    expect(result.skipped).not.toBe('pending_proposal_exists');
+    expect(result.proposalsCreated).toBe(1); // a brand new proposal was created in the same cycle
+  });
 });
 
 test('daily-loss circuit breaker pauses proposals when the threshold is hit (decision #16)', async () => {

@@ -40,6 +40,24 @@ exports.stats = async (req, res) => {
   }
 };
 
+// GET /api/v1/ai-brain/decisions?limit=100 — master-plan decision #21: "one
+// main screen only, everything else in a secondary settings/history panel".
+// This is the full, all-assets decision log that panel reads (asset-scoped
+// history already existed below as assetHistory; this is the general one).
+// Read-only, same AIDecision documents the main screen's pending-proposal
+// card already shows before they're acted on -- nothing new is computed or
+// exposed here, just a wider, older view of the same log.
+exports.history = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const decisions = await AIDecision.find().sort({ createdAt: -1 }).limit(limit).lean();
+    return res.json({ success: true, decisions });
+  } catch (err) {
+    logger.error('[AiBrain] history error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /api/v1/ai-brain/decisions/:asset
 exports.assetHistory = async (req, res) => {
   try {

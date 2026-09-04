@@ -85,9 +85,9 @@ class TestFusedScoreNoLongerMathematicallyPinnedToNeutralUnderMildBias:
         monkeypatch.setattr("app.services.global_analyzer._rl_engine", FixedRlWeights())
 
         analyzer = GlobalAnalyzer(None, None, None)
-        result_neutral   = await analyzer._score_multi_asset("XAUUSD", 500.0, "neutral")
-        result_mild_bull = await analyzer._score_multi_asset("XAUUSD", 500.0, "mild_bull")
-        result_mild_bear = await analyzer._score_multi_asset("XAUUSD", 500.0, "mild_bear")
+        result_neutral   = await analyzer._score_multi_asset("EURUSD", 500.0, "neutral")
+        result_mild_bull = await analyzer._score_multi_asset("EURUSD", 500.0, "mild_bull")
+        result_mild_bear = await analyzer._score_multi_asset("EURUSD", 500.0, "mild_bear")
 
         # Regression: before the fix, all three would have produced the
         # exact same fused_score (macro_sc pinned at 50 in every case).

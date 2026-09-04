@@ -1,7 +1,12 @@
 """
 MultiAssetCollector — OHLCV data for commodities and forex.
 Uses yfinance (Yahoo Finance) — completely free, no API key required.
-Covers: Gold, Silver, WTI Oil, Brent Oil, EUR/USD, GBP/USD, USD/JPY.
+Covers: Silver, WTI Oil, Brent Oil, EUR/USD, GBP/USD, USD/JPY.
+
+Gold is deliberately NOT here (master-plan decision #18, locked
+2026-09-03: gold = PAXG, a digital token, never real XAUUSD forex). It's
+tracked as PAXGUSDT through binance_collector.py instead, same as every
+other crypto asset.
 """
 import asyncio
 import logging
@@ -15,9 +20,9 @@ from app.services import indicators as ind
 
 logger = logging.getLogger("ai-service.multi_asset_collector")
 
-# Internal symbol → Yahoo Finance ticker
+# Internal symbol → Yahoo Finance ticker. No "XAUUSD" entry -- decision #18
+# (see module docstring).
 YAHOO_SYMBOLS: dict[str, str] = {
-    "XAUUSD": "GC=F",      # Gold futures
     "XAGUSD": "SI=F",      # Silver futures
     "WTI":    "CL=F",      # WTI Crude Oil futures
     "BRENT":  "BZ=F",      # Brent Crude Oil futures
@@ -27,7 +32,6 @@ YAHOO_SYMBOLS: dict[str, str] = {
 }
 
 ALL_MULTI_ASSETS: dict[str, str] = {
-    "XAUUSD": "commodity",
     "XAGUSD": "commodity",
     "WTI":    "commodity",
     "BRENT":  "commodity",

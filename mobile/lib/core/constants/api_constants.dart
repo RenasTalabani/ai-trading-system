@@ -56,6 +56,11 @@ class ApiConstants {
   static const String virtualReset       = '$apiV1/virtual/reset';
   static const String virtualSetCapital  = '$apiV1/virtual/set-capital';
 
+  // DCA -- approve/skip a due buy (decision #11 safety fix, 2026-09-04):
+  // the daily cron only flags a plan as due now, it never buys on its own.
+  static String dcaApproveBuy(String planId) => '$apiV1/virtual/dca/$planId/approve-buy';
+  static String dcaSkipBuy(String planId)    => '$apiV1/virtual/dca/$planId/skip-buy';
+
   // AI
   static const String aiStatus = '$apiV1/ai/status';
 
@@ -68,6 +73,21 @@ class ApiConstants {
   static const String conversationThread  = '$apiV1/conversation';
   static const String conversationMessage = '$apiV1/conversation/message';
   static const String conversationApprove = '$apiV1/conversation/approve';
+
+  // AI Brain -- allocation proposals (decisions #11 + #14). This is the
+  // AI-worker-cycle flow: one pending card with 2-4 choices and exactly one
+  // AI-recommended pick, separate from the single-suggestion Guide flow above.
+  static const String aiBrainPendingProposal = '$apiV1/ai-brain/pending-proposal';
+  static String aiBrainProposalApprove(String proposalId) => '$apiV1/ai-brain/proposals/$proposalId/approve';
+  static String aiBrainProposalReject(String proposalId)  => '$apiV1/ai-brain/proposals/$proposalId/reject';
+
+  // Daily-loss circuit breaker (decision #16) -- persistent, human-reset-only.
+  static const String riskState      = '$apiV1/virtual/risk-state';
+  static const String riskStateReset = '$apiV1/virtual/risk-state/reset';
+
+  // AI Brain -- decision history (master-plan decision #21: "one main
+  // screen only, everything else in a secondary settings/history panel").
+  static const String aiBrainDecisionHistory = '$apiV1/ai-brain/decisions';
 
   // WebSocket
   static const String wsUrl = String.fromEnvironment(

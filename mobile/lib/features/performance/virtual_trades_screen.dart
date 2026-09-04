@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/virtual_portfolio_provider.dart';
 import '../../core/providers/exposure_provider.dart';
+import '../../core/providers/benchmark_provider.dart';
 import '../../core/models/virtual_portfolio_model.dart';
 import '../../core/models/exposure_model.dart';
 import '../../core/theme/app_theme.dart';
@@ -98,13 +99,17 @@ class _TradeList extends ConsumerWidget {
     }
 
     final showExposure = status == 'open';
-    final headerCount = showExposure ? 1 : 0;
+    // Decision #22's benchmark is about overall trading performance, not
+    // currently-open exposure -- shown on the "All" tab instead.
+    final showBenchmark = status == null;
+    final headerCount = (showExposure || showBenchmark) ? 1 : 0;
 
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: () async {
         await ref.read(virtualTradesProvider.notifier).fetch(page: 1, status: status);
         if (showExposure) await ref.read(exposureProvider.notifier).refresh();
+        if (showBenchmark) await ref.read(benchmarkProvider.notifier).fetch();
       },
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
@@ -114,6 +119,12 @@ class _TradeList extends ConsumerWidget {
             return const Padding(
               padding: EdgeInsets.only(bottom: 12),
               child: _ExposureCard(),
+            );
+          }
+          if (showBenchmark && index == 0) {
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: _BenchmarkCard(),
             );
           }
           final i = index - headerCount;
@@ -189,6 +200,86 @@ class _ExposureCard extends ConsumerWidget {
                 text: '${exposure.nearLiquidationCount} futures position(s) are within 5% of liquidation.',
               ),
             ],
+          ]),
+        );
+      },
+    );
+  }
+}
+
+// ─── Buy-and-hold BTC benchmark (decision #22 graduation criterion) ────────────
+// Informational only -- states the two facts the plan asks for (elapsed
+// time, benchmark comparison) and never tells the user "go live now". That
+// call belongs to the founder, same as every other consequential decision
+// in this app.
+class _BenchmarkCard extends ConsumerWidget {
+  const _BenchmarkCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(benchmarkProvider);
+
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (b) {
+        if (!b.available) return const SizedBox.shrink();
+
+        final outperforming = b.outperformingBenchmark ?? false;
+        final resultColor = outperforming ? AppColors.success : AppColors.error;
+        final portfolioPct = b.portfolioReturnPct ?? 0;
+        final benchmarkPct = b.benchmarkReturnPct ?? 0;
+
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('vs. Buy & Hold BTC',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textMuted)),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _ExposureStat(
+                  label: 'Your Return',
+                  value: '${portfolioPct >= 0 ? '+' : ''}${portfolioPct.toStringAsFixed(1)}%',
+                  color: portfolioPct >= 0 ? AppColors.success : AppColors.error)),
+              Expanded(child: _ExposureStat(
+                  label: 'BTC Buy & Hold',
+                  value: '${benchmarkPct >= 0 ? '+' : ''}${benchmarkPct.toStringAsFixed(1)}%')),
+              Expanded(child: _ExposureStat(
+                  label: 'Weeks Trading',
+                  value: b.weeksElapsed != null ? b.weeksElapsed!.toStringAsFixed(1) : '—')),
+            ]),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: resultColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(outperforming ? Icons.trending_up : Icons.trending_down, size: 15, color: resultColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    outperforming
+                        ? "You're beating simple Buy & Hold BTC right now."
+                        : 'Buy & Hold BTC is currently ahead of your paper trading.',
+                    style: TextStyle(fontSize: 12, color: resultColor, height: 1.4),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              b.graduationCriteriaMet == true
+                  ? 'Both graduation conditions from the plan (4+ weeks, beating this benchmark) are currently met — this is information, not an instruction to switch to real money.'
+                  : 'Graduating to real money (per the plan) needs at least 4 weeks of paper trading AND beating this benchmark — not there yet.',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11, height: 1.4),
+            ),
           ]),
         );
       },

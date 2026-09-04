@@ -42,10 +42,28 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ema200"] = close.ewm(span=200, adjust=False).mean()
 
     # RSI
+    # Bug fix (2026-09-04, overnight continuous-improvement pass):
+    # loss.replace(0, np.nan) turned a completely ordinary event -- a
+    # sustained rally with zero red candles anywhere in the 14-period
+    # lookback, which real assets do regularly -- into a NaN RSI on
+    # exactly the most recent candle. _score_timeframe() below reads
+    # df.dropna().iloc[-1], and dropna() drops on ANY NaN column, so a
+    # NaN RSI on only the latest row made it silently fall back to an
+    # OLDER, stale candle (or, if the rally is longer than 14 candles,
+    # wipes out the whole frame and raises an IndexError that
+    # _analyze_one()'s broad except swallows into a neutral HOLD/50
+    # fallback with zero indication anything went wrong). Either way this
+    # directly weakens the multi-timeframe confirmation leg of decision
+    # #8's noise filter, and does so specifically during the sharp,
+    # sustained moves that gate exists to scrutinize. Fixed with the same
+    # epsilon-guard pattern indicators.py's rsi() already uses elsewhere
+    # in this codebase (`avg_loss + 1e-9`) instead of turning a
+    # zero-loss window into NaN -- a zero-loss window is a real, finite
+    # RSI approaching 100, not an undefined one.
     delta = close.diff()
     gain  = delta.clip(lower=0).rolling(14).mean()
     loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    rs    = gain / loss.replace(0, np.nan)
+    rs    = gain / (loss + 1e-9)
     df["rsi"] = 100 - (100 / (1 + rs))
 
     # MACD
@@ -68,7 +86,11 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     std20       = close.rolling(20).std()
     df["bb_upper"] = sma20 + 2 * std20
     df["bb_lower"] = sma20 - 2 * std20
-    df["bb_pct"]   = (close - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"]).replace(0, np.nan)
+    # Same fix as RSI above, same reason: a flat 20-period band (bb_upper
+    # == bb_lower) is rare but not impossible, and turning it into NaN
+    # risks the identical stale-candle/IndexError failure mode via
+    # df.dropna().iloc[-1] below.
+    df["bb_pct"]   = (close - df["bb_lower"]) / ((df["bb_upper"] - df["bb_lower"]) + 1e-9)
 
     # Volume trend
     df["vol_ma"] = df["volume"].rolling(20).mean()

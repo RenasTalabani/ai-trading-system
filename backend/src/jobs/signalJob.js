@@ -8,7 +8,9 @@ const logger = require('../config/logger');
 
 // Non-Binance assets (routed by the AI service through Yahoo Finance) that
 // still go through the same predict → signal → notification pipeline.
-const EXTENDED_ASSETS = ['XAUUSD'];
+// Empty since decision #18 (locked, 2026-09-03): gold moved from XAUUSD to
+// PAXGUSDT, which is already in TRACKED_ASSETS below -- no longer "extended".
+const EXTENDED_ASSETS = [];
 
 const CONFIDENCE_THRESHOLD = () => parseInt(process.env.SIGNAL_CONFIDENCE_THRESHOLD) || 70;
 const MAX_SIGNALS_PER_HOUR = () => parseInt(process.env.MAX_SIGNALS_PER_HOUR) || 10;

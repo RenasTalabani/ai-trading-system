@@ -1,7 +1,8 @@
 """
 T-066 (2026-08-29): the Guide home-screen pipeline (globalScanJob ->
 GlobalAnalyzer.scan_all() -> UnifiedAnalyzer.analyze(), for crypto; the
-sibling GlobalAnalyzer._score_multi_asset() for gold/oil/forex) had no
+sibling GlobalAnalyzer._score_multi_asset() for oil/forex -- gold has
+since moved to the crypto path as PAXGUSDT, decision #18) had no
 equivalent of the WAIT/AVOID `decision` label T-065 added to
 SignalEngine.generate_signal() (the module /predict calls) -- the two AI
 pipelines disagreed on how they express a non-actionable or risky call,
@@ -24,7 +25,8 @@ add (see the two functions' own comments for the full reasoning):
   function T-065 already uses (reused, not reimplemented, so both AI
   pipelines share one WAIT/AVOID definition) -- documented as a
   follow-up requiring new I/O, not guessed at.
-- _score_multi_asset() (gold/oil/forex) has no social/manipulation
+- _score_multi_asset() (oil/forex; gold moved to the crypto path as
+  PAXGUSDT, decision #18) has no social/manipulation
   source of ANY kind (confirmed: no SocialAnalyzer call anywhere in that
   method) -- so for that asset class, `decision` can only ever equal
   `action` (or WAIT for a HOLD), never AVOID. That's an honest reflection
@@ -191,5 +193,5 @@ class TestGlobalAnalyzerMultiAssetHasNoManipulationSourceSoNeverAvoids(object):
             _fake_fetch_asset_data,
         )
         analyzer = GlobalAnalyzer(None, None, None)
-        result = await analyzer._score_multi_asset("XAUUSD", 500.0, "neutral")
+        result = await analyzer._score_multi_asset("EURUSD", 500.0, "neutral")
         assert result["decision"] in ("WAIT",)  # never AVOID -- no social source exists for this class

@@ -113,7 +113,32 @@ class _RenoScreenState extends ConsumerState<RenoScreen> {
                               if (i >= state.messages.length) {
                                 return const _TypingIndicator();
                               }
-                              return _MessageBlock(message: state.messages[i]);
+                              // Bug fix (2026-09-04, overnight continuous-
+                              // improvement pass): every past chat message
+                              // that ever carried a get_suggestion opportunity
+                              // rendered its own live "Approve Trade" button
+                              // forever -- tapping an OLD card didn't approve
+                              // *that* card's plan (approvePlan() has no
+                              // per-message id; it always re-resolves and
+                              // opens whatever the server's CURRENT
+                              // suggestion is, see conversationService.js's
+                              // approvePlan()). A user scrolling back and
+                              // tapping a stale card from an earlier
+                              // BTCUSDT suggestion could unknowingly open a
+                              // trade on a completely different, currently-
+                              // live suggestion -- undermining decision #11's
+                              // explicit-approval guarantee (approving what
+                              // you believe you're approving). Only the most
+                              // recent opportunity card in the transcript can
+                              // still correspond to "the current suggestion",
+                              // so only it stays actionable; older ones are
+                              // shown as read-only history instead.
+                              final isLatestOpportunity = state.messages[i].opportunity != null &&
+                                  i == _lastOpportunityIndex(state.messages);
+                              return _MessageBlock(
+                                message: state.messages[i],
+                                isLatestOpportunity: isLatestOpportunity,
+                              );
                             },
                           ),
           ),
@@ -126,6 +151,18 @@ class _RenoScreenState extends ConsumerState<RenoScreen> {
       ),
     );
   }
+}
+
+// Index of the last message in the transcript that carries an opportunity —
+// see the 2026-09-04 bug-fix comment above where this is used. Only that one
+// message's Approve button can still correspond to the server's current
+// suggestion (approvePlan() has no per-message id and always re-resolves
+// "the" current suggestion), so every earlier opportunity card is read-only.
+int _lastOpportunityIndex(List<RenoMessage> messages) {
+  for (var i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].opportunity != null) return i;
+  }
+  return -1;
 }
 
 class _PaperTradingBanner extends StatelessWidget {
@@ -336,7 +373,12 @@ class _InputBar extends StatelessWidget {
 
 class _MessageBlock extends ConsumerWidget {
   final RenoMessage message;
-  const _MessageBlock({required this.message});
+  // See the 2026-09-04 bug-fix comment where this is computed: only the
+  // single most recent opportunity card in the whole transcript is still
+  // actionable, since approvePlan() always approves whatever the server's
+  // CURRENT suggestion is, not "this card's" plan specifically.
+  final bool isLatestOpportunity;
+  const _MessageBlock({required this.message, this.isLatestOpportunity = false});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -377,7 +419,7 @@ class _MessageBlock extends ConsumerWidget {
           ),
           if (opportunity != null) ...[
             const SizedBox(height: 10),
-            _OpportunityCard(opportunity: opportunity),
+            _OpportunityCard(opportunity: opportunity, isActionable: isLatestOpportunity),
           ],
           if (positions != null) ...[
             const SizedBox(height: 10),
@@ -429,7 +471,14 @@ class _ProactiveLabel extends StatelessWidget {
 // open a (paper) trade.
 class _OpportunityCard extends ConsumerWidget {
   final RenoOpportunity opportunity;
-  const _OpportunityCard({required this.opportunity});
+  // False for every opportunity card except the most recent one in the
+  // transcript — see the 2026-09-04 bug-fix comment in _RenoScreenState's
+  // build() where this is computed. A stale card can no longer be approved
+  // from here: approvePlan() has no per-message id, so tapping it would
+  // silently approve whatever the server's CURRENT suggestion is instead of
+  // the plan actually shown on this older card.
+  final bool isActionable;
+  const _OpportunityCard({required this.opportunity, this.isActionable = true});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -443,7 +492,7 @@ class _OpportunityCard extends ConsumerWidget {
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: isActionable ? AppColors.border : AppColors.border.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -490,30 +539,57 @@ class _OpportunityCard extends ConsumerWidget {
                 )),
           ],
           const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            height: 46,
-            child: ElevatedButton(
-              onPressed: state.approving ? null : () {
-                HapticFeedback.mediumImpact();
-                ref.read(renoProvider.notifier).approvePlan();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isAvoid ? AppColors.warning : AppColors.primary,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          if (isActionable) ...[
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: ElevatedButton(
+                onPressed: state.approving ? null : () {
+                  HapticFeedback.mediumImpact();
+                  // Pass this exact card's asset/action through so the backend
+                  // can confirm the plan hasn't changed since it was shown
+                  // (2026-09-04 fix -- see reno_provider.dart's approvePlan()).
+                  ref.read(renoProvider.notifier).approvePlan(
+                    asset: opportunity.asset,
+                    action: opportunity.action,
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isAvoid ? AppColors.warning : AppColors.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: state.approving
+                    ? const SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                    : const Text('Approve Trade', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               ),
-              child: state.approving
-                  ? const SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
-                  : const Text('Approve Trade', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Tapping Approve opens a paper trade using this exact plan — the '
-            'server re-checks the numbers itself before opening it.',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 11, height: 1.4),
-          ),
+            const SizedBox(height: 6),
+            const Text(
+              'Tapping Approve opens a paper trade using this exact plan — the '
+              'server re-checks the numbers itself before opening it.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 11, height: 1.4),
+            ),
+          ] else ...[
+            // Bug fix (2026-09-04): this card is no longer the latest
+            // opportunity in the transcript, so it's shown as read-only
+            // history instead of a live, tappable button — see the
+            // 2026-09-04 comment on `isActionable` above for why a stale
+            // card must never be directly approvable.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.textMuted.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'This suggestion is no longer the latest one — ask RENO for a fresh '
+                'check before approving anything.',
+                style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.4, fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
         ],
       ),
     );

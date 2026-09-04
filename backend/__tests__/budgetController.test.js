@@ -184,9 +184,16 @@ describe('budgetController.status (general coverage)', () => {
       status: 'active', budget: 1000, riskLevel: 'medium', preferredAsset: 'ALL',
       startedAt: new Date(), snapshotBalance: 1000,
     }));
+    // Bug fix (2026-09-04): totalLoss is ALWAYS persisted as a positive
+    // magnitude in real production code (virtualTrackingService.js:
+    // `totalLoss += Math.abs(pnl)`) -- this mock previously used -50 (a
+    // negative value), which is not a real shape this field ever takes and
+    // happened to make the pre-fix `totalProfit + totalLoss` bug produce a
+    // coincidentally-plausible-looking number, masking the real bug. Fixed
+    // to the real, positive-magnitude convention.
     VirtualPortfolio.findOne = jest.fn(async () => ({
       currentBalance: 1150, startingBalance: 1000,
-      totalProfit: 200, totalLoss: -50,
+      totalProfit: 200, totalLoss: 50,
       winCount: 6, lossCount: 4,
       maxDrawdown: 30, bestTrade: 80, worstTrade: -20,
     }));
@@ -220,6 +227,63 @@ describe('budgetController.status (general coverage)', () => {
     expect(res.body.performance.sessionPnL).toBe(0);
     expect(res.body.performance.winRate).toBe(0);
     expect(res.body.performance.totalTrades).toBe(0);
+  });
+
+  // Bug fix regression (2026-09-04, overnight continuous-improvement pass,
+  // follow-up audit): totalPnL used to SUM totalProfit and totalLoss
+  // instead of netting them. Since totalLoss is always a positive
+  // magnitude in real data, this made totalPnL inflated and almost always
+  // positive regardless of actual performance. Deliberately uses a
+  // loss-heavy portfolio (small profit, large loss) so the bug's direction
+  // -- reporting a large positive number where the truth is a large
+  // negative one -- is unambiguous, unlike the profit-heavy suite above
+  // where a sign bug and an addition bug can coincidentally agree.
+  test('totalPnL nets a real net LOSS correctly, not an inflated positive sum', async () => {
+    BudgetSession.findOne = jest.fn(async () => ({
+      status: 'active', budget: 1000, riskLevel: 'medium', preferredAsset: 'ALL',
+      startedAt: new Date(), snapshotBalance: 1000,
+    }));
+    VirtualPortfolio.findOne = jest.fn(async () => ({
+      currentBalance: 510, startingBalance: 1000,
+      totalProfit: 10, totalLoss: 500, // real net: 10 - 500 = -490
+      winCount: 1, lossCount: 9,
+      maxDrawdown: 49, bestTrade: 10, worstTrade: -100,
+    }));
+    VirtualTrade.countDocuments = jest.fn(async () => 0);
+
+    const { req, res } = fakeReqRes();
+    await budgetController.status(req, res);
+
+    expect(res.body.performance.totalPnL).toBe(-490);
+  });
+});
+
+// Bug fix regression suite (2026-09-04, overnight continuous-improvement
+// pass, follow-up audit): /budget/start reset startingBalance/
+// currentBalance to the new budget but left `benchmarkStartBalance`
+// untouched -- a brand-new session (a different budget amount) would then
+// get benchmarked against a leftover dollar baseline from the PREVIOUS
+// session, corrupting outperformingBenchmark/graduationCriteriaMet, the
+// exact signal decision #22 gates moving to real money on.
+describe('budgetController.start clears the stale graduation-benchmark baseline', () => {
+  test('starting a new session explicitly nulls benchmarkStartBalance so it re-seeds from the new budget', async () => {
+    BudgetSession.findOne = jest.fn(async () => ({
+      sessionKey: 'global', save: jest.fn(async function () { return this; }),
+    }));
+    VirtualPortfolio.findOneAndUpdate = jest.fn(async () => ({}));
+    VirtualTrade.updateMany = jest.fn(async () => ({}));
+
+    const res = await request(app)
+      .post('/budget/start')
+      .set('x-test-role', 'admin')
+      .send({ budget: 2000 });
+
+    expect(res.status).toBe(200);
+    expect(VirtualPortfolio.findOneAndUpdate).toHaveBeenCalledWith(
+      { portfolioKey: 'global' },
+      expect.objectContaining({ startingBalance: 2000, benchmarkStartBalance: null }),
+      expect.objectContaining({ upsert: true }),
+    );
   });
 });
 

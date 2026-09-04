@@ -1681,7 +1681,9 @@ class _AIBrainLiveCard extends ConsumerWidget {
 
 // ── Budget Manager card ───────────────────────────────────────────────────────
 
-const _kBudgetAssets = ['ALL', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XAUUSD', 'WTI', 'EURUSD'];
+// Decision #18: gold is PAXGUSDT, never XAUUSD forex. WTI/EURUSD are
+// out of scope for that decision (gold-specific) and unchanged.
+const _kBudgetAssets = ['ALL', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'PAXGUSDT', 'WTI', 'EURUSD'];
 const _kRiskLevels   = ['low', 'medium', 'high'];
 
 class _BudgetControlCard extends ConsumerStatefulWidget {

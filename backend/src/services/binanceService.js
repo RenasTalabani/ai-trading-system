@@ -11,7 +11,12 @@ const BINANCE_WS = process.env.BINANCE_WS_URL || _wsBase;
 
 const TRACKED_ASSETS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-  'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
+  // Decision #18 (locked, 2026-09-03): gold = PAXG, a real Binance spot
+  // pair (Paxos Gold, backed 1:1 by physical gold) -- tracked through the
+  // exact same live WS/REST pipeline as every other crypto asset here,
+  // never through a separate XAUUSD forex feed. Mirrors ai-service's own
+  // binance_collector.py TRACKED_ASSETS (same position, for consistency).
+  'ADAUSDT', 'PAXGUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
 ];
 
 const INTERVAL_MAP = {

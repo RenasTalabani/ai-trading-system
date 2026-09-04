@@ -42,6 +42,24 @@ const MIN_FUSED_SCORE       = parseInt(process.env.AI_MIN_FUSED_SCORE)       || 
 const MIN_QUALITY_SCORE     = parseInt(process.env.AI_MIN_QUALITY_SCORE)     || 75;  // Phase 18
 const MAX_OPEN_TRADES       = parseInt(process.env.AI_MAX_OPEN_TRADES)       || 5;   // Phase 18: reduced to 5
 const MAX_NEW_PER_CYCLE     = parseInt(process.env.AI_MAX_NEW_PER_CYCLE)     || 3;
+
+// Bug found 2026-09-04 (overnight continuous-improvement pass, decision #17/
+// #21 spot-check): a PENDING_APPROVAL AllocationProposal never expired.
+// AIDecision.js's own schema comment already documents the intent --
+// "'EXPIRED' covers a proposal nobody acted on before its price context went
+// stale" -- but nothing ever set it. Two real consequences of that gap: (1)
+// the "only ever show ONE pending decision" guard a few lines below this
+// block means the worker permanently stops proposing anything new the
+// moment the founder misses (or is asleep through) a single proposal --
+// there was no way for the assistant to ever recover on its own; (2) if the
+// founder came back hours/days later and tapped Approve anyway,
+// approveSuggestion() would open a trade at the entryPrice/stopLoss the AI
+// computed back when the proposal was created -- a price snapshot that old
+// no longer reflects the market being approved into. 3h roughly matches the
+// '1h' scan timeframe these opportunities are scored on (see the
+// {timeframe:'1h'} scan call below) with room to actually notice the app
+// while still bounding how stale an approved price snapshot can be.
+const PROPOSAL_EXPIRY_HOURS = parseInt(process.env.AI_PROPOSAL_EXPIRY_HOURS) || 3;
 // The old self-resuming 5%-over-a-rolling-24h-window check that used to
 // live here is gone -- master-plan decision #16 (locked) replaced it with
 // riskStateService's persistent, human-reset-only 10% circuit breaker
@@ -55,9 +73,63 @@ function _pick(obj, ...keys) {
   return null;
 }
 
+// Lazy require -- notificationService requires User/Notification models and
+// this service is loaded very early at boot; matches the existing
+// notifySvc() pattern already used in virtualTrackingService.js for the
+// same reason.
+function notifySvc() { return require('./notificationService'); }
+
+// Marks a single stale PENDING_APPROVAL proposal (and every AIDecision it
+// still references) EXPIRED. Split out from expireStalePendingProposals()
+// so a failure notifying/saving one stale proposal can never stop the
+// others in the same batch from being processed.
+async function _expireOneProposal(proposal) {
+  const decisionIds = _allReferencedDecisionIds(proposal);
+  if (decisionIds.length) {
+    await AIDecision.updateMany(
+      { _id: { $in: decisionIds }, status: 'PENDING_APPROVAL' },
+      { $set: { status: 'EXPIRED', decidedAt: new Date() } }
+    );
+  }
+  proposal.status    = 'EXPIRED';
+  proposal.decidedAt = new Date();
+  await proposal.save();
+  logger.info(
+    `[AIWorker] Proposal ${proposal._id} expired -- sat unanswered past ` +
+    `${PROPOSAL_EXPIRY_HOURS}h, its price snapshot is stale.`
+  );
+  notifySvc().sendProposalExpiredNotification(proposal).catch(() => {});
+}
+
+// See the PROPOSAL_EXPIRY_HOURS comment above for why this exists. Called at
+// the very top of runAIWorkerCycle() -- before the session/budget check --
+// so a stale proposal gets cleared out on the normal 5-minute cron cadence
+// even while the budget session is paused or inactive; a proposal a human
+// is actively looking at right now is never touched (only ones older than
+// the cutoff).
+async function expireStalePendingProposals() {
+  const cutoff = new Date(Date.now() - PROPOSAL_EXPIRY_HOURS * 60 * 60 * 1000);
+  const stale = await AllocationProposal.find({
+    status:    'PENDING_APPROVAL',
+    createdAt: { $lte: cutoff },
+  });
+  for (const proposal of stale) {
+    try {
+      await _expireOneProposal(proposal);
+    } catch (err) {
+      logger.error(`[AIWorker] Failed expiring stale proposal ${proposal._id}: ${err.message}`);
+    }
+  }
+}
+
 // ── Core cycle ────────────────────────────────────────────────────────────────
 
 async function runAIWorkerCycle() {
+  // 0. Clear out any proposal nobody answered in time -- BEFORE the
+  // session/budget check below, so this keeps happening every 5-minute
+  // cron tick regardless of session state (see PROPOSAL_EXPIRY_HOURS above).
+  await expireStalePendingProposals();
+
   // 1. Budget session must be active
   const session = await BudgetSession.findOne({ sessionKey: 'global' });
   if (!session || session.status !== 'active') {
@@ -190,14 +262,20 @@ async function runAIWorkerCycle() {
       atrAtEntry:  _pick(opp, 'atr'),
     });
 
-    // Store regime history (Phase 18)
+    // Store regime history (Phase 18). aiDecisionId links this record back
+    // to the AIDecision created just above -- see MarketRegimeHistory.js's
+    // own comment: decisionTrackingJob.evaluateOpenDecisions() uses this
+    // link to propagate that decision's eventual WIN/LOSS result here once
+    // it resolves, which is what actually makes the "Regime WR last 6h" log
+    // line in performanceAnalysisJob.js produce anything at all.
     if (opp.regime) {
       MarketRegimeHistory.create({
-        asset:      opp.asset,
-        regime:     opp.regime,
-        action:     opp.action,
-        confidence: opp.confidence,
-        fusedScore: opp.fused_score,
+        asset:        opp.asset,
+        regime:       opp.regime,
+        action:       opp.action,
+        confidence:   opp.confidence,
+        fusedScore:   opp.fused_score,
+        aiDecisionId: decision._id,
       }).catch(() => {});
     }
 
@@ -340,13 +418,55 @@ function _allReferencedDecisionIds(proposal) {
 }
 
 async function approveAllocationProposal(proposalId, optionKey) {
-  const proposal = await AllocationProposal.findById(proposalId);
-  if (!proposal) throw new Error('Proposal not found.');
-  if (proposal.status !== 'PENDING_APPROVAL') {
-    throw new Error(`This proposal is already ${proposal.status.toLowerCase()} — nothing to approve.`);
+  // Bug fix (2026-09-04, overnight continuous-improvement pass): the
+  // original version read proposal.status, checked PENDING_APPROVAL, then
+  // did a long sequence of real async work (one approveSuggestion() call
+  // per allocation, each hitting the DB) before ever writing
+  // proposal.status back. Two concurrent approvals for the SAME proposal
+  // -- a double-tap, or two different option buttons tapped before the
+  // first response lands -- could both pass that check. Each individual
+  // allocation is still protected from actually double-opening by
+  // approveSuggestion's own per-asset dedup+lock, but the two calls raced
+  // on proposal.save() (a lost update -- whichever call's write landed
+  // last silently overwrote the other's chosenOptionKey/tradeIds, even
+  // though both may have genuinely opened real paper trades) and, worse,
+  // on AIDecision.updateOne(): a losing allocation's unconditional
+  // `status: 'REJECTED'` write could land AFTER the other concurrent
+  // call had already marked that same decision APPROVED with a real
+  // tradeId moments earlier -- a self-contradictory record (REJECTED
+  // status sitting next to tradeCreated: true and a live tradeId).
+  //
+  // Fixed with an atomic claim instead of a lock. A lock would deadlock
+  // here: approveSuggestion() below already acquires the shared
+  // portfolio mutex itself (see virtualTrackingService.js), and that
+  // mutex is deliberately not reentrant. findOneAndUpdate's
+  // check-and-modify is atomic at the database level with no in-process
+  // coordination needed -- only the ONE concurrent call whose update
+  // actually flips status away from PENDING_APPROVAL gets a non-null
+  // result back and proceeds to run the allocation loop; every other
+  // concurrent call for the same proposal gets null immediately and
+  // throws before touching a single AIDecision record.
+  const proposal = await AllocationProposal.findOneAndUpdate(
+    { _id: proposalId, status: 'PENDING_APPROVAL' },
+    { status: 'APPROVED', chosenOptionKey: optionKey, decidedAt: new Date() },
+    { new: true }
+  );
+  if (!proposal) {
+    const existing = await AllocationProposal.findById(proposalId);
+    if (!existing) throw new Error('Proposal not found.');
+    throw new Error(`This proposal is already ${existing.status.toLowerCase()} — nothing to approve.`);
   }
   const chosen = proposal.options.find(o => o.key === optionKey);
-  if (!chosen) throw new Error(`"${optionKey}" is not one of this proposal's options.`);
+  if (!chosen) {
+    // optionKey was invalid -- roll the atomic claim back so this doesn't
+    // leave the proposal stuck "APPROVED" with no chosen option and no
+    // trades.
+    await AllocationProposal.updateOne(
+      { _id: proposalId },
+      { status: 'PENDING_APPROVAL', chosenOptionKey: null, decidedAt: null }
+    );
+    throw new Error(`"${optionKey}" is not one of this proposal's options.`);
+  }
 
   const chosenDecisionIds = new Set(chosen.allocations.map(a => String(a.aiDecisionId)));
   const trades = [];
@@ -390,20 +510,19 @@ async function approveAllocationProposal(proposalId, optionKey) {
 
   if (trades.length === 0 && failures.length > 0) {
     // Nothing at all could be opened — surface this as a real failure rather
-    // than a silent "success" with zero trades.
+    // than a silent "success" with zero trades. Status was already
+    // atomically claimed as APPROVED above; flip it to REJECTED now that
+    // we know nothing actually opened. decidedAt stays at claim time (when
+    // the user actually made the decision), not when this settled.
+    await AllocationProposal.updateOne({ _id: proposalId }, { status: 'REJECTED' });
     proposal.status = 'REJECTED';
-    proposal.decidedAt = new Date();
-    await proposal.save();
     const err = new Error(`Could not open any trade in "${optionKey}": ${failures.map(f => `${f.asset} (${f.error})`).join('; ')}`);
     err.failures = failures;
     throw err;
   }
 
-  proposal.status = 'APPROVED';
-  proposal.chosenOptionKey = optionKey;
   proposal.tradeIds = trades.map(t => t._id);
-  proposal.decidedAt = new Date();
-  await proposal.save();
+  await AllocationProposal.updateOne({ _id: proposalId }, { tradeIds: proposal.tradeIds });
 
   logger.info(`[AIWorker] Proposal ${proposalId} APPROVED — option "${optionKey}", ${trades.length} trade(s) opened${failures.length ? `, ${failures.length} failed` : ''}.`);
   return { proposal, trades, failures };
@@ -452,4 +571,5 @@ module.exports = {
   runAIWorkerCycle, getLatestDecisions, getStats,
   approveDecision, rejectDecision, getPendingDecision,
   approveAllocationProposal, rejectAllocationProposal, getPendingProposal,
+  expireStalePendingProposals,
 };
