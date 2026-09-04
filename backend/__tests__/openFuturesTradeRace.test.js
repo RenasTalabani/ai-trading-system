@@ -13,7 +13,7 @@
  *
  * Like the sibling race suites (virtualTrackingServiceApproveRace.test.js,
  * dcaServiceApproveDueBuyRace.test.js), this one gives its mocks a genuine
- * setTimeout-based delay positioned between the dedup check and the
+ * setTimeout-based mockDelay positioned between the dedup check and the
  * write (on riskStateService.checkAndMaybeHalt, which the fixed code
  * calls after the check and before VirtualTrade.create), not just a
  * same-tick resolved promise. A same-tick mock is NOT enough to prove a
@@ -25,14 +25,14 @@
  * suite.
  */
 jest.mock('../src/services/riskStateService', () => ({
-  checkAndMaybeHalt: jest.fn(async () => { await delay(20); return { halted: false }; }),
+  checkAndMaybeHalt: jest.fn(async () => { await mockDelay(20); return { halted: false }; }),
 }));
 
 const Signal           = require('../src/models/Signal');
 const VirtualTrade     = require('../src/models/VirtualTrade');
 const VirtualPortfolio = require('../src/models/VirtualPortfolio');
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function mockDelay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function makePortfolio(overrides = {}) {
   return {
@@ -68,13 +68,13 @@ beforeEach(() => {
   // the DB-access points, the way two real concurrent HTTP requests
   // against a real MongoDB would.
   VirtualTrade.findOne = async (query) => {
-    await delay(10);
+    await mockDelay(10);
     return FAKE_OPEN_FUTURES.find(
       (t) => t.signalId === query.signalId && t.productType === query.productType && t.status === query.status
     ) || null;
   };
   VirtualTrade.create = async (doc) => {
-    await delay(10);
+    await mockDelay(10);
     const created = { ...doc, _id: 'fake_' + (CREATED_TRADES.length + 1), status: 'open' };
     CREATED_TRADES.push(created);
     FAKE_OPEN_FUTURES.push(created); // makes the dedup check actually see it

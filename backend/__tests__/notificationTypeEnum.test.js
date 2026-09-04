@@ -26,7 +26,7 @@
  * catches exactly the two ways this bug actually manifested, which no
  * amount of mocking Notification.create() directly ever could.
  */
-function validateAgainstSchema(schemaDef, doc) {
+function mockValidateAgainstSchema(schemaDef, doc) {
   const out = {};
   for (const [key, spec] of Object.entries(schemaDef)) {
     if (!(key in doc)) continue;
@@ -56,7 +56,7 @@ jest.mock('mongoose', () => {
   return {
     Schema: Object.assign(FakeSchema, { Types: { ObjectId: 'ObjectId' } }),
     model: (name, schema) => ({
-      create: async (doc) => validateAgainstSchema(schema.def, doc),
+      create: async (doc) => mockValidateAgainstSchema(schema.def, doc),
     }),
   };
 });

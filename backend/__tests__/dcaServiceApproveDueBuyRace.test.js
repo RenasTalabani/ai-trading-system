@@ -10,7 +10,7 @@
  * buy, silently double-spending this cycle's DCA amount.
  *
  * Like the sibling suite, this one deliberately gives its mocks a real
- * artificial delay so two approveDueBuy() calls started back-to-back
+ * artificial mockDelay so two approveDueBuy() calls started back-to-back
  * actually interleave, unlike dcaService.test.js's effectively-synchronous
  * mocks (which cannot detect this class of bug because nothing in them
  * ever yields between the check and the write).
@@ -38,10 +38,10 @@ jest.mock('../src/services/riskStateService', () => ({
   // that interleaving -- Node drains one call's whole microtask chain
   // (check-through-mutation) before the other call's own `findById` timer
   // callback is even invoked, so the "race" never actually happened and
-  // this suite passed even against the unfixed function. This delay is
+  // this suite passed even against the unfixed function. This mockDelay is
   // what makes the two calls actually overlap the way two real concurrent
   // HTTP requests would.
-  checkAndMaybeHalt: jest.fn(async () => { await delay(20); return { halted: false }; }),
+  checkAndMaybeHalt: jest.fn(async () => { await mockDelay(20); return { halted: false }; }),
 }));
 jest.mock('../src/models/DCAPlan', () => ({
   find: jest.fn(),
@@ -52,7 +52,7 @@ jest.mock('../src/models/DCAPlan', () => ({
 const DCAPlan = require('../src/models/DCAPlan');
 const dcaService = require('../src/services/dcaService');
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function mockDelay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function makePlan(overrides = {}) {
   const plan = {
@@ -62,7 +62,7 @@ function makePlan(overrides = {}) {
     dueBuyPending: true,
     ...overrides,
   };
-  plan.save = jest.fn(async () => { await delay(10); return plan; });
+  plan.save = jest.fn(async () => { await mockDelay(10); return plan; });
   return plan;
 }
 
@@ -74,7 +74,7 @@ beforeEach(() => {
   // Deliberately delayed, unlike dcaService.test.js's instant mock, so two
   // approveDueBuy() calls actually interleave at the DB-read point.
   DCAPlan.findById.mockImplementation(async (id) => {
-    await delay(15);
+    await mockDelay(15);
     return FAKE_PLANS.find((p) => p._id === id) || null;
   });
 });

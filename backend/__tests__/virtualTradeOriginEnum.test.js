@@ -24,7 +24,7 @@
  * documented behavior: an `enum` on a String path rejects any value not
  * listed.
  */
-function validateAgainstSchema(schemaDef, doc) {
+function mockValidateAgainstSchema(schemaDef, doc) {
   const out = {};
   for (const [key, spec] of Object.entries(schemaDef)) {
     if (!(key in doc)) continue;
@@ -50,7 +50,7 @@ jest.mock('mongoose', () => {
   return {
     Schema: Object.assign(FakeSchema, { Types: { ObjectId: 'ObjectId', Mixed: 'Mixed' } }),
     model: (name, schema) => ({
-      create: async (doc) => validateAgainstSchema(schema.def, doc),
+      create: async (doc) => mockValidateAgainstSchema(schema.def, doc),
     }),
   };
 });

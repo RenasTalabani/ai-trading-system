@@ -30,11 +30,11 @@ jest.mock('../src/services/virtualTrackingService', () => ({
   getPortfolio: jest.fn(async () => ({ currentBalance: 1000 })),
 }));
 jest.mock('../src/services/riskStateService', () => ({
-  // Real delay so approveDueBuy(), when it wins the lock, actually spends
+  // Real mockDelay so approveDueBuy(), when it wins the lock, actually spends
   // meaningful time inside the critical section -- not load-bearing for
   // proving the lock serializes (FIFO lock acquisition order alone proves
   // that), but keeps this suite consistent with the sibling race suites.
-  checkAndMaybeHalt: jest.fn(async () => { await delay(15); return { halted: false }; }),
+  checkAndMaybeHalt: jest.fn(async () => { await mockDelay(15); return { halted: false }; }),
 }));
 jest.mock('../src/models/DCAPlan', () => ({
   find: jest.fn(),
@@ -45,7 +45,7 @@ jest.mock('../src/models/DCAPlan', () => ({
 const DCAPlan = require('../src/models/DCAPlan');
 const dcaService = require('../src/services/dcaService');
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function mockDelay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function makePlan(overrides = {}) {
   const plan = {
@@ -55,7 +55,7 @@ function makePlan(overrides = {}) {
     dueBuyPending: true,
     ...overrides,
   };
-  plan.save = jest.fn(async () => { await delay(10); return plan; });
+  plan.save = jest.fn(async () => { await mockDelay(10); return plan; });
   return plan;
 }
 
@@ -65,7 +65,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   FAKE_PLANS = [];
   DCAPlan.findById.mockImplementation(async (id) => {
-    await delay(5);
+    await mockDelay(5);
     return FAKE_PLANS.find((p) => p._id === id) || null;
   });
 });

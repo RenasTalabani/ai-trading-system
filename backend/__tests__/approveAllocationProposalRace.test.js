@@ -26,7 +26,7 @@
  */
 jest.mock('../src/services/virtualTrackingService', () => ({
   approveSuggestion: jest.fn(async ({ asset }) => {
-    await delay(5);
+    await mockDelay(5);
     return { _id: 'trade_' + asset, asset };
   }),
   computeSpotSizeUsd: jest.fn(),
@@ -37,7 +37,7 @@ jest.mock('../src/services/allocationOptionsBuilder', () => ({ buildAllocationOp
 const AllocationProposal = require('../src/models/AllocationProposal');
 const AIDecision         = require('../src/models/AIDecision');
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function mockDelay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function makeProposal(overrides = {}) {
   const p = {
@@ -64,7 +64,7 @@ function makeProposal(overrides = {}) {
   // uses findOneAndUpdate/updateOne instead), but having it here means this
   // same test file can also run, unmodified, against the pre-fix function
   // to demonstrate the race it used to have.
-  p.save = async function () { await delay(10); return p; };
+  p.save = async function () { await mockDelay(10); return p; };
   return p;
 }
 
@@ -77,33 +77,33 @@ beforeEach(() => {
   // Models a real MongoDB findOneAndUpdate accurately: the check-and-modify
   // is atomic and happens the instant the "command" is processed (i.e.
   // synchronously, before any await in this mock) -- only the artificial
-  // network-round-trip delay happens afterward. This is what makes the
+  // network-round-trip mockDelay happens afterward. This is what makes the
   // claim genuinely race-proof to test, unlike a mock that checks-then-
   // waits-then-writes (which would just reintroduce the same TOCTOU gap
   // this fix closes, inside the mock itself).
   AllocationProposal.findOneAndUpdate = async (filter, update, opts) => {
     const doc = FAKE_PROPOSALS.find((p) => p._id === filter._id);
     if (!doc || doc.status !== filter.status) {
-      await delay(10);
+      await mockDelay(10);
       return null;
     }
     const before = { ...doc };
     Object.assign(doc, update);
-    await delay(10);
+    await mockDelay(10);
     return opts && opts.new ? { ...doc } : before;
   };
   AllocationProposal.updateOne = async (filter, update) => {
     const doc = FAKE_PROPOSALS.find((p) => p._id === filter._id);
     if (doc) Object.assign(doc, update);
-    await delay(5);
+    await mockDelay(5);
   };
   AllocationProposal.findById = async (id) => FAKE_PROPOSALS.find((p) => p._id === id) || null;
 
   AIDecision.updateOne = async (filter, update) => {
     AI_DECISION_WRITES.push({ filter, update });
-    await delay(5);
+    await mockDelay(5);
   };
-  AIDecision.updateMany = async () => { await delay(5); };
+  AIDecision.updateMany = async () => { await mockDelay(5); };
 });
 
 const svc = require('../src/services/aiWorkerService');
