@@ -50,7 +50,45 @@ function chain(result) {
   return { sort: () => ({ limit: () => ({ lean: async () => result }) }) };
 }
 
+// Bug fix (2026-09-04, overnight continuous-improvement pass, follow-up):
+// real Mongoose accepts EITHER a bare field object (`{status: 'X'}`, which
+// Mongoose's own castUpdate implicitly treats as `$set`) OR an explicit
+// `{$set: {...}}` operator document -- both apply identically against a
+// real MongoDB. This file's AIDecision.updateOne/updateMany mocks only
+// handled the bare-field style (plain `Object.assign(d, update)`), because
+// every call site in aiWorkerService.js used that style until
+// _expireOneProposal() (also added 2026-09-04) used explicit `$set` for the
+// same effect. That single call being $set-wrapped, combined with the
+// mock's blind Object.assign, meant `Object.assign(d, {$set: {...}})` just
+// added a literal `$set` property to the fake decision instead of actually
+// setting its `status`/`decidedAt` -- so
+// "...its decisions too" looked like a real production bug (children never
+// reaching EXPIRED) when the underlying fix was correct all along and only
+// this fixture's Mongo-update emulation was incomplete.
+function applyMongoUpdate(doc, update) {
+  if (update && typeof update === 'object' && update.$set) {
+    Object.assign(doc, update.$set);
+  } else {
+    Object.assign(doc, update);
+  }
+}
+
 beforeEach(() => {
+  // Bug fix (2026-09-04, overnight continuous-improvement pass, follow-up):
+  // this file's mocked notificationService/axios call histories were never
+  // cleared between tests. Every mock.fn() here lives at module scope (set
+  // up once by jest.mock() at the top of the file), so without this, a call
+  // made in an EARLIER test stays on the mock's `.mock.calls` history for
+  // every test that runs after it in the same file. That's exactly why 'a
+  // fresh proposal ... is never touched' (line ~236) started failing the
+  // moment the previous test in file order legitimately called
+  // sendProposalExpiredNotification once: this test's own
+  // `not.toHaveBeenCalled()` check was seeing that carried-over call, not a
+  // spurious call made during itself. jest.clearAllMocks() only resets call/
+  // instance/result history (not implementations set via jest.fn(impl) at
+  // creation time), so it's safe here and doesn't need re-establishing
+  // afterwards.
+  jest.clearAllMocks();
   FAKE_PORTFOLIO = { currentBalance: 1000, riskPerTradePct: 5, save: async () => {} };
   FAKE_AGGREGATE_RESULT = [];
   CREATED_DECISIONS = [];
@@ -78,13 +116,13 @@ beforeEach(() => {
   // no matter what those functions actually did.
   AIDecision.updateOne = async (filter, update) => {
     const d = CREATED_DECISIONS.find(x => String(x._id) === String(filter._id));
-    if (d) Object.assign(d, update);
+    if (d) applyMongoUpdate(d, update);
   };
   AIDecision.updateMany = async (filter, update) => {
     const ids = (filter._id && filter._id.$in ? filter._id.$in : []).map(String);
     for (const d of CREATED_DECISIONS) {
       if (ids.includes(String(d._id)) && (!filter.status || d.status === filter.status)) {
-        Object.assign(d, update);
+        applyMongoUpdate(d, update);
       }
     }
   };
