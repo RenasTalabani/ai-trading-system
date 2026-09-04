@@ -82,9 +82,38 @@ class TranslationService:
             self._tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
             self._model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
             logger.info("Translation model loaded.")
+            self._try_quantize_model()
         except Exception as e:
             logger.warning(f"Translation model failed to load — non-English content will pass through untranslated: {e}")
             self._load_failed = True
+
+    def _try_quantize_model(self):
+        """Memory-footprint fix (2026-09-04, cost-reduction pass): same
+        rationale as news_sentiment.py's FinBERT quantization -- this is a
+        600M-parameter seq2seq model, the single largest model this
+        process loads, running CPU-only (nothing here ever places it on a
+        GPU), and float32 weights for 600M params is roughly 2.4GB on
+        their own before tokenizer/activation/PyTorch overhead. Dynamic
+        INT8 quantization of its Linear layers (the same standard PyTorch
+        technique, not model-specific) meaningfully shrinks that resident
+        footprint. generate() itself is untouched -- same tokenizer, same
+        forced_bos_token_id target-language logic, same output decoding;
+        only the Linear layers' stored weights change precision.
+        A quantization failure here must not flip _load_failed (which
+        would silently disable translation for non-English Telegram
+        content entirely) when a working, merely-unquantized model is
+        available -- so this is its own try/except, independent of the
+        outer one in _ensure_loaded().
+        """
+        try:
+            import torch
+            self._model.eval()
+            self._model = torch.quantization.quantize_dynamic(
+                self._model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            logger.info("Translation model quantized to INT8 (dynamic quantization) -- reduced memory footprint.")
+        except Exception as e:
+            logger.warning(f"Translation model quantization failed ({e}) -- continuing with the unquantized model.")
 
     def translate(self, text: str, src_lang: str, max_chars: int = 800) -> str:
         """
