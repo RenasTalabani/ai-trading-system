@@ -15,9 +15,17 @@
  * later.
  */
 jest.mock('axios');
+// Bug found 2026-09-04 (overnight continuous-improvement pass):
+// evaluateOpenDecisions() now also propagates a resolved WIN/LOSS onto any
+// linked MarketRegimeHistory record (see that model's own comment) --
+// without mocking it here, every test below that resolves a decision would
+// hit the REAL Mongoose-backed model with no live DB connection, same class
+// of hang this file's own AIDecision mocking already exists to avoid.
+jest.mock('../src/models/MarketRegimeHistory', () => ({ collection: { initializeUnorderedBulkOp: jest.fn() } }));
 const axios = require('axios');
 const logger = require('../src/config/logger');
 const AIDecision = require('../src/models/AIDecision');
+const MarketRegimeHistory = require('../src/models/MarketRegimeHistory');
 const { evaluateOpenDecisions } = require('../src/jobs/decisionTrackingJob');
 
 function fakeBulk() {
@@ -35,6 +43,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.spyOn(logger, 'warn').mockImplementation(() => {});
   jest.spyOn(logger, 'info').mockImplementation(() => {});
+  // Harmless default so any test whose decision resolves to WIN/LOSS (and
+  // therefore triggers the new regime-history propagation) doesn't crash on
+  // an unmocked `.collection` -- none of the tests in this file are actually
+  // about that propagation, see decisionTrackingJobRegimePropagation.test.js
+  // for those.
+  MarketRegimeHistory.collection.initializeUnorderedBulkOp.mockImplementation(() => fakeBulk());
 });
 
 describe('evaluateOpenDecisions — skip logging (T-085)', () => {

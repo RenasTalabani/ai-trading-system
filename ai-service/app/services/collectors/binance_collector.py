@@ -15,7 +15,14 @@ BINANCE_WS = "wss://stream.binance.com:9443/stream"
 
 TRACKED_ASSETS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT",
+    # Decision #18 (locked, 2026-09-03): gold = PAXG, a real Binance spot
+    # pair (Paxos Gold, backed 1:1 by physical gold) -- tracked through the
+    # exact same live WS/REST pipeline as every other crypto asset here,
+    # never through a separate XAUUSD/Yahoo-Finance forex feed. Inserted at
+    # index 6 (not appended) so it lands inside global_analyzer.py's
+    # _CRYPTO_SCAN_LIMIT slice -- see that file's comment for why the order
+    # matters here.
+    "ADAUSDT", "PAXGUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT",
 ]
 
 

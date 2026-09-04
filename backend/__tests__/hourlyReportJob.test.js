@@ -20,6 +20,7 @@ jest.mock('../src/jobs/globalScanJob', () => ({
 
 const Signal = require('../src/models/Signal');
 const VirtualPortfolio = require('../src/models/VirtualPortfolio');
+const VirtualTrade = require('../src/models/VirtualTrade');
 const User = require('../src/models/User');
 const AIReport = require('../src/models/AIReport');
 const { sendPushToUser } = require('../src/services/notificationService');
@@ -46,6 +47,10 @@ beforeEach(() => {
     return saved;
   };
   AIReport.updateOne = async () => ({});
+  // Bug fix regression (2026-09-04, overnight continuous-improvement pass,
+  // 3rd audit pass): default to 0 open trades, same as a genuinely empty
+  // book -- individual tests override this to prove the real count is used.
+  VirtualTrade.countDocuments = async () => 0;
 });
 
 describe('hourlyReportJob.generateHourlyReport — portfolio lookup (T-031)', () => {
@@ -53,7 +58,7 @@ describe('hourlyReportJob.generateHourlyReport — portfolio lookup (T-031)', ()
     let queriedWith = null;
     VirtualPortfolio.findOne = (query) => {
       queriedWith = query;
-      return { lean: async () => ({ portfolioKey: 'global', currentBalance: 1234.56, openTrades: 2, balanceHistory: [] }) };
+      return { lean: async () => ({ portfolioKey: 'global', currentBalance: 1234.56, balanceHistory: [] }) };
     };
 
     await generateHourlyReport();
@@ -66,10 +71,13 @@ describe('hourlyReportJob.generateHourlyReport — portfolio lookup (T-031)', ()
       lean: async () => ({
         portfolioKey: 'global',
         currentBalance: 1234.56,
-        openTrades: 2,
+        // Deliberately no `openTrades` field -- it isn't a real field on the
+        // VirtualPortfolio schema (see the bug this file's next describe
+        // block covers). balanceHistory below is still real.
         balanceHistory: [{ balance: 1200 }, { balance: 1234.56 }],
       }),
     });
+    VirtualTrade.countDocuments = async () => 2;
 
     const report = await generateHourlyReport();
 
@@ -84,6 +92,42 @@ describe('hourlyReportJob.generateHourlyReport — portfolio lookup (T-031)', ()
     const report = await generateHourlyReport();
 
     expect(report.portfolioSummary).toEqual({ balance: 500, change: 0, changePct: 0, openTrades: 0 });
+  });
+});
+
+/**
+ * Regression suite (2026-09-04, overnight continuous-improvement pass, 3rd
+ * audit pass).
+ *
+ * Bug: `p.openTrades` is not a real field on the VirtualPortfolio schema at
+ * all (see VirtualPortfolio.js) -- it was always `undefined`, so
+ * `p.openTrades || 0` silently reported ZERO open trades in every single
+ * hourly report, Telegram message, and GPT narrative prompt, no matter how
+ * many positions were actually open. Fix: count the real open VirtualTrade
+ * documents (`VirtualTrade.countDocuments({ status: 'open' })`), same query
+ * virtualTrackingService.getSummary() already uses for this exact number.
+ */
+describe('hourlyReportJob.generateHourlyReport — real open-trade count (regression, 3rd audit pass)', () => {
+  beforeEach(() => {
+    VirtualPortfolio.findOne = () => ({
+      lean: async () => ({ portfolioKey: 'global', currentBalance: 1000, balanceHistory: [] }),
+    });
+  });
+
+  test('reports the real count of open VirtualTrade documents, not zero (regression)', async () => {
+    VirtualTrade.countDocuments = async (query) => (query.status === 'open' ? 5 : 0);
+
+    const report = await generateHourlyReport();
+
+    expect(report.portfolioSummary.openTrades).toBe(5);
+  });
+
+  test('genuinely has zero open trades reports zero honestly (not a false positive)', async () => {
+    VirtualTrade.countDocuments = async () => 0;
+
+    const report = await generateHourlyReport();
+
+    expect(report.portfolioSummary.openTrades).toBe(0);
   });
 });
 

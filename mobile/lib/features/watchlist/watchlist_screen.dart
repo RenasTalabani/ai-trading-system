@@ -3,6 +3,12 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+// Bug fix (2026-09-04): .firstOrNull below is a package:collection
+// extension on Iterable, not part of dart:core -- see
+// signal_detail_screen.dart's identical 2026-09-04 fix for the full
+// explanation (same missing-import bug, caught incidentally while wiring
+// that other screen's route back up).
+import 'package:collection/collection.dart';
 import '../../core/providers/watchlist_provider.dart';
 import '../../core/providers/brain_provider.dart';
 import '../../core/providers/price_alerts_provider.dart';

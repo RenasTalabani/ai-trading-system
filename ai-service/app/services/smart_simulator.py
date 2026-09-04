@@ -21,7 +21,23 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     delta = close.diff()
     gain  = delta.clip(lower=0).rolling(14).mean()
     loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    rs    = gain / loss.replace(0, np.nan)
+    # Bug fix (2026-09-04, overnight continuous-improvement pass): same
+    # defect already found and fixed in multi_timeframe_analyzer.py's
+    # _compute_indicators() -- `loss` (a 14-period rolling mean) is
+    # legitimately exactly 0 during any sustained rally with zero down
+    # candles in the window, and `.replace(0, np.nan)` turned that
+    # perfectly real "RSI approaching 100" case into NaN instead. Here the
+    # consequence is worse than a stale read: `_simulate_asset()` calls
+    # `df.dropna()` right after this (line ~36 below), which DELETES those
+    # rows from the backtest outright -- silently removing real candles
+    # from the middle of a simulated rally, corrupting the sequential
+    # timing every other indicator/entry-exit check in this file depends
+    # on (ATR's shift-based comparisons, TP/SL trigger timing, trade
+    # duration) for every backtest that includes a strong enough rally to
+    # produce even one zero-loss window. Adding a small epsilon instead of
+    # substituting NaN keeps RSI real-valued (approaching 100, not
+    # undefined) and keeps every real candle in the simulation.
+    rs    = gain / (loss + 1e-9)
     df["rsi"] = 100 - (100 / (1 + rs))
     tr = pd.concat([
         df["high"] - df["low"],

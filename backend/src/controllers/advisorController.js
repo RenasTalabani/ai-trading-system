@@ -9,7 +9,8 @@ const VALID_TFS = ['1h', '4h', '1d', '7d', '30d'];
 const VALID_ASSETS = [
   'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT',
   'ADAUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','MATICUSDT',
-  'XAUUSD',
+  // Decision #18: gold = PAXGUSDT (a real Binance pair), never XAUUSD forex.
+  'PAXGUSDT',
 ];
 
 const EXPIRY_HOURS = { '1h': 1, '4h': 4, '1d': 24, '7d': 168, '30d': 720 };

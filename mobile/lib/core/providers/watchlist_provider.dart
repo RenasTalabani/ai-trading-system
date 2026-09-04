@@ -99,7 +99,9 @@ const _displayNames = {
   'OPUSDT':   'Optimism',
   'INJUSDT':  'Injective',
   'SUIUSDT':  'Sui',
-  'XAUUSD':   'Gold',
+  // Decision #18 (locked, 2026-09-03): gold = PAXG, a real Binance spot
+  // pair (Paxos Gold), never XAUUSD forex.
+  'PAXGUSDT': 'Gold (PAXG)',
 };
 
 String displayNameFor(String asset) =>
@@ -113,7 +115,7 @@ const allSupportedAssets = [
   'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
   'DOTUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
   'APTUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SUIUSDT',
-  'XAUUSD',
+  'PAXGUSDT', // gold, decision #18 -- see _displayNames' comment above
 ];
 
 // ── Watchlist state ─────────────────────────────────────────────────────────

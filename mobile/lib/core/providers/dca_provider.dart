@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/dca_model.dart';
 import '../services/api_service.dart';
+import '../constants/api_constants.dart';
 
 class DCANotifier extends AsyncNotifier<List<DCAPlanModel>> {
   @override
@@ -32,6 +33,20 @@ class DCANotifier extends AsyncNotifier<List<DCAPlanModel>> {
 
   Future<void> stopPlan(String planId) async {
     await ApiService.dio.post('virtual/dca/$planId/stop');
+    await refresh();
+  }
+
+  // Safety fix (2026-09-04, decision #11): the ONLY thing that can actually
+  // spend money on a due DCA buy. Surfaces the backend's message (including
+  // a decision #16 circuit-breaker rejection) rather than swallowing it, so
+  // the screen can show exactly why an approval failed.
+  Future<void> approveDueBuy(String planId) async {
+    await ApiService.dio.post(ApiConstants.dcaApproveBuy(planId));
+    await refresh();
+  }
+
+  Future<void> skipDueBuy(String planId) async {
+    await ApiService.dio.post(ApiConstants.dcaSkipBuy(planId));
     await refresh();
   }
 }

@@ -58,7 +58,10 @@ const aiService = require('../services/aiService');
 const { buildPositionGuidance } = require('../controllers/guideController');
 const { buildRenoRecommendation } = require('../services/renoRecommendationService');
 
-const EXTENDED_PRICE_ASSETS = ['XAUUSD']; // mirrors guideController.js's own list
+// Empty since decision #18 (locked, 2026-09-03) moved gold from XAUUSD to
+// PAXGUSDT (now just another TRACKED_ASSETS entry) -- see guideController.js's
+// own EXTENDED_PRICE_ASSETS comment for the full reasoning.
+const EXTENDED_PRICE_ASSETS = [];
 
 // States that are worth a proactive nudge the moment a trade first
 // enters them (from a different, previously-known state). Settling

@@ -206,6 +206,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               trailing: const Icon(Icons.arrow_forward_ios, size: 14),
               onTap: () => context.push('/dca'),
             ),
+            const Divider(height: 1),
+            ListTile(
+              title: const Text('AI Decision History'),
+              subtitle: const Text('Every past AI proposal — approved, rejected, or expired'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+              onTap: () => context.push('/ai-decisions'),
+            ),
           ]),
           const SizedBox(height: 20),
 

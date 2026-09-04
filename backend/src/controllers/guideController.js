@@ -23,9 +23,14 @@ const aiService = require('../services/aiService');
 const { approveSuggestion, previewSizeUsd, getSummary, closePositionNow } = require('../services/virtualTrackingService');
 const logger = require('../config/logger');
 
-// binanceService's price cache only covers crypto (TRACKED_ASSETS) -- these
-// need a separate live-price lookup, same list virtualTrackingJob.js uses.
-const EXTENDED_PRICE_ASSETS = ['XAUUSD'];
+// binanceService's price cache only covers crypto (TRACKED_ASSETS) -- an
+// asset in this list needs a separate live-price lookup instead, same list
+// virtualTrackingJob.js uses. Empty since decision #18 (locked, 2026-09-03):
+// gold moved from XAUUSD (a non-Binance forex feed, the reason this list
+// existed) to PAXGUSDT, which IS a Binance pair and is now just another
+// entry in TRACKED_ASSETS -- no extended lookup needed for it anymore.
+// Kept (not deleted) in case a genuinely non-Binance asset is added later.
+const EXTENDED_PRICE_ASSETS = [];
 
 // T-079 (2026-08-31): resolveSuggestion()'s Signal-fallback branch used to
 // pick the highest-confidence `status:'active'` signal with no age check at
@@ -490,6 +495,43 @@ exports.approve = async (req, res) => {
     const suggestion = await resolveSuggestion();
     if (!suggestion) {
       return res.status(409).json({ success: false, message: 'No suggestion available right now — try again shortly.' });
+    }
+
+    // Bug fix (2026-09-04, overnight continuous-improvement pass):
+    // resolveSuggestion() above is a live, real-time query -- the SAME
+    // shape of "approve whatever is current, not what the user actually
+    // reviewed" gap already found and fixed for RENO
+    // (fix/reno-stale-opportunity-approve), except this one doesn't even
+    // need a background refresh to trigger. Any real time between the
+    // client's GET /suggestion (what the user actually read) and this
+    // POST /approve (an ordinary decide-then-tap gap, or the mobile
+    // app's 60s silent auto-refresh replacing the displayed card with no
+    // visual diff indicator) lets this SECOND, independent call to
+    // resolveSuggestion() return a genuinely DIFFERENT asset/direction --
+    // a higher-confidence signal appearing, the previously-suggested
+    // asset getting opened elsewhere in the meantime (excluded via
+    // openAssets), or the global-scan cache refreshing. Approving would
+    // then silently open a real (paper) position in something the user
+    // never actually looked at -- a violation of decision #11's informed-
+    // approval intent, not just a UX inconsistency.
+    //
+    // Fixed WITHOUT touching T-071's "server always decides sizing, never
+    // the client" property just above (this only asserts *identity* --
+    // which suggestion -- never amount, which stays 100% server-computed
+    // either way). Deliberately soft: only checked when the client
+    // actually sends the asset/action it displayed, so this stays
+    // compatible with anything that doesn't (existing tests calling this
+    // with an empty body, an older client build) -- the mobile client fix
+    // below is what actually closes the gap in practice by always
+    // sending them now.
+    const { asset: clientAsset, action: clientAction } = req.body || {};
+    if (clientAsset && clientAction &&
+        (clientAsset !== suggestion.asset || clientAction !== suggestion.action)) {
+      return res.status(409).json({
+        success: false,
+        staleApproval: true,
+        message: 'This suggestion has changed since you last checked it — please review the new one before approving.',
+      });
     }
 
     // T-061 (2026-08-26, product-to-code audit follow-up): the audit found

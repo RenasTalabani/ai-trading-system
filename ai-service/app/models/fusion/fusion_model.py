@@ -194,13 +194,27 @@ class FusionModel:
         X = self.scaler.transform(fv.reshape(1, -1))
         pred_class = int(self.model.predict(X)[0])
         proba      = self.model.predict_proba(X)[0]
-        confidence = round(float(proba[pred_class]) * 100, 1)
+        # Bug fix (2026-09-04, overnight continuous-improvement pass): same
+        # defect as market_model.py's predict() -- proba's array position is
+        # ordered by self.model.classes_ (the sorted labels actually seen
+        # during .fit()), not by label value. If a training window ever
+        # omits one of the 3 classes (0=HOLD, 1=BUY, 2=SELL), classes_ is
+        # missing an entry and `proba[pred_class]` either throws an
+        # uncaught IndexError (predicting the missing class into a
+        # too-short array) or silently returns/reports the WRONG class's
+        # probability as this one's -- a live confidence-score bug, not
+        # just a crash. Map explicitly through self.model.classes_ instead
+        # of assuming position == label value.
+        proba_by_class = dict(zip(self.model.classes_, proba))
+        confidence = round(float(proba_by_class.get(pred_class, 0.0)) * 100, 1)
 
         return {
             "direction":    LABEL_MAP[pred_class],
             "confidence":   confidence,
             "model":        "FusionGB",
-            "probabilities": {LABEL_MAP[i]: round(float(p)*100,1) for i, p in enumerate(proba)},
+            "probabilities": {
+                LABEL_MAP[int(c)]: round(float(p) * 100, 1) for c, p in zip(self.model.classes_, proba)
+            },
         }
 
     def _weighted_vote_fallback(self, fv: np.ndarray) -> dict:

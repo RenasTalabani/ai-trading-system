@@ -3,6 +3,7 @@ const axios             = require('axios');
 const AIReport          = require('../models/AIReport');
 const Signal            = require('../models/Signal');
 const VirtualPortfolio  = require('../models/VirtualPortfolio');
+const VirtualTrade      = require('../models/VirtualTrade');
 const User              = require('../models/User');
 const { sendPushToUser, sendTelegramMessage } = require('../services/notificationService');
 const { getCache: getGlobalCache }            = require('./globalScanJob');
@@ -80,11 +81,21 @@ async function generateHourlyReport() {
       const p = await VirtualPortfolio.findOne({ portfolioKey: 'global' }).lean();
       if (p) {
         const prev = p.balanceHistory?.slice(-2)[0]?.balance || p.currentBalance;
+        // Bug fix (2026-09-04, overnight continuous-improvement pass, 3rd
+        // audit pass): `p.openTrades` is not a real field on the
+        // VirtualPortfolio schema at all (see VirtualPortfolio.js) -- it is
+        // always `undefined`, so `p.openTrades || 0` silently reported ZERO
+        // open trades in every single hourly report, Telegram message, and
+        // GPT narrative prompt, no matter how many positions were actually
+        // open. Count the real open VirtualTrade documents instead -- same
+        // query virtualTrackingService.getSummary() already uses for this
+        // exact number.
+        const openTradesCount = await VirtualTrade.countDocuments({ status: 'open' });
         portfolioSummary = {
           balance:    p.currentBalance,
           change:     round2(p.currentBalance - prev),
           changePct:  round2((p.currentBalance - prev) / prev * 100),
-          openTrades: p.openTrades || 0,
+          openTrades: openTradesCount,
         };
       }
     } catch (_) {}

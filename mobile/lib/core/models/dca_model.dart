@@ -35,6 +35,11 @@ class DCAPlanModel {
   final double? unrealizedPnl;
   final double? unrealizedPnlPct;
   final double avgCostBasis;
+  // Safety fix (2026-09-04, decision #11): the daily cron used to buy the
+  // instant a plan came due, with no approval. Now it only sets this flag
+  // -- true means there's a due buy sitting on this plan waiting for the
+  // user to approve or skip it in the app.
+  final bool dueBuyPending;
 
   const DCAPlanModel({
     required this.id,
@@ -52,6 +57,7 @@ class DCAPlanModel {
     this.unrealizedPnl,
     this.unrealizedPnlPct,
     required this.avgCostBasis,
+    this.dueBuyPending = false,
   });
 
   factory DCAPlanModel.fromJson(Map<String, dynamic> j) => DCAPlanModel(
@@ -72,6 +78,7 @@ class DCAPlanModel {
         unrealizedPnl:     (j['unrealizedPnl'] as num?)?.toDouble(),
         unrealizedPnlPct:  (j['unrealizedPnlPct'] as num?)?.toDouble(),
         avgCostBasis:      (j['avgCostBasis'] ?? 0).toDouble(),
+        dueBuyPending:     j['dueBuyPending'] as bool? ?? false,
       );
 
   bool get isActive => status == 'active';

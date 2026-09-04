@@ -54,7 +54,19 @@ exports.status = async (req, res) => {
         currentBalance: parseFloat(portfolio.currentBalance.toFixed(2)),
         startingBalance: parseFloat(portfolio.startingBalance.toFixed(2)),
         sessionPnL,
-        totalPnL:        parseFloat((portfolio.totalProfit + portfolio.totalLoss).toFixed(2)),
+        // Bug fix (2026-09-04, overnight continuous-improvement pass,
+        // follow-up audit): this summed totalProfit and totalLoss instead
+        // of netting them. totalLoss is persisted as a positive magnitude
+        // everywhere it's written (virtualTrackingService.js: `totalLoss +=
+        // Math.abs(pnl)`), the same convention getSummary()'s own totalPnl
+        // uses (`totalProfit - totalLoss`, since totalPnl there is just the
+        // sum of real, correctly-signed per-trade pnl values, which is
+        // algebraically identical to totalProfit minus totalLoss). Summing
+        // instead of subtracting reported an inflated, almost-always-
+        // positive headline P&L on the mobile Budget screen -- e.g. +$10 of
+        // real profit against $500 of real losses showed as "+$510"
+        // instead of the true "-$490".
+        totalPnL:        parseFloat((portfolio.totalProfit - portfolio.totalLoss).toFixed(2)),
         winRate,
         activeTrades,
         totalTrades,
@@ -99,6 +111,21 @@ exports.start = [
           bestTrade: null, worstTrade: null,
           balanceHistory: [],
           startedAt: new Date(),
+          // Bug fix (2026-09-04, overnight continuous-improvement pass,
+          // follow-up audit): this reset startingBalance/currentBalance to
+          // the new budget but left `benchmarkStartBalance` untouched --
+          // the frozen baseline getBenchmarkComparison() uses so a later
+          // setCapital() call can't quietly move it (see that fix's own
+          // comment in virtualTrackingService.js). Left stale, a brand new
+          // session (a different budget amount) would get benchmarked
+          // against a leftover dollar baseline from the PREVIOUS session,
+          // corrupting outperformingBenchmark/graduationCriteriaMet -- the
+          // exact signal decision #22 gates moving to real money on.
+          // Explicitly nulled here so getBenchmarkComparison() re-seeds it
+          // from the new startingBalance on its next call, exactly like a
+          // brand-new portfolio does (it already initializes benchmarkStart
+          // Balance from startingBalance whenever the field is null).
+          benchmarkStartBalance: null,
         },
         { upsert: true, new: true },
       );

@@ -1,6 +1,7 @@
 const cron       = require('node-cron');
 const axios      = require('axios');
 const AIDecision = require('../models/AIDecision');
+const MarketRegimeHistory = require('../models/MarketRegimeHistory');
 const logger     = require('../config/logger');
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -43,6 +44,15 @@ async function evaluateOpenDecisions() {
   }));
 
   const bulk = AIDecision.collection.initializeUnorderedBulkOp();
+  // See MarketRegimeHistory.js's own comment: this propagates each
+  // decision's freshly-resolved WIN/LOSS onto whichever regime-history
+  // record was created alongside it (aiWorkerService.js sets aiDecisionId
+  // at creation time) -- without this, that field stays null forever and
+  // performanceAnalysisJob.js's regime win-rate log never has anything to
+  // report. Built as its own bulk op (not one shared with `bulk` above)
+  // since they target two different collections.
+  const regimeBulk = MarketRegimeHistory.collection.initializeUnorderedBulkOp();
+  let regimeUpdates = 0;
   let evaluated = 0;
   let skipped   = 0;
 
@@ -86,11 +96,38 @@ async function evaluateOpenDecisions() {
       closedAt:   now,
     }});
     evaluated++;
+
+    // `result` above is always exactly 'WIN' or 'LOSS' by construction (the
+    // `let result = 'LOSS'` default only ever flips to 'WIN', never to a
+    // third value) -- so this queues unconditionally for every evaluated
+    // decision. Most of these will match zero documents (only
+    // aiWorkerService.js's proposal-loop decisions ever get a linked
+    // MarketRegimeHistory record at all -- see that file's own comment --
+    // and only when opp.regime was truthy), which is fine: an update
+    // matching nothing is not an error, just a no-op for this record.
+    regimeBulk.find({ aiDecisionId: dec._id }).updateOne({ $set: { result } });
+    regimeUpdates++;
   }
 
   if (evaluated > 0) {
     await bulk.execute();
     logger.info(`[DecisionTracking] Evaluated ${evaluated} decisions`);
+  }
+  if (regimeUpdates > 0) {
+    try {
+      await regimeBulk.execute();
+    } catch (err) {
+      // Best-effort -- this is a diagnostic-only propagation (nothing reads
+      // MarketRegimeHistory.result except performanceAnalysisJob's own log
+      // line), so a DB hiccup here should never block or fail the real
+      // decision evaluation above, which already succeeded by this point.
+      // (An individual op matching zero documents -- e.g. a decision whose
+      // regime record doesn't exist because opp.regime was falsy at
+      // creation time, see aiWorkerService.js -- is NOT an error condition
+      // on its own; MongoDB's bulk API only throws here on an actual
+      // failure such as a lost connection.)
+      logger.warn(`[DecisionTracking] MarketRegimeHistory result propagation: ${err.message}`);
+    }
   }
 }
 

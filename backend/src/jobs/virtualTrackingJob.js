@@ -5,9 +5,12 @@ const aiService = require('../services/aiService');
 const logger = require('../config/logger');
 
 // Non-Binance assets that can have open virtual trades — binanceService's
-// price cache only ever covers TRACKED_ASSETS (crypto), so without this a
-// gold position could never hit TP/SL/liquidation and would stay open forever.
-const EXTENDED_PRICE_ASSETS = ['XAUUSD'];
+// price cache only ever covers TRACKED_ASSETS (crypto), so without this an
+// asset priced outside Binance could never hit TP/SL/liquidation and would
+// stay open forever. Empty since decision #18 (locked, 2026-09-03): gold
+// moved from XAUUSD to PAXGUSDT, which IS in TRACKED_ASSETS now, so it's
+// already covered by the normal cached-price path below with no extra step.
+const EXTENDED_PRICE_ASSETS = [];
 
 // Self-overlap guards (T-023 follow-up, 2026-08-18). The shared portfolio
 // lock added in T-023 already makes concurrent cycles *correct* (no lost

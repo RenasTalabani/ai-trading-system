@@ -72,12 +72,43 @@ class DCAScreen extends ConsumerWidget {
   }
 }
 
-class _PlanCard extends ConsumerWidget {
+class _PlanCard extends ConsumerStatefulWidget {
   final DCAPlanModel plan;
   const _PlanCard({required this.plan});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PlanCard> createState() => _PlanCardState();
+}
+
+class _PlanCardState extends ConsumerState<_PlanCard> {
+  bool _acting = false;
+  String? _error;
+
+  Future<void> _approve() async {
+    setState(() { _acting = true; _error = null; });
+    try {
+      await ref.read(dcaProvider.notifier).approveDueBuy(widget.plan.id);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _acting = false);
+    }
+  }
+
+  Future<void> _skip() async {
+    setState(() { _acting = true; _error = null; });
+    try {
+      await ref.read(dcaProvider.notifier).skipDueBuy(widget.plan.id);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _acting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
     final fmt = NumberFormat('#,##0.####');
     final positive = (plan.unrealizedPnl ?? 0) >= 0;
 
@@ -87,7 +118,7 @@ class _PlanCard extends ConsumerWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: plan.dueBuyPending ? AppColors.warning.withValues(alpha: 0.6) : AppColors.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -127,6 +158,55 @@ class _PlanCard extends ConsumerWidget {
                   : '—',
               color: plan.unrealizedPnl != null ? (positive ? AppColors.success : AppColors.error) : null)),
         ]),
+
+        // Safety fix (2026-09-04, decision #11): a due buy no longer executes
+        // on its own -- it waits right here for an explicit approve/skip tap.
+        if (plan.dueBuyPending) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Buy due — \$${plan.amountPerBuy.toStringAsFixed(0)} of ${displayNameFor(plan.asset)}',
+                  style: const TextStyle(color: AppColors.warning, fontSize: 13, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              if (_error != null) ...[
+                Text(_error!, style: const TextStyle(color: AppColors.error, fontSize: 12)),
+                const SizedBox(height: 8),
+              ],
+              Row(children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _acting ? null : _approve,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    child: _acting
+                        ? const SizedBox(width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Approve', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _acting ? null : _skip,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.border),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    child: const Text('Skip', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ]),
+            ]),
+          ),
+        ],
       ]),
     );
   }

@@ -5,12 +5,13 @@ the real `capital` argument that scan_all() receives and correctly threads
 through to _score_crypto() (the crypto sibling scorer, same file). Found
 during a post-T-035 audit pass over global_analyzer.py.
 
-Net effect before this fix: every non-crypto asset's (gold/oil/forex)
+Net effect before this fix: every non-crypto asset's (oil/forex; gold
+has since moved to the crypto path as PAXGUSDT, decision #18)
 "position_size" field in a /global/scan response was silently wrong
 whenever the caller's real capital wasn't exactly $500 -- e.g.
 aiWorkerService.js calls /global/scan with the real portfolio balance
 (portfolio.currentBalance), so a $2,000 portfolio would still get a
-gold/forex position_size sized as if the account only held $500.
+oil/forex position_size sized as if the account only held $500.
 
 No live trading impact: confirmed (same as T-028's note on this field)
 that the backend never reads `position_size` for real order sizing -- it
@@ -40,8 +41,8 @@ class TestScoreMultiAssetUsesRealCapital:
 
         analyzer = GlobalAnalyzer(None, None, None)
 
-        result_500 = await analyzer._score_multi_asset("XAUUSD", 500.0, "neutral")
-        result_2000 = await analyzer._score_multi_asset("XAUUSD", 2000.0, "neutral")
+        result_500 = await analyzer._score_multi_asset("EURUSD", 500.0, "neutral")
+        result_2000 = await analyzer._score_multi_asset("EURUSD", 2000.0, "neutral")
 
         assert result_500["position_size"] == 10.0    # 500 * 0.02
         assert result_2000["position_size"] == 40.0   # 2000 * 0.02 -- regression: used to also be 10.0

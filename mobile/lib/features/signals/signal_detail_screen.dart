@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+// Bug fix (2026-09-04): this file uses .firstOrNull below, which is a
+// package:collection extension on Iterable, not part of dart:core -- without
+// this import it's an undefined-method analyzer error. Added explicitly to
+// pubspec.yaml too (see that file's 2026-09-04 comment) rather than relying
+// on it merely being resolvable transitively through the flutter/flutter_test
+// SDK packages, which is fragile and was presumably why this was missed here
+// and in watchlist_screen.dart (same fix applied there in this same patch).
+import 'package:collection/collection.dart';
 import '../../core/models/signal_model.dart';
 import '../../core/providers/signals_provider.dart';
 import '../../core/providers/virtual_portfolio_provider.dart';

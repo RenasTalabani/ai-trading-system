@@ -117,9 +117,46 @@ class NewsSentimentModel:
                 device=-1,  # CPU; use 0 for GPU
             )
             logger.info("FinBERT loaded successfully.")
+            self._try_quantize_finbert()
         except Exception as e:
             logger.warning(f"FinBERT not loaded ({e}). VADER will be used.")
             self._finbert = None
+
+    def _try_quantize_finbert(self):
+        """Memory-footprint fix (2026-09-04, cost-reduction pass): this is a
+        CPU-only deployment (device=-1 above -- there's no GPU on the
+        Railway container this runs on), and FinBERT's own float32 weights
+        are a meaningful chunk of this service's steady-state memory bill
+        (confirmed live: ai-service is the dominant cost driver on the
+        account, ~57% average / ~95% peak of its 8GB allocation, almost
+        entirely memory not CPU).
+        Dynamic quantization (INT8 weights for Linear layers, the
+        overwhelming majority of a BERT-style model's parameters) is
+        PyTorch's own documented, standard technique for exactly this
+        deployment shape (CPU inference, memory-constrained) -- see
+        pytorch.org/tutorials .../dynamic_quantization_bert_tutorial.html.
+        It only touches nn.Linear weights; embeddings/layer-norm/attention
+        softmax stay float32, so output shape and the label/score dict
+        format from the pipeline() call are unchanged (same interface
+        _finbert_sentiment() already reads) -- generally a small (usually
+        <1 point) confidence/logit precision change, not a different
+        model, no code path elsewhere needs to know this happened.
+        Wrapped in its own try/except, separate from the outer one in
+        _try_load_finbert(): a quantization failure must never fall all
+        the way back to VADER when a perfectly good (just unquantized)
+        FinBERT pipeline is sitting right there -- self._finbert is only
+        ever set to None by the OUTER except, if the model failed to load
+        at all.
+        """
+        try:
+            import torch
+            self._finbert.model.eval()
+            self._finbert.model = torch.quantization.quantize_dynamic(
+                self._finbert.model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            logger.info("FinBERT quantized to INT8 (dynamic quantization) -- reduced memory footprint.")
+        except Exception as e:
+            logger.warning(f"FinBERT quantization failed ({e}) -- continuing with the unquantized model.")
 
     def _vader_sentiment(self, text: str) -> dict:
         scores = self.vader.polarity_scores(text)

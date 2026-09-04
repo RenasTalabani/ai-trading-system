@@ -550,6 +550,92 @@ describe('getWinLossBreakdown — real per-period win/loss counts (2026-09-02)',
   });
 });
 
+/**
+ * Regression suite (2026-09-04, overnight continuous-improvement pass, 3rd
+ * audit pass).
+ *
+ * Bug: getSummary()'s netProfit/netProfitPct (the headline numbers shown on
+ * the mobile Dashboard/Performance/Brain-Report screens) were computed
+ * straight off `portfolio.startingBalance` -- a field the admin-only POST
+ * /virtual/set-capital endpoint (setCapital()) can change at any later time
+ * WITHOUT touching `currentBalance` or trade history at all. A mid-
+ * experiment capital top-up (or reduction) silently rewrote "net profit
+ * since you started" as if the new capital had been there the whole time --
+ * the exact same bug class already fixed for the decision #22 graduation
+ * benchmark via the frozen `benchmarkStartBalance` field
+ * (getBenchmarkComparison(), same file). Fix: getSummary() now freezes to
+ * that same field the first time it runs after `startedAt` is set
+ * (self-healing on first read, same convention), and only uses the live
+ * `startingBalance` before any trade has ever opened (no history to protect
+ * yet, so a pre-trading capital adjustment is legitimate).
+ */
+describe('getSummary — netProfit is anchored to the frozen trading-start balance (regression)', () => {
+  beforeEach(() => {
+    VirtualTrade.find = (query) => {
+      if (query.status && query.status.$in) return { lean: async () => [] };
+      return { sort: () => [] };
+    };
+    VirtualTrade.countDocuments = async () => 0;
+  });
+
+  test('before any trade has started, netProfit uses the LIVE startingBalance (no history to protect yet)', async () => {
+    let saveCalls = 0;
+    FAKE_PORTFOLIO = {
+      ...makePortfolio(1000, 5),
+      startingBalance: 1000,
+      startedAt: null,
+      benchmarkStartBalance: null,
+      save: async () => { saveCalls++; },
+    };
+
+    const result = await svc.getSummary('all');
+
+    expect(result.netProfit).toBe(0);
+    expect(result.netProfitPct).toBe(0);
+    expect(saveCalls).toBe(0); // nothing to freeze yet -- startedAt is still null
+  });
+
+  test('once trading has started, a later set-capital top-up no longer invents a fake loss (regression)', async () => {
+    // Simulates the real production sequence: trading started weeks ago at
+    // $500 (currentBalance has genuinely grown to $600 -- a real $100
+    // profit), the benchmark/summary machinery already froze
+    // benchmarkStartBalance=500 on an earlier read, and the admin THEN bumps
+    // startingBalance to $2000 via /virtual/set-capital (which never touches
+    // benchmarkStartBalance or currentBalance -- see setCapital() itself).
+    FAKE_PORTFOLIO = {
+      ...makePortfolio(600, 5),
+      startingBalance: 2000, // bumped after the freeze -- must NOT be used
+      startedAt: new Date(Date.now() - 20 * 24 * 3_600_000),
+      benchmarkStartBalance: 500, // frozen earlier, at the real trading-start balance
+      save: async () => { throw new Error('should not need to re-save -- already frozen'); },
+    };
+
+    const result = await svc.getSummary('all');
+
+    // OLD buggy behavior: 600 - 2000 = -1400 (a fake $1400 loss out of
+    // nowhere). Correct: 600 - 500 (frozen) = +$100, a genuine profit.
+    expect(result.netProfit).toBe(100);
+    expect(result.netProfitPct).toBe(20);
+  });
+
+  test('the freeze self-heals on first read once trading has started (mirrors getBenchmarkComparison)', async () => {
+    let savedBaseline = null;
+    FAKE_PORTFOLIO = {
+      ...makePortfolio(900, 5),
+      startingBalance: 800,
+      startedAt: new Date(Date.now() - 5 * 24 * 3_600_000),
+      benchmarkStartBalance: null, // never frozen yet
+      save: async function () { savedBaseline = this.benchmarkStartBalance; },
+    };
+
+    const result = await svc.getSummary('all');
+
+    expect(savedBaseline).toBe(800); // froze to the live startingBalance at the moment of this first read
+    expect(FAKE_PORTFOLIO.benchmarkStartBalance).toBe(800);
+    expect(result.netProfit).toBe(100); // 900 - 800
+  });
+});
+
 describe('closePositionNow — the Guide screen\'s "Sell Now" button', () => {
   test('closes a BUY position at the current price and records a profit', async () => {
     FAKE_PORTFOLIO = makePortfolio(1000, 5);

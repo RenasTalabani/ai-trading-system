@@ -105,14 +105,37 @@ class MarketModel:
         X_last = self.scaler.transform(X[-1:])
         pred_class = self.model.predict(X_last)[0]
         proba = self.model.predict_proba(X_last)[0]
-        confidence = round(float(proba[pred_class]) * 100, 1)
+        # Bug fix (2026-09-04, overnight continuous-improvement pass): proba's
+        # array position does NOT always line up with the class label value.
+        # sklearn's predict_proba() orders columns by self.model.classes_ --
+        # the SORTED list of labels actually seen during .fit() -- not by
+        # label value directly. That only happens to coincide with the label
+        # value when every one of the 3 classes (0=HOLD, 1=BUY, 2=SELL)
+        # appeared at least once in the training window. T-091's own comment
+        # a few lines up in train() already documents that this training
+        # window CAN legitimately omit a class (e.g. a quiet range with zero
+        # SELL-labeled candles) -- when that happens here, classes_ is
+        # missing an entry (e.g. [0, 1] instead of [0, 1, 2]), and the old
+        # `proba[pred_class]` either threw an uncaught IndexError (predicting
+        # the missing class 2 into a 2-element array) or, worse, silently
+        # read the WRONG class's probability as this one's confidence and
+        # mislabeled the `probabilities` dict entirely (position 1 in a
+        # [0, 2]-classes_ model is really SELL's probability, not BUY's).
+        # Building an explicit label->probability map from self.model.classes_
+        # (the actual position ordering) instead of assuming position ==
+        # label value fixes both: no more IndexError, and confidence/
+        # probabilities always refer to the label they claim to.
+        proba_by_class = dict(zip(self.model.classes_, proba))
+        confidence = round(float(proba_by_class.get(pred_class, 0.0)) * 100, 1)
         direction = LABEL_MAP[pred_class]
 
         return {
             "direction": direction,
             "confidence": confidence,
             "model": "RandomForest",
-            "probabilities": {LABEL_MAP[i]: round(float(p) * 100, 1) for i, p in enumerate(proba)},
+            "probabilities": {
+                LABEL_MAP[int(c)]: round(float(p) * 100, 1) for c, p in zip(self.model.classes_, proba)
+            },
         }
 
     def _rule_based_predict(self, df: pd.DataFrame) -> dict:

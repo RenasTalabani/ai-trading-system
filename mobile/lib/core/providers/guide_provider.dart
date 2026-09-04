@@ -132,9 +132,24 @@ class GuideNotifier extends StateNotifier<GuideState> {
 
   Future<void> approve() async {
     if (state.suggestion == null || state.approving) return;
+    final approvedAsset = state.suggestion!.asset;
+    final approvedAction = state.suggestion!.action;
     state = state.copyWith(approving: true, error: null);
     try {
-      final res = await ApiService.dio.post(ApiConstants.guideApprove);
+      // Bug fix (2026-09-04, overnight continuous-improvement pass): send the
+      // exact asset/action this screen is showing so the backend can confirm
+      // it's still the same suggestion it's about to open. Without this, the
+      // backend independently re-resolves "the current best suggestion" at
+      // approval time -- which can legitimately differ from what's on screen
+      // even from ordinary decide-then-tap timing, not just this screen's own
+      // 60s silent auto-refresh -- so a tap could silently open a paper
+      // position in something the user never actually looked at. See
+      // guideController.js's exports.approve for the server-side check this
+      // pairs with (identity only -- amount stays 100% server-computed).
+      final res = await ApiService.dio.post(
+        ApiConstants.guideApprove,
+        data: {'asset': approvedAsset, 'action': approvedAction},
+      );
       final message = (res.data as Map<String, dynamic>)['message'] as String? ?? 'Done.';
       // Show the confirmation on its own for a beat before moving on -- calling
       // fetch() immediately wiped this instantly, which is what made a working
@@ -144,7 +159,20 @@ class GuideNotifier extends StateNotifier<GuideState> {
       await Future.delayed(const Duration(seconds: 2));
       await fetch(); // load the next suggestion
     } on DioException catch (e) {
-      final msg = (e.response?.data as Map?)?['message'] as String? ?? "Couldn't complete that — try again.";
+      final data = e.response?.data as Map?;
+      if (data?['staleApproval'] == true) {
+        // The suggestion changed server-side between when this screen loaded
+        // it and this tap. Don't just show an error and leave the stale card
+        // on screen -- immediately refresh so the user sees what actually
+        // changed and can decide again on the current one.
+        state = GuideState(
+          loading: false,
+          error: (data?['message'] as String?) ?? "This suggestion changed — here's the current one.",
+        );
+        await fetch();
+        return;
+      }
+      final msg = (data?['message'] as String?) ?? "Couldn't complete that — try again.";
       state = state.copyWith(approving: false, error: msg);
     }
   }
